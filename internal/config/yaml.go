@@ -1,213 +1,263 @@
 package config
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
-	"strconv"
+	"io"
 	"strings"
+	"unicode/utf8"
+
+	"go.yaml.in/yaml/v4"
+	"go.yaml.in/yaml/v4/plugin/limit"
 )
 
-type yamlParent struct {
-	indent int
-	key    string
-}
+const (
+	maxYAMLDepth     = 32
+	maxYAMLLineBytes = 1024 * 1024
+)
 
-// parseYAML parses the deliberately small YAML surface used by tidbgo.yaml:
-// nested mappings, scalar values, and block string sequences. Rejecting YAML
-// features that the configuration schema does not need keeps this bootstrap
-// package dependency-free and deterministic.
+// parseYAML parses YAML syntax with go-yaml and then applies the deliberately
+// small tidbgo.yaml surface: nested mappings, scalar values, and the
+// schema.command block sequence. Features outside that contract are rejected
+// before values reach configuration resolution.
 func parseYAML(data []byte) (map[string]rawValue, error) {
 	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
-	values := make(map[string]rawValue)
-	seen := make(map[string]struct{})
-	var parents []yamlParent
+	if !utf8.Valid(data) {
+		return nil, errors.New("configuration must be valid UTF-8")
+	}
+	if err := validateYAMLSource(data); err != nil {
+		return nil, err
+	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		if strings.ContainsRune(line, '\t') {
-			return nil, fmt.Errorf("line %d: tabs are not supported", lineNumber)
+	loader, err := yaml.NewLoader(
+		bytes.NewReader(data),
+		yaml.WithV4Defaults(),
+		yaml.WithUniqueKeys(),
+		yaml.WithPlugin(limit.New(
+			limit.DepthValue(maxYAMLDepth),
+			limit.AliasValue(0),
+		)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configure YAML parser: %w", err)
+	}
+
+	var document yaml.Node
+	if err := loader.Load(&document); err != nil {
+		if errors.Is(err, io.EOF) {
+			return map[string]rawValue{}, nil
 		}
+		return nil, yamlSyntaxError(err)
+	}
 
-		line, err := stripComment(line)
+	var extra yaml.Node
+	if err := loader.Load(&extra); err == nil {
+		return nil, errors.New("multiple YAML documents are not supported")
+	} else if !errors.Is(err, io.EOF) {
+		return nil, yamlSyntaxError(err)
+	}
+
+	reader := yamlReader{
+		values: make(map[string]rawValue),
+		seen:   make(map[string]struct{}),
+	}
+	if err := reader.readDocument(&document); err != nil {
+		return nil, err
+	}
+	return reader.values, nil
+}
+
+type yamlReader struct {
+	values map[string]rawValue
+	seen   map[string]struct{}
+}
+
+func (r *yamlReader) readDocument(document *yaml.Node) error {
+	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
+		return nodeError(document, "configuration must contain one YAML mapping")
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nodeError(root, "configuration root must be a mapping")
+	}
+	return r.readMapping(root, nil, 1)
+}
+
+func (r *yamlReader) readMapping(node *yaml.Node, parents []string, column int) error {
+	if err := validateYAMLNode(node); err != nil {
+		return err
+	}
+	if node.Kind != yaml.MappingNode || len(node.Content)%2 != 0 {
+		return nodeError(node, "expected a mapping")
+	}
+	if node.Column != column {
+		return nodeError(node, "mapping must use two-space indentation")
+	}
+
+	localKeys := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index < len(node.Content); index += 2 {
+		key := node.Content[index]
+		value := node.Content[index+1]
+		if err := validateYAMLNode(key); err != nil {
+			return err
+		}
+		if key.Kind != yaml.ScalarNode || key.Style != 0 || !validKey(key.Value) {
+			return nodeError(key, "invalid key")
+		}
+		if key.Column != column {
+			return nodeError(key, "mapping must use two-space indentation")
+		}
+		if _, exists := localKeys[key.Value]; exists {
+			return nodeError(key, "duplicate key "+key.Value)
+		}
+		localKeys[key.Value] = struct{}{}
+
+		parts := append(append([]string(nil), parents...), key.Value)
+		path := strings.Join(parts, ".")
+		if _, exists := r.seen[path]; exists {
+			return nodeError(key, "duplicate key "+path)
+		}
+		r.seen[path] = struct{}{}
+
+		if err := r.readValue(path, parts, key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *yamlReader) readValue(path string, parts []string, key, value *yaml.Node) error {
+	if err := validateYAMLNode(value); err != nil {
+		return err
+	}
+
+	switch value.Kind {
+	case yaml.MappingNode:
+		if !validMappingPath(path) || path == "schema.command" {
+			return nodeError(key, "unsupported mapping "+path)
+		}
+		return r.readMapping(value, parts, key.Column+2)
+	case yaml.SequenceNode:
+		if path != "schema.command" {
+			return nodeError(key, "unsupported sequence "+path)
+		}
+		items, err := readStringSequence(value, key.Column+2)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+			return err
 		}
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		indent := leadingSpaces(line)
-		if indent%2 != 0 {
-			return nil, fmt.Errorf("line %d: indentation must use multiples of two spaces", lineNumber)
-		}
-		content := strings.TrimSpace(line)
-		if content == "---" || content == "..." {
-			return nil, fmt.Errorf("line %d: document markers are not supported", lineNumber)
-		}
-
-		for len(parents) > 0 && parents[len(parents)-1].indent >= indent {
-			parents = parents[:len(parents)-1]
-		}
-
-		if strings.HasPrefix(content, "-") {
-			if len(content) == 1 || content[1] != ' ' {
-				return nil, fmt.Errorf("line %d: list items must start with '- '", lineNumber)
-			}
-			if len(parents) == 0 || parents[len(parents)-1].indent != indent-2 {
-				return nil, fmt.Errorf("line %d: list item has no parent key", lineNumber)
-			}
-			path := parentPath(parents)
-			item, err := parseScalar(strings.TrimSpace(content[2:]))
-			if err != nil {
-				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
-			}
-			if item == "" {
-				return nil, fmt.Errorf("line %d: list items must not be empty", lineNumber)
-			}
-			value, exists := values[path]
-			if exists && !value.isList {
-				return nil, fmt.Errorf("line %d: %s is already a scalar", lineNumber, path)
-			}
-			value.isList = true
-			value.items = append(value.items, item)
-			values[path] = value
-			continue
-		}
-		if len(parents) == 0 && indent != 0 || len(parents) > 0 && parents[len(parents)-1].indent != indent-2 {
-			return nil, fmt.Errorf("line %d: mapping has invalid indentation", lineNumber)
-		}
-
-		key, text, hasValue, err := splitMapping(content)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
-		}
-		if !validKey(key) {
-			return nil, fmt.Errorf("line %d: invalid key", lineNumber)
-		}
-
-		pathParts := make([]string, 0, len(parents)+1)
-		for _, item := range parents {
-			pathParts = append(pathParts, item.key)
-		}
-		pathParts = append(pathParts, key)
-		path := strings.Join(pathParts, ".")
-		if _, exists := seen[path]; exists {
-			return nil, fmt.Errorf("line %d: duplicate key %s", lineNumber, path)
-		}
-		seen[path] = struct{}{}
-
-		if !hasValue {
+		r.values[path] = rawValue{items: items, isList: true}
+		return nil
+	case yaml.ScalarNode:
+		if value.Value == "" && value.Style == 0 && value.ShortTag() == "!!null" {
 			if !validMappingPath(path) {
-				return nil, fmt.Errorf("line %d: unsupported mapping %s", lineNumber, path)
+				return nodeError(key, "unsupported mapping "+path)
 			}
 			if path == "schema.command" {
-				values[path] = rawValue{isList: true}
+				r.values[path] = rawValue{isList: true}
 			}
-			parents = append(parents, yamlParent{indent: indent, key: key})
-			continue
+			return nil
 		}
-
-		value, err := parseScalar(text)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
+		if err := validateScalar(value); err != nil {
+			return err
 		}
-		values[path] = rawValue{scalar: value}
+		r.values[path] = rawValue{scalar: value.Value}
+		return nil
+	default:
+		return nodeError(value, "unsupported YAML value")
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read configuration: %w", err)
-	}
-	return values, nil
 }
 
-func leadingSpaces(value string) int {
-	return len(value) - len(strings.TrimLeft(value, " "))
+func readStringSequence(node *yaml.Node, column int) ([]string, error) {
+	if node.Column != column {
+		return nil, nodeError(node, "sequence must use two-space indentation")
+	}
+
+	items := make([]string, 0, len(node.Content))
+	for _, item := range node.Content {
+		if err := validateYAMLNode(item); err != nil {
+			return nil, err
+		}
+		if item.Kind != yaml.ScalarNode {
+			return nil, nodeError(item, "sequence items must be scalars")
+		}
+		if item.Column != column+2 {
+			return nil, nodeError(item, "sequence must use two-space indentation")
+		}
+		if err := validateScalar(item); err != nil {
+			return nil, err
+		}
+		if item.Value == "" {
+			return nil, nodeError(item, "sequence items must not be empty")
+		}
+		items = append(items, item.Value)
+	}
+	return items, nil
 }
 
-func parentPath(parents []yamlParent) string {
-	parts := make([]string, 0, len(parents))
-	for _, item := range parents {
-		parts = append(parts, item.key)
+func validateYAMLNode(node *yaml.Node) error {
+	switch {
+	case node.Anchor != "":
+		return nodeError(node, "YAML anchors are not supported")
+	case node.Kind == yaml.AliasNode:
+		return nodeError(node, "YAML aliases are not supported")
+	case node.Tag == "!" || node.Style&yaml.TaggedStyle != 0:
+		return nodeError(node, "explicit YAML tags are not supported")
+	case node.Style&yaml.FlowStyle != 0:
+		return nodeError(node, "flow collections are not supported")
+	case node.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0:
+		return nodeError(node, "block scalars are not supported")
+	default:
+		return nil
 	}
-	return strings.Join(parts, ".")
 }
 
-func validMappingPath(path string) bool {
-	if path == "schema.command" {
-		return true
+func validateScalar(node *yaml.Node) error {
+	if node.Style == 0 && strings.ContainsAny(node.Value, "\"'") {
+		return nodeError(node, "quote characters must enclose the entire scalar")
 	}
-	prefix := path + "."
-	for key := range fieldByKey {
-		if strings.HasPrefix(key, prefix) && fieldByKey[key].allowFile {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
-func stripComment(line string) (string, error) {
-	var quote rune
-	escaped := false
-	for index, current := range line {
-		if escaped {
-			escaped = false
+func validateYAMLSource(data []byte) error {
+	for index, rawLine := range bytes.Split(data, []byte{'\n'}) {
+		lineNumber := index + 1
+		line := strings.TrimSuffix(string(rawLine), "\r")
+		if len(line) > maxYAMLLineBytes {
+			return fmt.Errorf("line %d: YAML line exceeds %d bytes", lineNumber, maxYAMLLineBytes)
+		}
+		if strings.ContainsRune(line, '\t') {
+			return fmt.Errorf("line %d: tabs are not supported", lineNumber)
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if quote == '"' && current == '\\' {
-			escaped = true
-			continue
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent%2 != 0 {
+			return fmt.Errorf("line %d: indentation must use multiples of two spaces", lineNumber)
 		}
-		if current == '\'' || current == '"' {
-			if quote == 0 {
-				quote = current
-			} else if quote == current {
-				quote = 0
-			}
-			continue
-		}
-		if current == '#' && quote == 0 && (index == 0 || line[index-1] == ' ') {
-			return strings.TrimRight(line[:index], " "), nil
+		if marker := strings.TrimSpace(strings.SplitN(trimmed, "#", 2)[0]); marker == "---" || marker == "..." {
+			return fmt.Errorf("line %d: document markers are not supported", lineNumber)
 		}
 	}
-	if quote != 0 {
-		return "", errors.New("unterminated quoted scalar")
-	}
-	return line, nil
+	return nil
 }
 
-func splitMapping(content string) (key, value string, hasValue bool, err error) {
-	var quote rune
-	escaped := false
-	for index, current := range content {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if quote == '"' && current == '\\' {
-			escaped = true
-			continue
-		}
-		if current == '\'' || current == '"' {
-			if quote == 0 {
-				quote = current
-			} else if quote == current {
-				quote = 0
-			}
-			continue
-		}
-		if current != ':' || quote != 0 {
-			continue
-		}
-		key = strings.TrimSpace(content[:index])
-		value = strings.TrimSpace(content[index+1:])
-		return key, value, value != "", nil
+func nodeError(node *yaml.Node, message string) error {
+	if node != nil && node.Line > 0 {
+		return fmt.Errorf("line %d: %s", node.Line, message)
 	}
-	return "", "", false, errors.New("expected a key and ':'")
+	return errors.New(message)
+}
+
+func yamlSyntaxError(err error) error {
+	var loadError *yaml.LoadError
+	if errors.As(err, &loadError) && loadError.Mark.Line > 0 {
+		return fmt.Errorf("line %d: invalid YAML syntax", loadError.Mark.Line)
+	}
+	return errors.New("invalid YAML syntax")
 }
 
 func validKey(key string) bool {
@@ -223,31 +273,15 @@ func validKey(key string) bool {
 	return true
 }
 
-func parseScalar(value string) (string, error) {
-	if value == "" {
-		return "", nil
+func validMappingPath(path string) bool {
+	if path == "schema.command" {
+		return true
 	}
-	if strings.HasPrefix(value, "[") || strings.HasPrefix(value, "{") || strings.HasPrefix(value, "&") || strings.HasPrefix(value, "*") || strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") {
-		return "", errors.New("unsupported YAML value")
-	}
-	if value[0] == '"' {
-		if value[len(value)-1] != '"' || len(value) == 1 {
-			return "", errors.New("invalid double-quoted scalar")
+	prefix := path + "."
+	for key := range fieldByKey {
+		if strings.HasPrefix(key, prefix) && fieldByKey[key].allowFile {
+			return true
 		}
-		decoded, err := strconv.Unquote(value)
-		if err != nil {
-			return "", errors.New("invalid double-quoted scalar")
-		}
-		return decoded, nil
 	}
-	if value[0] == '\'' {
-		if value[len(value)-1] != '\'' || len(value) == 1 {
-			return "", errors.New("invalid single-quoted scalar")
-		}
-		return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), nil
-	}
-	if strings.ContainsAny(value, "\"'") {
-		return "", errors.New("quote characters must enclose the entire scalar")
-	}
-	return value, nil
+	return false
 }

@@ -254,6 +254,8 @@ func TestYAMLQuotedScalarsAndComments(t *testing.T) {
 	path := writeConfig(t, `
 # repository configuration
 profile: "tidb-cloud-starter" # supported profile
+schema:
+  generated_dir: "./generated"
 migrations:
   lock_name: 'tidbgo:#migration'
 `)
@@ -263,6 +265,24 @@ migrations:
 	}
 	if got.Migrations.LockName != "tidbgo:#migration" {
 		t.Fatalf("LockName = %q", got.Migrations.LockName)
+	}
+	if got.Schema.GeneratedDir != "./generated" {
+		t.Fatalf("GeneratedDir = %q, want %q", got.Schema.GeneratedDir, "./generated")
+	}
+}
+
+func TestYAMLEmptyOrCommentOnlyUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{"", "# repository configuration\n"} {
+		path := writeConfig(t, content)
+		got, err := Load(Options{Path: path, LookupEnv: emptyEnvironment})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if want := Default(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Load() = %#v, want %#v", got, want)
+		}
 	}
 }
 
@@ -275,13 +295,19 @@ func TestYAMLRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 	}{
 		{name: "document marker", content: "---\nprofile: tidb-cloud-starter\n"},
 		{name: "flow sequence", content: "schema:\n  command: [go, run, ./db/schema]\n"},
+		{name: "flow mapping", content: "runtime: {max_open_conns: 1}\n"},
 		{name: "anchor", content: "profile: &profile tidb-cloud-starter\n"},
+		{name: "explicit tag", content: "profile: !!str tidb-cloud-starter\n"},
+		{name: "non-specific tag", content: "profile: ! tidb-cloud-starter\n"},
+		{name: "quoted key", content: "\"profile\": tidb-cloud-starter\n"},
 		{name: "multiline", content: "profile: |\n  tidb-cloud-starter\n"},
 		{name: "tab indentation", content: "runtime:\n\tmax_open_conns: 1\n"},
 		{name: "duplicate key", content: "profile: tidb-cloud-starter\nprofile: tidb-cloud-starter\n"},
 		{name: "duplicate mapping", content: "runtime:\n  max_open_conns: 1\nruntime:\n  max_idle_conns: 1\n"},
 		{name: "over-indented mapping", content: "runtime:\n    max_open_conns: 1\n"},
 		{name: "unknown empty mapping", content: "unknown:\n"},
+		{name: "root sequence", content: "- profile\n- tidb-cloud-starter\n"},
+		{name: "nested sequence item", content: "schema:\n  command:\n    - go\n    - [run, ./db/schema]\n"},
 	}
 
 	for _, tt := range tests {
@@ -292,6 +318,60 @@ func TestYAMLRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 				t.Fatal("Load() error = nil, want syntax error")
 			}
 		})
+	}
+}
+
+func TestYAMLErrorsDoNotEchoMalformedSecret(t *testing.T) {
+	t.Parallel()
+
+	const secret = "do-not-print-this-password"
+	for _, content := range []string{
+		"dsn: \"" + secret + "\n",
+		"dsn: *" + secret + "\n",
+	} {
+		path := writeConfig(t, content)
+		_, err := Load(Options{Path: path, LookupEnv: emptyEnvironment})
+		if err == nil {
+			t.Fatal("Load() error = nil, want YAML syntax error")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("Load() error disclosed the configured secret: %v", err)
+		}
+	}
+}
+
+func TestYAMLRejectsInvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "tidbgo.yaml")
+	if err := os.WriteFile(path, []byte{'p', 'r', 'o', 'f', 'i', 'l', 'e', ':', ' ', 0xff, '\n'}, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	_, err := Load(Options{Path: path, LookupEnv: emptyEnvironment})
+	if err == nil {
+		t.Fatal("Load() error = nil, want UTF-8 error")
+	}
+	if !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("Load() error = %v, want UTF-8 error", err)
+	}
+}
+
+func TestYAMLRejectsExcessiveDepthDuringParsing(t *testing.T) {
+	t.Parallel()
+
+	var content strings.Builder
+	for depth := 0; depth < maxYAMLDepth+2; depth++ {
+		content.WriteString(strings.Repeat("  ", depth))
+		content.WriteString("level:\n")
+	}
+
+	path := writeConfig(t, content.String())
+	_, err := Load(Options{Path: path, LookupEnv: emptyEnvironment})
+	if err == nil {
+		t.Fatal("Load() error = nil, want YAML depth error")
+	}
+	if !strings.Contains(err.Error(), "invalid YAML syntax") {
+		t.Fatalf("Load() error = %v, want parser rejection", err)
 	}
 }
 
