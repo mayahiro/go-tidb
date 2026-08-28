@@ -1,0 +1,31 @@
+version: 1
+profile: tidb-cloud-starter
+
+schema:
+  command:
+    - go
+    - run
+    - ./db/schema
+  generated_dir: ./internal/db
+
+migrations:
+  dir: ./db/migrations
+  table: _tidbgo_migrations
+  lock_name: tidbgo:migrate
+  lock_timeout: 30s
+
+runtime:
+  relation_batch_size: 500
+  max_preload_depth: 3
+  conn_max_lifetime: 5m
+  max_open_conns: 10
+  max_idle_conns: 10
+
+lint:
+  fail_on: error
+  large_offset_threshold: 10000
+  unbounded_select_severity: warning
+  full_scan_est_rows_warning: 1000
+  full_scan_est_rows_error: 100000
+  ru_regression_ratio: 0.30
+  ru_regression_absolute: 1.0

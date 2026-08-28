@@ -1,0 +1,4 @@
+github.com/mayahiro/nagi-go v0.4.0 h1:S5NIPvIWy1qlGyTTaX6VMllH2pc0jAcku6YJeEu/z+M=
+github.com/mayahiro/nagi-go v0.4.0/go.mod h1:W0QrFh6zOw8nMrddac9SRpr3W1+HXA44GZm+mtnslpM=
+github.com/mayahiro/nagicli-go v0.4.0 h1:XcXbCVTy565CwfTfPDC2ZzzgKamevma3zp1MUAwfXCM=
+github.com/mayahiro/nagicli-go v0.4.0/go.mod h1:H4n90aOACr5kf8CIDG7M1UKJvItXYlWHGMSDU/kEYFc=
