@@ -79,7 +79,7 @@ ctx = orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
 
 mutationは `sql.Result.RowsAffected` が成功した場合だけ `RowsAffectedKnown` を設定します
 
-SELECT durationには `QueryContext`、row scan、iteration、row closeを含めます
+SELECTまたはEXPLAINのdurationには `QueryContext`、row scan、iteration、row closeを含めます
 
 `sql.ErrNoRows` と `orm.ErrMultipleRows` のようなterminal errorもeventへ含めます
 
@@ -90,6 +90,47 @@ custom observerは短時間でreturnし、contextを共有する場合はconcurr
 `NewStatementLogger` はwriteを直列化し、writer errorがdatabase resultを置き換えないよう無視します
 
 `WithStatementObserver` へnilを渡すと継承したobserverを無効化します
+
+## SELECT EXPLAIN
+
+typed `SelectQuery` の `Explain` でTiDBが選択したplanを確認できます
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+resultはTiDBのdefault row formatに対応するnon-nilな `[]orm.ExplainRow` です
+
+各rowの `ID`、`EstRows`、`Task`、`AccessObject`、`OperatorInfo` はTiDBが文書化する5 columnへ直接対応します
+
+`EstRows` はoptimizer estimateでありactual row countではありません
+
+想定外のestimateまたはaccess pathはtable statisticsが古い可能性を示します
+
+`Explain` は `SelectQuery` だけで利用できます
+
+mutationまたはcaller-supplied raw SQLを受け取らず、typed SELECTのbind argumentを維持します
+
+planは `Build` が返すroot SQLを対象とし、inline to-one joinを含みます
+
+collection preload statementはruntimeに返されるparent keyを必要とするため含みません
+
+callごとに1 database round tripを追加します
+
+TiDBは通常root SELECTを実行せずplanを返しますが、一部のsubqueryをoptimization中に評価する場合があると公式文書に記載されています
+
+これは `EXPLAIN ANALYZE` ではなく、actual row count、execution timing、memory、disk measurementを含みません
+
+observerを設定した場合は全plan rowのscanとclose後に `Operation` が `StatementExplain` の `StatementEvent` を1件生成します
+
+built-in loggerは対応するinteractive terminalで `EXPLAIN` をbright cyanにします
+
+bind valueは `IncludeStatementArguments` を有効にしない限り除外します
+
+TiDBの[EXPLAIN statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain/)と[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)を参照してください
 
 ## ServerRU
 
@@ -135,7 +176,7 @@ TiDBの[`tidb_last_query_info` system variable reference](https://docs.pingcap.c
 
 ## 対象operation
 
-typedとrawのSELECT、preload、typed mutation、自動分割したbulk mutation、Relation mutation、`RawExec` を観測します
+typedとrawのSELECT、SELECT `EXPLAIN`、preload、typed mutation、自動分割したbulk mutation、Relation mutation、`RawExec` を観測します
 
 typed upsertはlogical `UPSERT` operationを使います
 

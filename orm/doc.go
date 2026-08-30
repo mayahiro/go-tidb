@@ -16,9 +16,10 @@
 // concrete *sql.Tx without retrying it. Raw provides model-aware result
 // scanning for explicit SQL. WithStatementObserver adds context-scoped
 // execution events, and NewStatementLogger provides automatic terminal colors
-// with bind values excluded unless explicitly enabled. LastServerRU reads
-// TiDB's ServerRU for one completed DML statement from the same *sql.Conn or
-// active *sql.Tx. The package intentionally does not expose runtime DDL operations.
+// with bind values excluded unless explicitly enabled. Explain inspects the
+// TiDB execution plan of a typed SELECT, while LastServerRU reads TiDB's
+// ServerRU for one completed DML statement from the same *sql.Conn or active
+// *sql.Tx. The package intentionally does not expose runtime DDL operations.
 // Models with a soft-delete field are scoped to active rows by default;
 // WithDeleted and PreloadWithDeleted opt into deleted rows at the root and
 // relation-path boundaries respectively.

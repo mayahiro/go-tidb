@@ -20,6 +20,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
 - terminalの自動色付きcontext-scoped statement observation
+- typed query builderによるSELECT限定のTiDB execution plan取得
 - 完了した1 DML statementに対する明示的なsame-session ServerRU取得
 
 ## サポート範囲
@@ -335,6 +336,27 @@ lifecycleの対象、custom observer、logの安全境界は[Statement observati
 
 bind argument valueが必要な場合だけ `IncludeStatementArguments` で明示的に有効化できます
 
+## TiDB diagnostics
+
+root queryを実行せずtyped SELECTのplanを確認できます
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+`Explain` はTiDBのdefault 5 column row formatを `[]orm.ExplainRow` として返します
+
+mutationとraw SQLを受け付けず、1 database round tripを追加し、inline to-one joinを含むroot SELECTだけを対象にします
+
+collection preload statementは含みません
+
+TiDBは `EXPLAIN` のoptimization中に一部のsubqueryを評価する場合があります
+
+完全なboundaryは[Statement observation guide](docs/observability_ja.md#select-explain)を参照してください
+
 完了した1 DML statementについて、同じpinned sessionからTiDBのServerRUを取得できます
 
 ```go
@@ -387,7 +409,7 @@ command helpは `tidbgo --help` で表示できます
 
 ## 現在の制限
 
-- scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count` に対応し、`IDs` は未実装
+- scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain` に対応し、`IDs` は未実装
 - directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする

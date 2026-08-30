@@ -21,6 +21,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
+- SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit same-session ServerRU reading for one completed DML statement
 
 ## Supported scope
@@ -309,6 +310,24 @@ text. See the [statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
 
+## TiDB diagnostics
+
+Inspect the plan for a typed SELECT without executing its root query:
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+`Explain` returns TiDB's default five-column row format as
+`[]orm.ExplainRow`. It accepts neither mutation nor raw SQL, adds one database
+round trip, and describes only the root SELECT, including inline to-one joins.
+Collection preload statements are not included. TiDB can evaluate certain
+subqueries while optimizing an `EXPLAIN`. See the [statement observation
+guide](docs/observability.md#select-explain) for the complete boundary.
+
 Read TiDB's ServerRU for one completed DML statement from the same pinned
 session:
 
@@ -362,7 +381,7 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 ## Known limitations
 
 - The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
-  `Exists`, and `Count`; `IDs` is not implemented yet.
+  `Exists`, `Count`, and `Explain`; `IDs` is not implemented yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are

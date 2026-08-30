@@ -34,6 +34,7 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Context-scoped statement logging with automatic terminal colors and no bind
   argument values
+- SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit same-session ServerRU reading for one completed DML statement
 
 `User` intentionally omits a database-managed `created_at` column because an
@@ -74,6 +75,8 @@ pure-junction relation mutations.
 `orm.Raw[User]`.
 `WithQueryLog` enables the built-in statement logger for selected operations
 without replacing the application-owned executor.
+`ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
+SELECT without executing that root SELECT.
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
 its TiDB-reported ServerRU immediately afterward.
 

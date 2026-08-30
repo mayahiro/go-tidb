@@ -75,15 +75,51 @@ ctx = orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
 `StatementEvent` retains the SQL template and argument count. `Arguments` is nil
 by default and contains a shallow slice snapshot only when
 `IncludeStatementArguments` is enabled. A mutation sets `RowsAffectedKnown`
-only after `sql.Result.RowsAffected` succeeds. A SELECT duration covers
-`QueryContext`, row scanning, iteration, and row closing. Terminal errors such
-as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
+only after `sql.Result.RowsAffected` succeeds. A SELECT or EXPLAIN duration
+covers `QueryContext`, row scanning, iteration, and row closing. Terminal errors
+such as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
 
 Observers run synchronously after the duration is captured. Custom observers
 should return quickly, be concurrency-safe when contexts are shared, and not
 panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited observer.
+
+## SELECT EXPLAIN
+
+Call `Explain` on a typed `SelectQuery` to inspect the plan chosen by TiDB:
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+The result is a non-nil `[]orm.ExplainRow` in TiDB's default row format. Each
+row contains `ID`, `EstRows`, `Task`, `AccessObject`, and `OperatorInfo`, which
+map directly to the five columns documented by TiDB. `EstRows` is an optimizer
+estimate, not an observed row count. Unexpected estimates or access paths can
+indicate stale table statistics.
+
+`Explain` is available only on `SelectQuery`. It cannot receive a mutation or
+caller-supplied raw SQL, and it preserves the typed SELECT's bind arguments.
+The plan covers the root SQL returned by `Build`, including inline to-one
+joins. Collection preload statements depend on parent keys returned at runtime
+and are not included.
+
+The call adds one database round trip. TiDB normally returns the plan without
+executing the root SELECT, although TiDB documents that certain subqueries can
+be evaluated during optimization. This is not `EXPLAIN ANALYZE` and contains
+no actual row counts, execution timing, memory, or disk measurements.
+
+An observed call emits one `StatementEvent` with `Operation` set to
+`StatementExplain` after all plan rows are scanned and closed. The built-in
+logger renders `EXPLAIN` in bright cyan on a supported interactive terminal.
+Bind values remain excluded unless `IncludeStatementArguments` is enabled.
+See TiDB's [EXPLAIN statement
+reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain/) and
+[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/).
 
 ## ServerRU
 
@@ -129,10 +165,10 @@ FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter#how-can-i-
 
 ## Covered operations
 
-Typed and raw SELECTs, preloads, typed mutations, automatically split bulk
-mutations, relation mutations, and `RawExec` are observed. Typed upserts use the
-logical `UPSERT` operation. `RawExec` recognizes a leading `INSERT`, `UPDATE`,
-or `DELETE`; other raw mutations use `EXEC`.
+Typed and raw SELECTs, SELECT `EXPLAIN`, preloads, typed mutations,
+automatically split bulk mutations, relation mutations, and `RawExec` are
+observed. Typed upserts use the logical `UPSERT` operation. `RawExec` recognizes
+a leading `INSERT`, `UPDATE`, or `DELETE`; other raw mutations use `EXEC`.
 
 `Transaction` emits separate `BEGIN`, `COMMIT`, and `ROLLBACK` events. Statements
 executed through `go-tidb` inside its callback use the observer from the context

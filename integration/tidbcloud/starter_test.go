@@ -579,6 +579,36 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("same-session ServerRU", func(t *testing.T) {
 		testServerRU(t, ctx, database, dsn)
 	})
+	t.Run("SELECT EXPLAIN", func(t *testing.T) {
+		testSelectExplain(t, ctx, database, dsn)
+	})
+}
+
+func testSelectExplain(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	plan, err := orm.Query[starterOrder]().
+		Select("ID", "UserID", "Total").
+		Where(orm.Equal("ID", int64(11))).
+		Explain(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain starter order SELECT", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("SELECT EXPLAIN returned an empty plan")
+	}
+	foundTable := false
+	for index, row := range plan {
+		if row.ID == "" || row.Task == "" || row.EstRows < 0 {
+			t.Fatalf("SELECT EXPLAIN row %d = %#v", index, row)
+		}
+		if strings.Contains(row.AccessObject, "table:tidbgo_it_orders") {
+			foundTable = true
+		}
+	}
+	if !foundTable {
+		t.Fatalf("SELECT EXPLAIN plan does not reference tidbgo_it_orders: %#v", plan)
+	}
 }
 
 func testServerRU(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {

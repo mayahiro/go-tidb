@@ -84,11 +84,23 @@ The suite limits the connection pool to one connection. It covers scalar
 terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 `AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
-rollback paths, and same-session ServerRU reads
+rollback paths, typed SELECT EXPLAIN, and same-session ServerRU reads
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
+
+## EXPLAIN client benchmark
+
+Measure the client-side cost of compiling one typed SELECT and scanning a
+three-operator TiDB row-format plan:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplain$' -benchmem -count=5
+```
+
+This benchmark uses a local `database/sql` test driver. It excludes the MySQL
+driver, network round trip, TiDB optimization, and actual RU consumption
 
 ## ServerRU client benchmark
 
