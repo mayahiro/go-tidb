@@ -56,7 +56,7 @@ func TestApplicationHelp(t *testing.T) {
 		stdout := string(result.Stdout())
 		for _, want := range []string{
 			"Usage:\n  tidbgo [OPTIONS] <COMMAND>",
-			"Commands:\n  version",
+			"Additional commands:\n  version",
 			"Options:",
 			"-V, --version",
 		} {
@@ -80,6 +80,7 @@ func TestApplicationUsageError(t *testing.T) {
 	}{
 		{name: "no command", code: cli.CodeMissingSubcommand},
 		{name: "unknown command", arguments: []string{"unknown"}, code: cli.CodeUnknownCommand},
+		{name: "removed generate command", arguments: []string{"generate"}, code: cli.CodeUnknownCommand},
 		{name: "extra version argument", arguments: []string{"version", "extra"}, code: cli.CodeUnknownCommand},
 	}
 
@@ -113,10 +114,7 @@ func TestExitStatuses(t *testing.T) {
 		want   cli.ExitStatus
 	}{
 		{name: "success", status: cli.StatusSuccess, want: 0},
-		{name: "lint failure", status: exitLintFailure, want: 1},
 		{name: "usage", status: exitUsage, want: 2},
-		{name: "migration", status: exitMigration, want: 3},
-		{name: "connection", status: exitConnection, want: 4},
 		{name: "internal error", status: exitInternalError, want: 5},
 	}
 

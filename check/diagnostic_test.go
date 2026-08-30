@@ -9,11 +9,11 @@ func TestDiagnosticJSONUsesStableFieldNames(t *testing.T) {
 	t.Parallel()
 
 	diagnostic := Diagnostic{
-		Code:     "SCH001",
+		Code:     "TEST001",
 		Severity: SeverityError,
-		Title:    "Primary key required",
-		Message:  "entity User has no primary key",
-		Location: Location{Path: "db/schema/main.go", Line: 10, Column: 2},
+		Title:    "Example diagnostic",
+		Message:  "example diagnostic message",
+		Location: Location{Path: "models/user.go", Line: 10, Column: 2},
 	}
 
 	data, err := json.Marshal(diagnostic)
@@ -21,7 +21,7 @@ func TestDiagnosticJSONUsesStableFieldNames(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 
-	const want = `{"code":"SCH001","severity":"error","title":"Primary key required","message":"entity User has no primary key","location":{"path":"db/schema/main.go","line":10,"column":2},"suppressible":false}`
+	const want = `{"code":"TEST001","severity":"error","title":"Example diagnostic","message":"example diagnostic message","location":{"path":"models/user.go","line":10,"column":2},"suppressible":false}`
 	if string(data) != want {
 		t.Fatalf("Marshal() = %s, want %s", data, want)
 	}

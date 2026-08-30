@@ -1,5 +1,4 @@
-// Command tidbgo provides code generation, diagnostics, and migrations for
-// TiDB Cloud Starter projects.
+// Command tidbgo provides development tools for TiDB Cloud Starter projects.
 package main
 
 import (
@@ -12,10 +11,7 @@ import (
 var version = "dev"
 
 const (
-	exitLintFailure   cli.ExitStatus = 1
 	exitUsage         cli.ExitStatus = 2
-	exitMigration     cli.ExitStatus = 3
-	exitConnection    cli.ExitStatus = 4
 	exitInternalError cli.ExitStatus = 5
 
 	versionActionCommand = "version-action"
@@ -39,11 +35,11 @@ func main() {
 func application(toolVersion string) *cli.Command {
 	return cli.NewCommand("tidbgo").
 		ID("tidbgo-root").
-		About("Schema-first Go toolchain for TiDB Cloud Starter").
+		About("Development tools for TiDB Cloud Starter").
 		Version(toolVersion).
 		RequireSubcommand().
 		HelpSection(
-			cli.NewHelpSection("commands", "Commands").
+			cli.NewHelpSection("additional-commands", "Additional commands").
 				Entry("version", "Print the tidbgo version"),
 		).
 		Subcommand(

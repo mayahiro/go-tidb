@@ -1,5 +1,5 @@
-// Package migrate implements the standalone versioned migration toolchain.
+// Package migrate reserves the standalone versioned migration-tooling boundary.
 //
-// Migration behavior is introduced in Milestone 6 and remains separate from
+// It currently exposes no migration behavior and remains separate from
 // application runtime packages.
 package migrate
