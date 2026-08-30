@@ -135,6 +135,8 @@ The currently implemented surface provides:
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   argument values excluded by default and available through an explicit option
+- Operation-scoped debug reports that aggregate completed root, relation,
+  split-bulk, raw, and transaction statement events without database I/O
 - SELECT-only execution-plan inspection using TiDB's default row-format
   `EXPLAIN` output
 - Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
@@ -231,9 +233,8 @@ configuration.
 - Implemented: offline struct metadata, query construction and execution,
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
   deletion, typed raw SQL, statement observation, and same-session ServerRU
-  reading, plus SELECT-only `EXPLAIN` and explicit SELECT-only
-  `EXPLAIN ANALYZE`
-- In progress: query-level debug reports
+  reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
+  SELECT-only `EXPLAIN ANALYZE`
 - Planned next: struct-first and query static analysis, SQL dump and Go struct
   compatibility checks, versioned migration tooling, historical reads, and
   release hardening

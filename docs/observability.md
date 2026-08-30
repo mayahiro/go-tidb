@@ -85,6 +85,47 @@ panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited observer.
 
+## Operation debug reports
+
+Use `Debug` to group every statement completed by one application operation:
+
+```go
+var users []User
+report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+    var queryErr error
+    users, queryErr = orm.Query[User]().
+        Preload("Orders").
+        All(debugContext, db)
+    return queryErr
+})
+```
+
+The callback must execute the operation with `debugContext`. `Statements` is a
+non-nil slice in observer delivery order and includes root queries, collection
+preloads, automatically split bulk mutations, raw statements, and transaction
+lifecycle events when those paths use that context. Each entry is the same
+`StatementEvent` shape used by custom observers.
+
+`Duration` measures the complete callback including observer work.
+`StatementDuration` is the sum of captured event durations and can exceed the
+callback duration when statements execute concurrently. The callback must wait
+for any goroutines that use `debugContext`; events completed after it returns
+are outside the report. A callback error is returned unchanged with the report
+of statements that already completed.
+
+`Debug` only collects existing events. It adds no database calls, `EXPLAIN`,
+ServerRU reads, or implicit transaction. An observer already present on `ctx`
+continues to receive the events. Bind arguments are excluded from the report by
+default and can be enabled independently with `IncludeStatementArguments`:
+
+```go
+report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
+```
+
+Argument values can contain secrets, personal data, or large payloads. The
+report stores SQL templates and errors even in the default mode, so apply the
+same output and retention controls as statement logging.
+
 ## SELECT EXPLAIN
 
 Call `Explain` on a typed `SelectQuery` to inspect the plan chosen by TiDB:

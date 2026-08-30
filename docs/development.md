@@ -85,11 +85,22 @@ terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 `AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
 rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
-ServerRU reads
+ServerRU reads, plus operation debug reports spanning root and preload SELECTs
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
+
+## Debug report client benchmark
+
+Measure the client-side cost of grouping two completed statement events:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
+```
+
+This benchmark uses a local mutation executor. It excludes the MySQL driver,
+network calls, TiDB execution, and actual RU consumption
 
 ## EXPLAIN client benchmark
 

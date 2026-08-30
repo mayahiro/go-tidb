@@ -20,6 +20,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
 - terminalの自動色付きcontext-scoped statement observation
+- multi-statement ORM callをまとめるoperation-scoped debug report
 - typed query builderによるSELECT限定のTiDB execution plan取得
 - 明示的なSELECT実行によるTiDB actual runtime plan取得
 - 完了した1 DML statementに対する明示的なsame-session ServerRU取得
@@ -337,6 +338,25 @@ lifecycleの対象、custom observer、logの安全境界は[Statement observati
 
 bind argument valueが必要な場合だけ `IncludeStatementArguments` で明示的に有効化できます
 
+追加database callなしで1 ORM operationのroot statementとRelation statementをまとめて取得できます
+
+```go
+var users []User
+report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+    var queryErr error
+    users, queryErr = orm.Query[User]().
+        Preload("Orders").
+        All(debugContext, db)
+    return queryErr
+})
+```
+
+`report.Statements` は完了event、`report.StatementDuration` はその累積duration、`report.Duration` はcallback全体のdurationを保持します
+
+bind valueは `Debug` へ `IncludeStatementArguments` を渡した場合だけ含めます
+
+wrapper自体は `EXPLAIN`、ServerRU read、その他のdatabase I/Oを行いません
+
 ## TiDB diagnostics
 
 root queryを実行せずtyped SELECTのplanを確認できます
@@ -420,6 +440,7 @@ command helpは `tidbgo --help` で表示できます
 - typed builderはvalueをbind argumentとしてSQL textから分離する
 - model由来identifierはSQLへ書き込む前にvalidationする
 - built-in statement loggerはdefaultでargument valueを除外する
+- debug reportはdefaultでargument valueを除外するがSQL templateとerrorは保持する
 - `IncludeStatementArguments` はcredential、token、personal dataを公開し得るため管理されたdebug時だけ有効化する
 - Raw SQLはtrusted application codeでありtyped builderの構造validationとmutation safety validationを受けない
 

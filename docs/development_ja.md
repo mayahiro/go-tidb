@@ -84,13 +84,23 @@ driverの[`interpolateParams` documentation](https://github.com/go-sql-driver/my
 
 suiteはconnection poolを1 connectionに制限します
 
-scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得を確認します
+scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTをまとめるoperation debug reportを確認します
 
 固定された18個の `tidbgo_it_*` tableを作成し、現在のrunが作成したtableだけを削除します
 
 既存fixture tableを検出した場合は削除せず失敗します
 
 同じdatabaseに対する複数suiteを同時実行しません
+
+## Debug report client benchmark
+
+完了した2 statement eventをまとめるclient-side costを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
+```
+
+local mutation executorを使い、MySQL driver、network call、TiDB execution、actual RU consumptionは含みません
 
 ## EXPLAIN client benchmark
 

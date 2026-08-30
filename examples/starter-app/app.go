@@ -208,6 +208,18 @@ func ListUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]Use
 	return usersWithOrdersQuery().All(ctx, executor)
 }
 
+// DebugUsersWithOrders returns users and one report containing the root and
+// relation statements executed by the operation.
+func DebugUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]User, orm.DebugReport, error) {
+	var users []User
+	report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+		var queryErr error
+		users, queryErr = usersWithOrdersQuery().All(debugContext, executor)
+		return queryErr
+	})
+	return users, report, err
+}
+
 // LoadUserWithOrderCount uses explicit SQL for an aggregate while retaining
 // model-aware result scanning.
 func LoadUserWithOrderCount(ctx context.Context, executor orm.QueryExecutor, userID int64) (User, error) {

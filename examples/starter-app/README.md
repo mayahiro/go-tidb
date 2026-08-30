@@ -34,6 +34,8 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Context-scoped statement logging with automatic terminal colors and no bind
   argument values
+- Operation-scoped debug reports that aggregate root and relation statements
+  without additional database calls
 - SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit SELECT execution with TiDB runtime-plan inspection
 - Explicit same-session ServerRU reading for one completed DML statement
@@ -76,6 +78,9 @@ pure-junction relation mutations.
 `orm.Raw[User]`.
 `WithQueryLog` enables the built-in statement logger for selected operations
 without replacing the application-owned executor.
+`DebugUsersWithOrders` returns the users together with one `orm.DebugReport`
+containing the root SELECT and collection preload SELECT. The report omits bind
+values and performs no additional database calls.
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

@@ -91,6 +91,49 @@ custom observerは短時間でreturnし、contextを共有する場合はconcurr
 
 `WithStatementObserver` へnilを渡すと継承したobserverを無効化します
 
+## Operation debug report
+
+`Debug` で1 application operation内に完了した全statementをまとめます
+
+```go
+var users []User
+report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+    var queryErr error
+    users, queryErr = orm.Query[User]().
+        Preload("Orders").
+        All(debugContext, db)
+    return queryErr
+})
+```
+
+callback内のoperationには `debugContext` を使う必要があります
+
+`Statements` はobserver delivery順のnon-nil sliceであり、そのcontextを使ったroot query、collection preload、自動分割bulk mutation、raw statement、transaction lifecycle eventを含みます
+
+各entryはcustom observerと同じ `StatementEvent` です
+
+`Duration` はobserver処理を含むcallback全体、`StatementDuration` はcaptured event durationの合計です
+
+statementを並行実行した場合は `StatementDuration` がcallback durationを超えることがあります
+
+callbackは `debugContext` を使うgoroutineの完了を待つ必要があり、return後に完了したeventはreportへ含みません
+
+callback errorは変更せず、完了済みstatementのreportとともに返します
+
+`Debug` は既存eventだけを収集し、database call、`EXPLAIN`、ServerRU read、implicit transactionを追加しません
+
+`ctx` に既存observerがある場合は同じeventを引き続き受け取ります
+
+reportのbind argumentはdefaultで除外し、必要な場合だけ独立して有効化します
+
+```go
+report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
+```
+
+argument valueにはsecret、personal data、大きなpayloadが含まれ得ます
+
+default modeでもSQL templateとerrorを保持するため、statement logと同じ出力先とretention controlを適用してください
+
 ## SELECT EXPLAIN
 
 typed `SelectQuery` の `Explain` でTiDBが選択したplanを確認できます
