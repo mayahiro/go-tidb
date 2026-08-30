@@ -53,6 +53,12 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 		t.Fatalf("Role.Users metadata = %#v, exists = %t", users, exists)
 	}
 	requireDescription[UserRole](t, "user_roles", []string{"user_id", "role_id"})
+	clip := requireDescription[Clip](t, "clips", []string{"id"})
+	clipGenres, exists := clip.RelationByName("ClipGenres")
+	if !exists || clipGenres.Kind() != model.RelationHasMany || !reflect.DeepEqual(columnsFromFields(clipGenres.TargetKey()), []string{"clip_id"}) {
+		t.Fatalf("Clip.ClipGenres metadata = %#v, exists = %t", clipGenres, exists)
+	}
+	requireDescription[ClipGenre](t, "clip_genres", []string{"clip_id", "genre_id"})
 	video := requireDescription[Video](t, "videos", []string{"id"})
 	deletedAt, exists := video.SoftDeleteField()
 	if !exists || deletedAt.GoName() != "DeletedAt" || !deletedAt.IsSoftDelete() {
@@ -163,6 +169,25 @@ func TestApplicationBuildsScalarQueryOffline(t *testing.T) {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
 	if got, want := arguments, []any{int64(7), int64(1000), int64(100)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
+	t.Parallel()
+
+	if diagnostics := CheckRecentClipsInGenreQuery(7); len(diagnostics) != 0 {
+		t.Fatalf("CheckRecentClipsInGenreQuery() = %#v, want none", diagnostics)
+	}
+	sqlText, arguments, err := BuildRecentClipsInGenreQuery(7)
+	if err != nil {
+		t.Fatalf("BuildRecentClipsInGenreQuery() error = %v", err)
+	}
+	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title` FROM (SELECT `tidbgo_a0`.`clip_id` FROM `clip_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`clip_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `clips` AS `tidbgo_t0` ON (`tidbgo_k0`.`clip_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
 }
@@ -369,7 +394,7 @@ func TestApplicationBuildsRelationPredicateOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `id`, `email` FROM `users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `user_roles` AS `tidbgo_j1` JOIN `roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?) ORDER BY `tidbgo_r0`.`id` ASC"
+	wantSQL := "SELECT `id`, `email` FROM `users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `user_roles` AS `tidbgo_j1` JOIN `roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?) ORDER BY `tidbgo_r0`.`id` ASC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}

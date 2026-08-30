@@ -1,7 +1,7 @@
 # Struct-first starter app example
 
-This example defines `User`, `Order`, `Role`, `UserRole`, `Video`, and
-`WatchLater` as ordinary, application-owned Go structs.
+This example defines `User`, `Order`, `Role`, `UserRole`, `Clip`, `ClipGenre`,
+`Video`, and `WatchLater` as ordinary, application-owned Go structs.
 
 It demonstrates the current struct-first foundation:
 
@@ -28,8 +28,9 @@ It demonstrates the current struct-first foundation:
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
-- Direct and pure many-to-many relation predicates compiled to correlated
-  `EXISTS` subqueries without hydrating relations
+- Logical direct and pure many-to-many relation predicates, including TiDB
+  semi-join hints and relation-first TopN for an eligible direct collection,
+  without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
@@ -60,7 +61,11 @@ go test ./examples/starter-app
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection, and `CheckRecentOrdersQuery` applies static query-shape diagnostics
-to the same builder. `FirstRecentOrder`, `FindUserByEmail`,
+to the same builder. `BuildRecentClipsInGenreQuery` demonstrates natural
+`Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
+compiler filters and limits `clip_genres` before loading root rows;
+`CheckRecentClipsInGenreQuery` reports an `EXISTS` fallback if that shape stops
+being eligible. `FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary

@@ -73,7 +73,7 @@ func TestSelectQueryBuildsManyToManyRelationPredicateOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `id`, `email` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
+	wantSQL := "SELECT `id`, `email` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -94,13 +94,13 @@ func TestSelectQueryBuildsCompositeRelationPredicatesOffline(t *testing.T) {
 		{
 			name:     "direct",
 			query:    Query[preloadTenant]().Where(Has("Records", Equal("Value", "ready"))),
-			wantSQL:  "SELECT `tenant_id`, `id` FROM `preload_tenants` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_records` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`tenant_id` = `tidbgo_r0`.`tenant_id` AND `tidbgo_r1`.`parent_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`value` = ?)",
+			wantSQL:  "SELECT `tenant_id`, `id` FROM `preload_tenants` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_records` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`tenant_id` = `tidbgo_r0`.`tenant_id` AND `tidbgo_r1`.`parent_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`value` = ?)",
 			wantArgs: []any{"ready"},
 		},
 		{
 			name:     "many to many",
 			query:    Query[preloadMember]().Where(Has("Groups", Equal("Name", "operators"))),
-			wantSQL:  "SELECT `tenant_id`, `id` FROM `preload_members` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_member_groups` AS `tidbgo_j1` JOIN `preload_groups` AS `tidbgo_r1` ON (`tidbgo_r1`.`tenant_id` = `tidbgo_j1`.`group_tenant_id` AND `tidbgo_r1`.`id` = `tidbgo_j1`.`group_id`) WHERE (`tidbgo_j1`.`tenant_id` = `tidbgo_r0`.`tenant_id` AND `tidbgo_j1`.`member_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)",
+			wantSQL:  "SELECT `tenant_id`, `id` FROM `preload_members` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_member_groups` AS `tidbgo_j1` JOIN `preload_groups` AS `tidbgo_r1` ON (`tidbgo_r1`.`tenant_id` = `tidbgo_j1`.`group_tenant_id` AND `tidbgo_r1`.`id` = `tidbgo_j1`.`group_id`) WHERE (`tidbgo_j1`.`tenant_id` = `tidbgo_r0`.`tenant_id` AND `tidbgo_j1`.`member_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)",
 			wantArgs: []any{"operators"},
 		},
 	}
@@ -138,7 +138,7 @@ func TestSelectQueryBuildsNestedRelationPredicatesWithScopedAliases(t *testing.T
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `id` FROM `preload_users` AS `tidbgo_r0` WHERE `tidbgo_r0`.`email` = ? AND EXISTS (SELECT 1 FROM `preload_orders` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`id` > ? AND EXISTS (SELECT 1 FROM `preload_users` AS `tidbgo_r2` WHERE (`tidbgo_r2`.`id` = `tidbgo_r1`.`user_id`) AND `tidbgo_r2`.`email` = ?))"
+	wantSQL := "SELECT `id` FROM `preload_users` AS `tidbgo_r0` WHERE `tidbgo_r0`.`email` = ? AND EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_orders` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`id` > ? AND EXISTS (SELECT 1 FROM `preload_users` AS `tidbgo_r2` WHERE (`tidbgo_r2`.`id` = `tidbgo_r1`.`user_id`) AND `tidbgo_r2`.`email` = ?))"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -157,7 +157,7 @@ func TestSelectQueryBuildsSelfRelationPredicateWithDistinctAliases(t *testing.T)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `id` FROM `relation_predicate_nodes` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `relation_predicate_nodes` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`parent_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`id` = ?)"
+	wantSQL := "SELECT `id` FROM `relation_predicate_nodes` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `relation_predicate_nodes` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`parent_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`id` = ?)"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -182,6 +182,51 @@ func TestSelectQueryBuildsLogicalRelationPredicates(t *testing.T) {
 	}
 	if got, want := arguments, []any{"suspended"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectQueryUsesSemiJoinRewriteOnlyForPositiveConjunctiveCollectionFilters(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		query    interface{ Build() (string, []any, error) }
+		wantHint bool
+	}{
+		{
+			name:     "filtered has many",
+			query:    Query[preloadUser]().Where(Has("Orders", Equal("Total", "10.00"))),
+			wantHint: true,
+		},
+		{
+			name:  "unfiltered has many",
+			query: Query[preloadUser]().Where(Has("Orders")),
+		},
+		{
+			name:  "has one",
+			query: Query[preloadUser]().Where(Has("Profile", Equal("Bio", "public"))),
+		},
+		{
+			name:  "negated collection",
+			query: Query[preloadUser]().Where(Not(Has("Orders", Equal("Total", "10.00")))),
+		},
+		{
+			name:  "disjunctive collection",
+			query: Query[preloadUser]().Where(Or(Has("Orders", Equal("Total", "10.00")), Equal("Email", "ada@example.com"))),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sqlText, _, err := tt.query.Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if got := strings.Contains(sqlText, relationSemiJoinRewriteHint); got != tt.wantHint {
+				t.Fatalf("SQL = %q, hint present = %t, want %t", sqlText, got, tt.wantHint)
+			}
+		})
 	}
 }
 
@@ -215,7 +260,7 @@ func TestSelectQueryRelationPredicateDoesNotPreload(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("query count = %d, want 1", len(calls))
 	}
-	wantSQL := "SELECT `id`, `email` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
+	wantSQL := "SELECT `id`, `email` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
 	if calls[0].query != wantSQL {
 		t.Fatalf("query = %q, want %q", calls[0].query, wantSQL)
 	}
@@ -259,7 +304,7 @@ func TestSelectQueryRelationPredicateCanBeCombinedWithExplicitPreload(t *testing
 	if len(calls) != 2 {
 		t.Fatalf("query count = %d, want 2", len(calls))
 	}
-	wantParentSQL := "SELECT `email`, `id` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
+	wantParentSQL := "SELECT `email`, `id` FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
 	if calls[0].query != wantParentSQL {
 		t.Fatalf("parent query = %q, want %q", calls[0].query, wantParentSQL)
 	}
@@ -276,7 +321,7 @@ func TestSelectQueryRelationPredicatesApplyToExistsAndCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileExists() error = %v", err)
 	}
-	wantExistsSQL := "SELECT 1 FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?) LIMIT ?"
+	wantExistsSQL := "SELECT 1 FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?) LIMIT ?"
 	if exists.sql != wantExistsSQL {
 		t.Fatalf("Exists SQL = %q, want %q", exists.sql, wantExistsSQL)
 	}
@@ -288,7 +333,7 @@ func TestSelectQueryRelationPredicatesApplyToExistsAndCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileCount() error = %v", err)
 	}
-	wantCountSQL := "SELECT COUNT(*) FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
+	wantCountSQL := "SELECT COUNT(*) FROM `preload_users` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)"
 	if count.sql != wantCountSQL {
 		t.Fatalf("Count SQL = %q, want %q", count.sql, wantCountSQL)
 	}

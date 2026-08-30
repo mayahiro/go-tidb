@@ -65,6 +65,11 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 	if err != nil {
 		return compiledSelect{}, err
 	}
+	if compiled, optimized, compileErr := compileRelationTopNSelect(descriptor, statement, preloads, query); compileErr != nil {
+		return compiledSelect{}, compileErr
+	} else if optimized {
+		return compiled, nil
+	}
 	rootSoftDeleteColumn := ""
 	onlyDefaultSoftDeleteScope := selectUsesOnlyDefaultSoftDeleteScope(descriptor, query)
 	if onlyDefaultSoftDeleteScope {
@@ -122,6 +127,11 @@ func compileSelectWithoutPreloads(descriptor *model.Descriptor, query *selectQue
 	statement, err := compileSelectProjection(descriptor, query.projection)
 	if err != nil {
 		return compiledSelect{}, err
+	}
+	if compiled, optimized, compileErr := compileRelationTopNSelect(descriptor, statement, nil, query); compileErr != nil {
+		return compiledSelect{}, compileErr
+	} else if optimized {
+		return compiled, nil
 	}
 	if !selectNeedsClauses(descriptor, query) {
 		return compiledSelect{statement: statement}, nil

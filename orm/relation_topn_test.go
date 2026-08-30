@@ -1,0 +1,299 @@
+package orm
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/model"
+)
+
+type relationTopNUnprovenVideo struct {
+	model.Meta `tidbgo:"table=relation_topn_unproven_videos"`
+	ID         int64 `tidbgo:",pk"`
+	Title      string
+	Links      []relationTopNUnprovenLink `tidbgo:"has_many,join=ID:VideoID"`
+}
+
+type relationTopNUnprovenLink struct {
+	model.Meta `tidbgo:"table=relation_topn_unproven_links"`
+	ID         int64 `tidbgo:",pk"`
+	VideoID    int64
+	GenreID    int64
+}
+
+type relationTopNSoftVideo struct {
+	model.Meta `tidbgo:"table=relation_topn_soft_videos"`
+	ID         int64                  `tidbgo:",pk"`
+	DeletedAt  time.Time              `tidbgo:",soft_delete"`
+	Links      []relationTopNSoftLink `tidbgo:"has_many,join=ID:VideoID"`
+}
+
+type relationTopNSoftLink struct {
+	model.Meta `tidbgo:"table=relation_topn_soft_links"`
+	VideoID    int64     `tidbgo:",pk"`
+	GenreID    int64     `tidbgo:",pk"`
+	DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+
+type relationTopNTenantVideo struct {
+	model.Meta `tidbgo:"table=relation_topn_tenant_videos"`
+	TenantID   int64                         `tidbgo:",pk"`
+	ID         int64                         `tidbgo:",pk"`
+	Links      []relationTopNTenantVideoLink `tidbgo:"has_many,join=TenantID:TenantID,join=ID:VideoID"`
+}
+
+type relationTopNTenantVideoLink struct {
+	model.Meta `tidbgo:"table=relation_topn_tenant_video_links"`
+	TenantID   int64 `tidbgo:",pk"`
+	VideoID    int64 `tidbgo:",pk"`
+	GenreID    int64 `tidbgo:",pk"`
+}
+
+func TestSelectQueryBuildsRelationFirstTopN(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := relationTopNBenchmarkQuery().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title`, `tidbgo_t1`.`id`, `tidbgo_t1`.`name` FROM (SELECT `tidbgo_a0`.`video_id` FROM `relation_topn_video_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`video_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `relation_topn_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) LEFT JOIN `relation_topn_makers` AS `tidbgo_t1` ON (`tidbgo_t0`.`maker_id` = `tidbgo_t1`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestRelationFirstTopNPreservesOffsetAndCompositeKeyOrder(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := Query[relationTopNTenantVideo]().
+		Where(Has("Links", Equal("GenreID", int64(7)))).
+		OrderBy(Desc("TenantID"), Desc("ID")).
+		Limit(20).
+		Offset(40).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	wantSQL := "SELECT `tidbgo_t0`.`tenant_id`, `tidbgo_t0`.`id` FROM (SELECT `tidbgo_a0`.`tenant_id`, `tidbgo_a0`.`video_id` FROM `relation_topn_tenant_video_links` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`video_id` DESC LIMIT ? OFFSET ?) AS `tidbgo_k0` JOIN `relation_topn_tenant_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`tenant_id` = `tidbgo_t0`.`tenant_id` AND `tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`tenant_id` DESC, `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(7), int64(20), int64(40)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestRelationFirstTopNFallsBackForRootPredicates(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := Query[relationTopNVideo]().
+		Select("Title").
+		Where(
+			Equal("Title", "published"),
+			Has("VideoGenres", And(Equal("GenreID", int64(7)), IsNotNull("VideoID"))),
+		).
+		OrderBy(Asc("ID")).
+		Limit(10).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	wantSQL := "SELECT `title` FROM `relation_topn_videos` AS `tidbgo_r0` WHERE `tidbgo_r0`.`title` = ? AND EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `relation_topn_video_genres` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`video_id` = `tidbgo_r0`.`id`) AND (`tidbgo_r1`.`genre_id` = ? AND `tidbgo_r1`.`video_id` IS NOT NULL)) ORDER BY `tidbgo_r0`.`id` ASC LIMIT ?"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{"published", int64(7), int64(10)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestRelationFirstTopNFallsBackForRootSoftDeleteScope(t *testing.T) {
+	t.Parallel()
+
+	query := Query[relationTopNSoftVideo]().
+		Select("ID").
+		Where(Has("Links", Equal("GenreID", int64(7)))).
+		OrderBy(Desc("ID")).
+		Limit(20)
+	sqlText, _, err := query.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, fragment := range []string{
+		"`tidbgo_r0`.`deleted_at` IS NULL",
+		"`tidbgo_r1`.`deleted_at` IS NULL",
+		"`tidbgo_r1`.`genre_id` = ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("SQL = %q, want fragment %q", sqlText, fragment)
+		}
+	}
+
+	withDeletedSQL, _, err := query.WithDeleted().Build()
+	if err != nil {
+		t.Fatalf("WithDeleted Build() error = %v", err)
+	}
+	if strings.Contains(withDeletedSQL, "`tidbgo_t0`.`deleted_at` IS NULL") {
+		t.Fatalf("WithDeleted SQL = %q, want no root soft-delete scope", withDeletedSQL)
+	}
+	if !strings.Contains(withDeletedSQL, "`tidbgo_a0`.`deleted_at` IS NULL") {
+		t.Fatalf("WithDeleted SQL = %q, want relation soft-delete scope", withDeletedSQL)
+	}
+}
+
+func TestRelationFirstTopNFallsBackWhenUniquenessIsUnproven(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := Query[relationTopNUnprovenVideo]().
+		Select("ID").
+		Where(Has("Links", Equal("GenreID", int64(7)))).
+		OrderBy(Desc("ID")).
+		Limit(20).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	wantSQL := "SELECT `id` FROM `relation_topn_unproven_videos` AS `tidbgo_r0` WHERE EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `relation_topn_unproven_links` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`video_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`genre_id` = ?) ORDER BY `tidbgo_r0`.`id` DESC LIMIT ?"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestRelationTopNDiagnosticsReportsFallbackReasons(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		query  interface{ Diagnostics() []check.Diagnostic }
+		reason string
+	}{
+		{
+			name: "unproven uniqueness",
+			query: Query[relationTopNUnprovenVideo]().
+				Where(Has("Links", Equal("GenreID", "private-genre"))).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "does not prove at most one matching row",
+		},
+		{
+			name: "different order",
+			query: Query[relationTopNVideo]().
+				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("Title")).
+				Limit(20),
+			reason: "ORDER BY does not exactly match",
+		},
+		{
+			name: "logical group",
+			query: Query[relationTopNVideo]().
+				Where(And(Has("VideoGenres", Equal("GenreID", int64(7))), Equal("Title", "published"))).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "nested in a logical group",
+		},
+		{
+			name: "multiple collection predicates",
+			query: Query[relationTopNVideo]().
+				Where(
+					Has("VideoGenres", Equal("GenreID", int64(7))),
+					Has("VideoGenres", Equal("GenreID", int64(8))),
+				).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "more than one collection Has",
+		},
+		{
+			name: "seek cursor",
+			query: Query[relationTopNVideo]().
+				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID")).
+				SeekAfter(int64(100)).
+				Limit(20),
+			reason: "uses SeekAfter",
+		},
+		{
+			name: "root predicate",
+			query: Query[relationTopNVideo]().
+				Where(
+					Has("VideoGenres", Equal("GenreID", int64(7))),
+					Equal("Title", "private-title"),
+				).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "root predicate",
+		},
+		{
+			name: "root soft delete scope",
+			query: Query[relationTopNSoftVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "root default soft-delete scope",
+		},
+		{
+			name: "many to many",
+			query: Query[preloadUser]().
+				Where(Has("Roles", Equal("Name", "private-role"))).
+				OrderBy(Desc("ID")).
+				Limit(20),
+			reason: "many-to-many junction",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diagnostics := tt.query.Diagnostics()
+			if len(diagnostics) != 1 {
+				t.Fatalf("Diagnostics() = %#v, want one", diagnostics)
+			}
+			diagnostic := diagnostics[0]
+			if diagnostic.Code != codeRelationTopNFallback || diagnostic.Severity != check.SeverityWarning || !diagnostic.Suppressible {
+				t.Fatalf("diagnostic = %#v, want suppressible QRY005 warning", diagnostic)
+			}
+			if len(diagnostic.Evidence) != 1 || !strings.Contains(diagnostic.Evidence[0].Message, tt.reason) {
+				t.Fatalf("evidence = %#v, want reason %q", diagnostic.Evidence, tt.reason)
+			}
+			if strings.Contains(diagnostic.Message, "private-") || strings.Contains(diagnostic.Evidence[0].Message, "private-") {
+				t.Fatalf("diagnostic exposed bind value: %#v", diagnostic)
+			}
+			if diagnostic.Reference != relationTopNReference {
+				t.Fatalf("reference = %q, want %q", diagnostic.Reference, relationTopNReference)
+			}
+		})
+	}
+}
+
+func TestRelationTopNDiagnosticsAcceptsOptimizedAndNonPaginatedQueries(t *testing.T) {
+	t.Parallel()
+
+	queries := map[string]interface{ Diagnostics() []check.Diagnostic }{
+		"optimized": relationTopNBenchmarkQuery(),
+		"optimized with deleted": Query[relationTopNSoftVideo]().
+			Where(Has("Links", Equal("GenreID", int64(7)))).
+			OrderBy(Desc("ID")).
+			Limit(20).
+			WithDeleted(),
+		"no limit": Query[relationTopNUnprovenVideo]().
+			Where(Has("Links", Equal("GenreID", int64(7)))).
+			OrderBy(Desc("ID")),
+		"zero limit": Query[relationTopNUnprovenVideo]().
+			Where(Has("Links", Equal("GenreID", int64(7)))).
+			OrderBy(Desc("ID")).
+			Limit(0),
+	}
+	for name, query := range queries {
+		if diagnostics := query.Diagnostics(); len(diagnostics) != 0 {
+			t.Fatalf("%s Diagnostics() = %#v, want none", name, diagnostics)
+		}
+	}
+}

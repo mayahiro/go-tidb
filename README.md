@@ -193,8 +193,9 @@ implementations. Values remain separate bind arguments, and physical
 identifiers come only from validated model metadata.
 
 `Diagnostics` is also offline. It converts build failures to `QRY001` and
-reports valid OFFSET pagination, unordered explicit pagination, and
-leading-wildcard predicates as `QRY002` through `QRY004` without including bind
+reports valid OFFSET pagination, unordered explicit pagination,
+leading-wildcard predicates, and relation-filtered TopN shapes that cannot use
+the relation-first compiler as `QRY002` through `QRY005` without including bind
 values.
 
 Execute the same query only when an existing executor is passed explicitly:
@@ -223,10 +224,17 @@ admins, err := orm.Query[User]().
     All(ctx, db)
 ```
 
-`Has` compiles direct and pure many-to-many relation conditions to correlated
-`EXISTS` subqueries. Pass target predicates to require a matching related row,
-or omit them for existence only. Relation and target field names are exported
-Go field names. `Build` validates and compiles them entirely offline.
+`Has` is a logical relation-existence predicate. The compiler normally emits
+`EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
+predicates in a positive conjunctive context. For a narrow, metadata-proven
+`has_many` + root-primary-key order + positive-limit shape, it instead applies
+the target filter and Limit before loading root rows. `QRY005` explains why an
+ordered, limited collection filter falls back to `EXISTS`. Pass target
+predicates to require a matching related row, or omit them for existence only.
+Relation and target field names are exported Go field names. `Build` validates
+and compiles them entirely offline. See the [scalar query
+guide](docs/queries.md#relation-predicates) for the exact rewrite conditions,
+relation-integrity contract, and index guidance.
 
 Preload a direct or pure many-to-many relation by its exported Go field name:
 
@@ -500,6 +508,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
   `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
   yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
+  Filtered positive collection predicates use TiDB's semi-join rewrite hint,
+  and eligible ordered direct `has_many` pages use relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.

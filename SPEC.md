@@ -122,8 +122,10 @@ The currently implemented surface provides:
   `HasMany` and pure `ManyToMany` preloading through deterministic full-source
   or bounded keyed secondary SELECTs, with automatic key projection, target
   projection, collection ordering, and no loaded-state fields
-- Direct and pure `ManyToMany` relation predicates compiled offline as
-  correlated `EXISTS` subqueries without implicit preloading
+- Logical direct and pure `ManyToMany` relation predicates compiled offline as
+  `EXISTS`, with TiDB semi-join hints for filtered positive collections and a
+  metadata-proven relation-first TopN rewrite for eligible direct `HasMany`
+  pages, without implicit preloading
 - TiDB-default NULL ordering and primary-key-backed deterministic keyset
   validation
 - Typed slice `IN` and `NOT IN` predicates
@@ -163,8 +165,8 @@ The struct-first runtime is planned to provide:
 
 - Read-only `AsOf` and fixed-duration stale snapshot clients
 
-Per-parent preload limits, opaque cursors, lazy loading, automatic query-plan
-selection, and object-graph persistence are outside v0.1.
+Per-parent preload limits, opaque cursors, lazy loading, connected cost-based
+plan probing, and object-graph persistence are outside v0.1.
 
 The `IDs` terminal is deferred until a measured large-ID workload justifies a
 dedicated result API and any resulting minimum-Go-version cost.
@@ -200,14 +202,15 @@ The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
 an optional source location, and an optional reference. Offline model checks
 currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
-use `QRY001` through `QRY004` and never include bind values. Offline physical
+use `QRY001` through `QRY005` and never include bind values. Offline physical
 schema compatibility checks use `CMP001` through `CMP014`.
 
 The implemented offline checks cover executable model metadata, ignored and
 likely misplaced tags, primary-key and custom-scalar capabilities, invalid
 typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
-wildcard predicates, directional model and SQL-snapshot compatibility, and
-Relation target and junction correctness. They also warn when deterministic
+wildcard predicates, relation-filtered TopN fallback, directional model and
+SQL-snapshot compatibility, and Relation target and junction correctness. They
+also warn when deterministic
 `has_many` or `many_to_many` lookups have no structural source-key index
 prefix. They do not require source generation, configuration, or a database
 connection. Terminal-specific unbounded-query detection and raw SQL are not

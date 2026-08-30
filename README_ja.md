@@ -197,7 +197,7 @@ valueはbind argumentとしてSQLから分離し、物理identifierにはvalidat
 
 `Diagnostics` もofflineで動作します
 
-build failureを `QRY001` へ変換し、有効なOFFSET pagination、明示的なpaginationのorder不足、leading wildcard predicateをbind valueなしの `QRY002` から `QRY004` で報告します
+build failureを `QRY001` へ変換し、有効なOFFSET pagination、明示的なpaginationのorder不足、leading wildcard predicate、relation-first compilerを使用できないRelation filter付きTopNをbind valueなしの `QRY002` から `QRY005` で報告します
 
 既存executorを明示的に渡した場合だけ同じqueryを実行します
 
@@ -229,11 +229,19 @@ admins, err := orm.Query[User]().
     All(ctx, db)
 ```
 
-`Has` はdirectまたはpure many-to-many Relation条件をcorrelated `EXISTS` subqueryへcompileします
+`Has` はRelationの存在を表すlogical predicateです
+
+通常は `EXISTS` を生成し、positive conjunctive contextのfiltered collection predicateにはTiDBの `SEMI_JOIN_REWRITE()` hintを追加します
+
+metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
+
+orderedかつlimitedなcollection filterが `EXISTS` fallbackになる理由は `QRY005` で確認できます
 
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
 Relation名とtarget field名にはexported Go field名を使い、`Build` はDB接続なしでvalidationとcompileを行います
+
+正確な変換条件、Relation data integrity contract、index guidanceは[Scalar query guide](docs/queries_ja.md#relation-predicate)を参照してください
 
 exported Go field名でdirectまたはpure many-to-many Relationをpreloadします
 
@@ -520,6 +528,7 @@ command helpは `tidbgo --help` で表示できます
 
 - scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
 - directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
+- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない

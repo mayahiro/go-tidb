@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/model"
 )
 
 const (
@@ -11,9 +12,11 @@ const (
 	codeOffsetPagination      = "QRY002"
 	codeUnorderedPagination   = "QRY003"
 	codeLeadingWildcardFilter = "QRY004"
+	codeRelationTopNFallback  = "QRY005"
 
-	paginationReference = "https://docs.pingcap.com/developer/dev-guide-paginate-results/"
-	likeReference       = "https://docs.pingcap.com/tidb/stable/string-functions/#like"
+	paginationReference   = "https://docs.pingcap.com/developer/dev-guide-paginate-results/"
+	likeReference         = "https://docs.pingcap.com/tidb/stable/string-functions/#like"
+	relationTopNReference = "https://docs.pingcap.com/tidb/stable/topn-limit-push-down/"
 )
 
 // Diagnostics checks the current SELECT builder without accessing a database
@@ -41,11 +44,19 @@ func (q *SelectQuery[T]) Diagnostics() []check.Diagnostic {
 	selection := &q.selection
 	modelName := compiled.statement.scanPlan.modelType.Name()
 	returnsRows := !selection.pagination.limitSet || selection.pagination.limit > 0
+	relationTopN := relationTopNAnalysis{}
+	if descriptor, describeErr := model.DescribeType(compiled.statement.scanPlan.modelType); describeErr == nil {
+		relationTopN, _ = analyzeRelationTopN(descriptor, selection)
+	}
+	relationTopNFallback := returnsRows && relationTopN.candidate && !relationTopN.optimized
 	diagnosticCount := leadingWildcardDiagnosticCount(selection.predicates)
 	if returnsRows && selection.pagination.offsetSet && selection.pagination.offset > 0 {
 		diagnosticCount++
 	}
 	if returnsRows && selection.pagination.limitSet && len(selection.orderBy) == 0 {
+		diagnosticCount++
+	}
+	if relationTopNFallback {
 		diagnosticCount++
 	}
 	diagnostics = make([]check.Diagnostic, 0, diagnosticCount)
@@ -69,6 +80,21 @@ func (q *SelectQuery[T]) Diagnostics() []check.Diagnostic {
 			Suggestion:   "Add OrderBy unless returning an arbitrary subset is intentional",
 			Suppressible: true,
 			Reference:    paginationReference,
+		})
+	}
+	if relationTopNFallback {
+		diagnostics = append(diagnostics, check.Diagnostic{
+			Code:     codeRelationTopNFallback,
+			Severity: check.SeverityWarning,
+			Title:    "Relation-filter TopN uses the EXISTS fallback",
+			Message: "SELECT for " + modelName + " combines collection relation " + relationTopN.relationName +
+				" with ORDER BY and LIMIT, but the compiler could not safely move TopN to the relation source",
+			Evidence: []check.Evidence{{
+				Message: "Relation-first TopN was not applied because " + relationTopN.reason,
+			}},
+			Suggestion:   "Verify the fallback with Explain or ExplainAnalyze and make the relation target primary key and root ordering explicit when the same semantics allow it",
+			Suppressible: true,
+			Reference:    relationTopNReference,
 		})
 	}
 	return appendLeadingWildcardDiagnostics(diagnostics, selection.predicates, modelName)

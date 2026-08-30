@@ -158,6 +158,16 @@ order.User = &user
 
 queryを実行するcodeが、requestしたRelationを把握する責任を持ちます
 
+direct Relation mappingはdata integrity contractでもあります
+
+mappingが表すnon-NULL foreign keyまたはtarget key valueは、反対側の既存rowを参照する必要があります
+
+`go-tidb` はruntimeで物理foreign keyを作成、inspect、enforceしません
+
+preloadとRelation predicateは到達できないrowを自然に無視し、relation-first TopN query optimizationはroot joinより前にLimitを適用できるため、orphan target rowがpageをLimit未満にする可能性があります
+
+物理constraintまたはapplication write ruleでcontractを維持してください
+
 Relation fieldはI/Oとlazy loadingを行わず、fieldへの代入でRelationを永続化しません
 
 exported anonymous structはdepth-firstでflattenします

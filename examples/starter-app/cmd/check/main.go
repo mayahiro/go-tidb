@@ -12,6 +12,7 @@ import (
 func main() {
 	diagnostics := starterapp.CheckModels()
 	diagnostics = append(diagnostics, starterapp.CheckRecentOrdersQuery(7, 1000)...)
+	diagnostics = append(diagnostics, starterapp.CheckRecentClipsInGenreQuery(7)...)
 	if err := json.NewEncoder(os.Stdout).Encode(diagnostics); err != nil {
 		fmt.Fprintf(os.Stderr, "starter check: encode diagnostics: %v\n", err)
 		os.Exit(1)

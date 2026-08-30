@@ -46,12 +46,14 @@ type predicate struct {
 }
 
 type predicateCompiler struct {
-	descriptor *model.Descriptor
-	query      *strings.Builder
-	arguments  []any
-	qualifier  string
-	depth      int
-	operation  string
+	descriptor       *model.Descriptor
+	query            *strings.Builder
+	arguments        []any
+	qualifier        string
+	depth            int
+	negationDepth    int
+	disjunctionDepth int
+	operation        string
 }
 
 func (c *predicateCompiler) operationName() string {
@@ -134,7 +136,10 @@ func (c *predicateCompiler) writeLogical(current predicate, separator string, ch
 
 	if childCount == 1 {
 		c.query.WriteString("NOT (")
-		if err := c.write(current.children[0]); err != nil {
+		c.negationDepth++
+		err := c.write(current.children[0])
+		c.negationDepth--
+		if err != nil {
 			return err
 		}
 		c.query.WriteByte(')')
@@ -142,6 +147,10 @@ func (c *predicateCompiler) writeLogical(current predicate, separator string, ch
 	}
 
 	c.query.WriteByte('(')
+	disjunction := separator == "OR"
+	if disjunction {
+		c.disjunctionDepth++
+	}
 	for index := range current.children {
 		if index != 0 {
 			c.query.WriteByte(' ')
@@ -149,8 +158,14 @@ func (c *predicateCompiler) writeLogical(current predicate, separator string, ch
 			c.query.WriteByte(' ')
 		}
 		if err := c.write(current.children[index]); err != nil {
+			if disjunction {
+				c.disjunctionDepth--
+			}
 			return err
 		}
+	}
+	if disjunction {
+		c.disjunctionDepth--
 	}
 	c.query.WriteByte(')')
 	return nil

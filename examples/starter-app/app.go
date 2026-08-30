@@ -83,6 +83,21 @@ type UserRole struct {
 	RoleID     int64 `tidbgo:",pk"`
 }
 
+// Clip is an application-owned root model used for relation-filtered TopN.
+type Clip struct {
+	model.Meta `tidbgo:"table=clips"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	Title      string
+	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+}
+
+// ClipGenre is an application-owned association model with one row per pair.
+type ClipGenre struct {
+	model.Meta `tidbgo:"table=clip_genres"`
+	ClipID     int64 `tidbgo:",pk"`
+	GenreID    int64 `tidbgo:",pk"`
+}
+
 // JobLease is an application-owned conditional-update model.
 type JobLease struct {
 	model.Meta `tidbgo:"table=job_leases"`
@@ -117,6 +132,8 @@ func CheckModels() []check.Diagnostic {
 	diagnostics = append(diagnostics, check.Model[Order]()...)
 	diagnostics = append(diagnostics, check.Model[Role]()...)
 	diagnostics = append(diagnostics, check.Model[UserRole]()...)
+	diagnostics = append(diagnostics, check.Model[Clip]()...)
+	diagnostics = append(diagnostics, check.Model[ClipGenre]()...)
 	diagnostics = append(diagnostics, check.Model[JobLease]()...)
 	diagnostics = append(diagnostics, check.Model[Video]()...)
 	diagnostics = append(diagnostics, check.Model[WatchLater]()...)
@@ -153,6 +170,32 @@ func recentOrdersQuery(userID, afterID int64) *orm.SelectQuery[Order] {
 		OrderBy(orm.Desc("ID")).
 		SeekAfter(afterID).
 		Limit(100)
+}
+
+// BuildRecentClipsInGenreQuery compiles a relation-filtered TopN query that
+// can apply LIMIT to clip_genres before loading Clip rows.
+func BuildRecentClipsInGenreQuery(genreID int64) (string, []any, error) {
+	return recentClipsInGenreQuery(genreID).Build()
+}
+
+// CheckRecentClipsInGenreQuery reports whether the relation-filtered TopN
+// shape must fall back to EXISTS.
+func CheckRecentClipsInGenreQuery(genreID int64) []check.Diagnostic {
+	return recentClipsInGenreQuery(genreID).Diagnostics()
+}
+
+func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+	return orm.Query[Clip]().
+		Select("ID", "Title").
+		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
+}
+
+// ListRecentClipsInGenre returns the newest clips having one matching
+// ClipGenre row through an explicitly supplied database/sql executor.
+func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
+	return recentClipsInGenreQuery(genreID).All(ctx, executor)
 }
 
 // FirstRecentOrder returns the newest order for a user through an explicitly

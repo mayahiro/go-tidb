@@ -57,6 +57,7 @@ diagnosticへpredicateまたはcursorのvalueを含めません
 | `QRY002` | warning | positive OFFSETがrowをskipし、offsetの増加に伴ってcostが増える |
 | `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
 | `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
+| `QRY005` | warning | orderedかつlimitedなcollection `Has` が `EXISTS` fallbackを使用する |
 
 queryをcompileできないため、`QRY001` はsuppressibleではありません
 
@@ -79,6 +80,14 @@ index、statistics、collation、optimizer behaviorはconnected concernである
 terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
 
 Raw SQLはtyped query ASTの外にあるため解析しません
+
+`QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
+
+例として1 rootあたり1 rowの証明不足、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter`、`many_to_many` があります
+
+target predicate valueは含めません
+
+fallbackも有効なRelation existence queryであるため、実際のplanを許容できるかは `Explain` または `ExplainAnalyze` で判断します
 
 ## Soft delete scope
 
@@ -151,11 +160,51 @@ Relation名と全target field名にはexported Go field名を使います
 
 target scopeではlogical predicateとnestedした `Has` も使えます
 
-directな `belongs_to`、`has_one`、`has_many` はtarget tableへのcorrelated `EXISTS` へcompileします
+`Has` は固定SQL templateではなくRelationの存在を表すlogical predicateです
 
-pure `many_to_many` はjunction-to-targetのcorrelated `EXISTS` へcompileします
+direct Relationは通常target tableへのcorrelated `EXISTS`、pure `many_to_many` は通常junction-to-targetのcorrelated `EXISTS` へcompileします
 
 compositeなdirect mappingまたはjunction mappingでは宣言した全key componentをcorrelationへ含めます
+
+positive conjunctive contextのfiltered `has_many` または `many_to_many` predicateでは、compilerが `EXISTS` query blockへTiDBの `SEMI_JOIN_REWRITE()` hintを配置します
+
+このhintによりTiDBはfilter済みRelation側をdriving sideとするjoin planを検討できます
+
+unfiltered existence、to-one Relation、`Or` または `Not` 配下のpredicateはhintなしの `EXISTS` を維持します
+
+TiDBの公式仕様は[Optimizer Hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite)を参照してください
+
+compilerは次の条件をmetadataから証明できるTopN shapeをさらに変換します
+
+- builderにtop-level direct `has_many` の `Has` が1個だけあり、他のroot predicateがない
+- positive `Limit` と `OrderBy` が明示され、orderがroot primary key全体と完全に一致する
+- Relation source keyがroot primary key全体である
+- Relation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
+- `SeekAfter` とroot default soft-delete scopeがactiveではない
+
+このshapeではRelation targetをderived query内でfilterしてorderし、そこで `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+
+TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
+
+data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pushdown guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
+
+物理schemaにforeign keyがなくてもRelation mappingはdata integrity contractです
+
+direct Relationが表すtarget keyは既存source rowを参照する必要があります
+
+`go-tidb` はquery実行時にこのconstraintを作成または検査しません
+
+relation-first TopNはこのcontractを前提とするため、orphan target rowがある場合はroot joinより前にpage slotを消費し、結果件数がLimit未満になる可能性があります
+
+workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
+
+compilerは物理indexをofflineでinspectできません
+
+効率的なrelation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
+
+例えば `Equal("GenreID", ...)` と `OrderBy(Desc("ID"))` には `(genre_id, video_id)` が該当します
+
+empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
 
 target modelがsoft-delete fieldを持つ場合、`Has` はactive target rowだけを対象にします
 

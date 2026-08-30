@@ -162,6 +162,19 @@ type starterRelationChild struct {
 	Node       *starterRelationNode `tidbgo:"belongs_to,join=NodeID:ID"`
 }
 
+type starterTopNVideo struct {
+	model.Meta  `tidbgo:"table=tidbgo_it_topn_videos"`
+	ID          int64 `tidbgo:",pk"`
+	Title       string
+	VideoGenres []starterTopNVideoGenre `tidbgo:"has_many,join=ID:VideoID"`
+}
+
+type starterTopNVideoGenre struct {
+	model.Meta `tidbgo:"table=tidbgo_it_topn_video_genres"`
+	VideoID    int64 `tidbgo:",pk"`
+	GenreID    int64 `tidbgo:",pk"`
+}
+
 type starterDecimal struct {
 	text string
 }
@@ -383,6 +396,25 @@ var fixtureTables = []fixtureTable{
 )`,
 		drop: "DROP TABLE tidbgo_it_relation_children",
 	},
+	{
+		name: "tidbgo_it_topn_videos",
+		create: `CREATE TABLE tidbgo_it_topn_videos (
+  id BIGINT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id)
+)`,
+		drop: "DROP TABLE tidbgo_it_topn_videos",
+	},
+	{
+		name: "tidbgo_it_topn_video_genres",
+		create: `CREATE TABLE tidbgo_it_topn_video_genres (
+  video_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (video_id, genre_id),
+  KEY tidbgo_it_topn_video_genres_genre_video (genre_id, video_id)
+)`,
+		drop: "DROP TABLE tidbgo_it_topn_video_genres",
+	},
 }
 
 type fixtureInsert struct {
@@ -554,6 +586,9 @@ func TestTiDBCloudStarter(t *testing.T) {
 	})
 	t.Run("direct and many-to-many relation predicates", func(t *testing.T) {
 		testRelationPredicates(t, ctx, database, dsn)
+	})
+	t.Run("relation-first TopN compiler", func(t *testing.T) {
+		testRelationFirstTopN(t, ctx, database, dsn)
 	})
 	t.Run("preload in caller transaction", func(t *testing.T) {
 		testTransactionPreload(t, ctx, database, dsn)
@@ -1247,6 +1282,137 @@ func testRelationPredicates(t *testing.T, ctx context.Context, database *sql.DB,
 	}
 	if count != 2 {
 		t.Fatalf("relation predicate user count = %d, want 2", count)
+	}
+}
+
+func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	videos := make([]starterTopNVideo, 100)
+	for index := range videos {
+		id := int64(index + 1)
+		videos[index] = starterTopNVideo{ID: id, Title: fmt.Sprintf("video-%03d", id)}
+	}
+	if affected, err := orm.InsertMany(videos).Exec(ctx, database); err != nil {
+		fatalDatabaseError(t, dsn, "insert relation TopN videos", err)
+	} else if affected != int64(len(videos)) {
+		t.Fatalf("relation TopN video inserts = %d, want %d", affected, len(videos))
+	}
+
+	links := make([]starterTopNVideoGenre, 0, 55)
+	for id := int64(2); id <= 100; id += 2 {
+		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 7})
+	}
+	for id := int64(1); id <= 10; id += 2 {
+		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 8})
+	}
+	if affected, err := orm.InsertMany(links).Exec(ctx, database); err != nil {
+		fatalDatabaseError(t, dsn, "insert relation TopN links", err)
+	} else if affected != int64(len(links)) {
+		t.Fatalf("relation TopN link inserts = %d, want %d", affected, len(links))
+	}
+
+	query := orm.Query[starterTopNVideo]().
+		Select("ID", "Title").
+		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
+	if diagnostics := query.Diagnostics(); len(diagnostics) != 0 {
+		t.Fatalf("relation TopN diagnostics = %#v, want none", diagnostics)
+	}
+	sqlText, _, err := query.Build()
+	if err != nil {
+		t.Fatalf("build relation TopN query: %v", err)
+	}
+	if !strings.Contains(sqlText, "FROM (SELECT `tidbgo_a0`.`video_id`") ||
+		!strings.Contains(sqlText, "LIMIT ?) AS `tidbgo_k0` JOIN `tidbgo_it_topn_videos` AS `tidbgo_t0`") ||
+		strings.Contains(sqlText, "EXISTS") {
+		t.Fatalf("relation TopN SQL = %q, want relation-first derived SELECT", sqlText)
+	}
+
+	selected, err := query.All(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "execute relation-first TopN query", err)
+	}
+	if len(selected) != 20 {
+		t.Fatalf("relation TopN result count = %d, want 20", len(selected))
+	}
+	for index := range selected {
+		wantID := int64(100 - index*2)
+		if selected[index].ID != wantID {
+			t.Fatalf("relation TopN result %d ID = %d, want %d", index, selected[index].ID, wantID)
+		}
+	}
+
+	func() {
+		connection, connectionErr := database.Conn(ctx)
+		if connectionErr != nil {
+			fatalDatabaseError(t, dsn, "reserve relation-filter count connection", connectionErr)
+		}
+		defer func() {
+			if closeErr := connection.Close(); closeErr != nil {
+				t.Errorf("close relation-filter count connection: %s", redact.Error(closeErr, dsn))
+			}
+		}()
+		count, countErr := orm.Query[starterTopNVideo]().
+			Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
+			Count(ctx, connection)
+		if countErr != nil {
+			fatalDatabaseError(t, dsn, "count relation-filtered videos through the semi-join rewrite", countErr)
+		}
+		if count != 50 {
+			t.Fatalf("relation-filtered video count = %d, want 50", count)
+		}
+		warningRows, warningErr := connection.QueryContext(ctx, "SHOW WARNINGS")
+		if warningErr != nil {
+			fatalDatabaseError(t, dsn, "read relation-filter count hint warnings", warningErr)
+		}
+		defer func() {
+			if closeErr := warningRows.Close(); closeErr != nil {
+				t.Errorf("close relation-filter count hint warnings: %s", redact.Error(closeErr, dsn))
+			}
+		}()
+		if warningRows.Next() {
+			var level string
+			var code int
+			var message string
+			if scanErr := warningRows.Scan(&level, &code, &message); scanErr != nil {
+				fatalDatabaseError(t, dsn, "scan relation-filter count hint warning", scanErr)
+			}
+			t.Fatalf("relation-filter count produced optimizer warning level=%s code=%d message=%q", level, code, message)
+		}
+		if rowsErr := warningRows.Err(); rowsErr != nil {
+			fatalDatabaseError(t, dsn, "iterate relation-filter count hint warnings", rowsErr)
+		}
+	}()
+
+	plan, err := query.ExplainAnalyze(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain analyze relation-first TopN query", err)
+	}
+	foundAssociation := false
+	foundIndex := false
+	foundPushedLimit := false
+	foundRU := false
+	for _, row := range plan {
+		if strings.Contains(row.AccessObject, "table:tidbgo_a0") {
+			foundAssociation = true
+		}
+		if strings.Contains(row.AccessObject, "index:tidbgo_it_topn_video_genres_genre_video") {
+			foundIndex = true
+			if row.ActRows != 20 {
+				t.Fatalf("relation TopN association index rows = %d, want 20: %#v", row.ActRows, row)
+			}
+		}
+		if strings.Contains(row.ID, "Limit") && row.Task == "cop[tikv]" && row.ActRows == 20 {
+			foundPushedLimit = true
+		}
+		if strings.Contains(row.ExecutionInfo, "RU:") {
+			foundRU = true
+		}
+	}
+	if !foundAssociation || !foundIndex || !foundPushedLimit || !foundRU {
+		t.Fatalf("relation TopN plan lacks association table, structural index, pushed Limit, or RU data: %#v", plan)
 	}
 }
 

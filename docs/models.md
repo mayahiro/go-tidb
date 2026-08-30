@@ -145,6 +145,15 @@ order.User = &user
 
 `go-tidb` does not add loaded-state bookkeeping to model fields. Code that
 executes a query remains responsible for knowing which relations it requested.
+
+A direct relation mapping is also a data-integrity contract. Every non-NULL
+foreign-key or target-key value represented by the mapping must reference an
+existing row on the other side. `go-tidb` does not create, inspect, or enforce
+physical foreign keys at runtime. Preloads and relation predicates naturally
+ignore unreachable rows, and the relation-first TopN query optimization can
+apply Limit before the root join, so orphan target rows can underfill a page.
+Use physical constraints or application write rules to maintain the contract.
+
 Relation fields do not perform I/O or lazy loading, and assigning a field does
 not persist a relation.
 
