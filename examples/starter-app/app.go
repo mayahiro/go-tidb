@@ -10,8 +10,10 @@ import (
 	"io"
 	"time"
 
+	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 var (
@@ -81,6 +83,21 @@ type UserRole struct {
 	RoleID     int64 `tidbgo:",pk"`
 }
 
+// Clip is an application-owned root model used for relation-filtered TopN.
+type Clip struct {
+	model.Meta `tidbgo:"table=clips"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	Title      string
+	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+}
+
+// ClipGenre is an application-owned association model with one row per pair.
+type ClipGenre struct {
+	model.Meta `tidbgo:"table=clip_genres"`
+	ClipID     int64 `tidbgo:",pk"`
+	GenreID    int64 `tidbgo:",pk"`
+}
+
 // JobLease is an application-owned conditional-update model.
 type JobLease struct {
 	model.Meta `tidbgo:"table=job_leases"`
@@ -107,16 +124,78 @@ type WatchLater struct {
 	Video      *Video `tidbgo:"belongs_to"`
 }
 
+// CheckModels runs the example application's model-intent checks without a
+// database connection or generated registry.
+func CheckModels() []check.Diagnostic {
+	diagnostics := make([]check.Diagnostic, 0)
+	diagnostics = append(diagnostics, check.Model[User]()...)
+	diagnostics = append(diagnostics, check.Model[Order]()...)
+	diagnostics = append(diagnostics, check.Model[Role]()...)
+	diagnostics = append(diagnostics, check.Model[UserRole]()...)
+	diagnostics = append(diagnostics, check.Model[Clip]()...)
+	diagnostics = append(diagnostics, check.Model[ClipGenre]()...)
+	diagnostics = append(diagnostics, check.Model[JobLease]()...)
+	diagnostics = append(diagnostics, check.Model[Video]()...)
+	diagnostics = append(diagnostics, check.Model[WatchLater]()...)
+	return diagnostics
+}
+
+// CheckUserSchema parses a TiDB CREATE TABLE snapshot and checks its physical
+// compatibility with User and its declared relations without opening a
+// database connection.
+func CheckUserSchema(sqlText string) ([]check.Diagnostic, error) {
+	catalog, err := physicalschema.Parse(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	return check.Schema[User](catalog), nil
+}
+
 // BuildRecentOrdersQuery compiles a keyset-paginated query without a database
 // connection or generated code.
 func BuildRecentOrdersQuery(userID, afterID int64) (string, []any, error) {
+	return recentOrdersQuery(userID, afterID).Build()
+}
+
+// CheckRecentOrdersQuery returns offline diagnostics for the same query shape
+// used by BuildRecentOrdersQuery.
+func CheckRecentOrdersQuery(userID, afterID int64) []check.Diagnostic {
+	return recentOrdersQuery(userID, afterID).Diagnostics()
+}
+
+func recentOrdersQuery(userID, afterID int64) *orm.SelectQuery[Order] {
 	return orm.Query[Order]().
 		Select("ID", "UserID", "Total").
 		Where(orm.Equal("UserID", userID)).
 		OrderBy(orm.Desc("ID")).
 		SeekAfter(afterID).
-		Limit(100).
-		Build()
+		Limit(100)
+}
+
+// BuildRecentClipsInGenreQuery compiles a relation-filtered TopN query that
+// can apply LIMIT to clip_genres before loading Clip rows.
+func BuildRecentClipsInGenreQuery(genreID int64) (string, []any, error) {
+	return recentClipsInGenreQuery(genreID).Build()
+}
+
+// CheckRecentClipsInGenreQuery reports whether the relation-filtered TopN
+// shape must fall back to EXISTS.
+func CheckRecentClipsInGenreQuery(genreID int64) []check.Diagnostic {
+	return recentClipsInGenreQuery(genreID).Diagnostics()
+}
+
+func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+	return orm.Query[Clip]().
+		Select("ID", "Title").
+		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
+}
+
+// ListRecentClipsInGenre returns the newest clips having one matching
+// ClipGenre row through an explicitly supplied database/sql executor.
+func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
+	return recentClipsInGenreQuery(genreID).All(ctx, executor)
 }
 
 // FirstRecentOrder returns the newest order for a user through an explicitly
@@ -136,6 +215,34 @@ func FindUserByEmail(ctx context.Context, executor orm.QueryExecutor, email stri
 		Select("ID", "Email").
 		Where(orm.Equal("Email", email)).
 		Only(ctx, executor)
+}
+
+// ExplainUserByEmail asks TiDB for the execution plan of the typed user lookup.
+func ExplainUserByEmail(ctx context.Context, executor orm.QueryExecutor, email string) ([]orm.ExplainRow, error) {
+	return orm.Query[User]().
+		Select("ID", "Email").
+		Where(orm.Equal("Email", email)).
+		Explain(ctx, executor)
+}
+
+// ExplainAnalyzeUserByEmail executes the typed lookup and returns TiDB's
+// runtime execution plan.
+func ExplainAnalyzeUserByEmail(ctx context.Context, executor orm.QueryExecutor, email string) ([]orm.ExplainAnalyzeRow, error) {
+	return orm.Query[User]().
+		Select("ID", "Email").
+		Where(orm.Equal("Email", email)).
+		ExplainAnalyze(ctx, executor)
+}
+
+// FindUserByEmailWithServerRU runs one query on a pinned connection and reads
+// the ServerRU reported by TiDB for that completed DML statement.
+func FindUserByEmailWithServerRU(ctx context.Context, connection *sql.Conn, email string) (User, float64, error) {
+	user, err := FindUserByEmail(ctx, connection, email)
+	if err != nil {
+		return User{}, 0, err
+	}
+	serverRU, err := orm.LastServerRU(ctx, connection)
+	return user, serverRU, err
 }
 
 // HasUserWithEmail reports whether an email address is already present through
@@ -178,6 +285,18 @@ func ListWatchLaterVideos(ctx context.Context, executor orm.QueryExecutor, userI
 // secondary query and each order's nested User joined into that statement.
 func ListUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]User, error) {
 	return usersWithOrdersQuery().All(ctx, executor)
+}
+
+// DebugUsersWithOrders returns users and one report containing the root and
+// relation statements executed by the operation.
+func DebugUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]User, orm.DebugReport, error) {
+	var users []User
+	report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+		var queryErr error
+		users, queryErr = usersWithOrdersQuery().All(debugContext, executor)
+		return queryErr
+	})
+	return users, report, err
 }
 
 // LoadUserWithOrderCount uses explicit SQL for an aggregate while retaining

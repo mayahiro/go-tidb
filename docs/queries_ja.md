@@ -39,9 +39,59 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
+## Query shapeのoffline check
+
+同じbuilderへstatic query-shape checkを適用する場合は `Diagnostics` を呼び出します
+
+```go
+diagnostics := query.Diagnostics()
+```
+
+`Diagnostics` は `Build` と同じvalidationを行い、DB I/Oとcustom `driver.Valuer` の実行を行いません
+
+diagnosticへpredicateまたはcursorのvalueを含めません
+
+| Code | Severity | 意味 |
+| --- | --- | --- |
+| `QRY001` | error | model metadataまたはSELECT builderが不正 |
+| `QRY002` | warning | positive OFFSETがrowをskipし、offsetの増加に伴ってcostが増える |
+| `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
+| `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
+| `QRY005` | warning | orderedかつlimitedなcollection `Has` が `EXISTS` fallbackを使用する |
+
+queryをcompileできないため、`QRY001` はsuppressibleではありません
+
+他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
+
+reason付きreportとsuppressionの挙動は[Offline diagnostic report guide](checks_ja.md)を参照してください
+
+TiDBの[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)はpaginated resultのorderを推奨し、offsetが大きくなるほどcompute resourceを消費すると説明しています
+
+applicationでstable cursorを保持できる場合は `SeekAfter` を優先します
+
+`Contains` と `HasSuffix` は意図的にpatternを `%` で開始し、そのmatching behaviorはTiDBの[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like)に従います
+
+index、statistics、collation、optimizer behaviorはconnected concernであるため、static checkは特定のphysical planを断定しません
+
+実際のaccess pathは `Explain` または `ExplainAnalyze` で確認します
+
+同じbuilderを `All`、`First`、`Only`、`Exists`、`Count`、plan terminalで使用できるため、このmethodはbuilderへ明示的に保存されたstateだけをcheckします
+
+terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
+
+Raw SQLはtyped query ASTの外にあるため解析しません
+
+`QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
+
+例として1 rootあたり1 rowの証明不足、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter`、`many_to_many` があります
+
+target predicate valueは含めません
+
+fallbackも有効なRelation existence queryであるため、実際のplanを許容できるかは `Explain` または `ExplainAnalyze` で判断します
+
 ## Soft delete scope
 
-`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count` へ `deleted_at IS NULL` を自動追加します
+`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
 
 active rowとlogical deleted rowの両方が必要な場合だけ `WithDeleted` を使います
 
@@ -110,11 +160,51 @@ Relation名と全target field名にはexported Go field名を使います
 
 target scopeではlogical predicateとnestedした `Has` も使えます
 
-directな `belongs_to`、`has_one`、`has_many` はtarget tableへのcorrelated `EXISTS` へcompileします
+`Has` は固定SQL templateではなくRelationの存在を表すlogical predicateです
 
-pure `many_to_many` はjunction-to-targetのcorrelated `EXISTS` へcompileします
+direct Relationは通常target tableへのcorrelated `EXISTS`、pure `many_to_many` は通常junction-to-targetのcorrelated `EXISTS` へcompileします
 
 compositeなdirect mappingまたはjunction mappingでは宣言した全key componentをcorrelationへ含めます
+
+positive conjunctive contextのfiltered `has_many` または `many_to_many` predicateでは、compilerが `EXISTS` query blockへTiDBの `SEMI_JOIN_REWRITE()` hintを配置します
+
+このhintによりTiDBはfilter済みRelation側をdriving sideとするjoin planを検討できます
+
+unfiltered existence、to-one Relation、`Or` または `Not` 配下のpredicateはhintなしの `EXISTS` を維持します
+
+TiDBの公式仕様は[Optimizer Hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite)を参照してください
+
+compilerは次の条件をmetadataから証明できるTopN shapeをさらに変換します
+
+- builderにtop-level direct `has_many` の `Has` が1個だけあり、他のroot predicateがない
+- positive `Limit` と `OrderBy` が明示され、orderがroot primary key全体と完全に一致する
+- Relation source keyがroot primary key全体である
+- Relation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
+- `SeekAfter` とroot default soft-delete scopeがactiveではない
+
+このshapeではRelation targetをderived query内でfilterしてorderし、そこで `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+
+TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
+
+data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pushdown guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
+
+物理schemaにforeign keyがなくてもRelation mappingはdata integrity contractです
+
+direct Relationが表すtarget keyは既存source rowを参照する必要があります
+
+`go-tidb` はquery実行時にこのconstraintを作成または検査しません
+
+relation-first TopNはこのcontractを前提とするため、orphan target rowがある場合はroot joinより前にpage slotを消費し、結果件数がLimit未満になる可能性があります
+
+workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
+
+compilerは物理indexをofflineでinspectできません
+
+効率的なrelation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
+
+例えば `Equal("GenreID", ...)` と `OrderBy(Desc("ID"))` には `(genre_id, video_id)` が該当します
+
+empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
 
 target modelがsoft-delete fieldを持つ場合、`Has` はactive target rowだけを対象にします
 
@@ -163,7 +253,7 @@ custom non-pointer valueの `driver.Valuer` をNULL判定のために実行し�
 
 ## 明示的な実行
 
-`All`、`First`、`Only`、`Exists`、`Count`は既存executorを明示的に渡した場合だけI/Oを行います
+`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
 
 ```go
 orders, err := query.All(ctx, db)
@@ -177,6 +267,12 @@ exists, err := orm.Query[User]().
 count, err := orm.Query[Order]().
     Where(orm.Equal("UserID", userID)).
     Count(ctx, db)
+plan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    Explain(ctx, db)
+runtimePlan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    ExplainAnalyze(ctx, db)
 ```
 
 `*sql.DB`、`*sql.Conn`、`*sql.Tx` は `orm.QueryExecutor` を実装します
@@ -224,6 +320,26 @@ activeな `SeekAfter` がある場合は `OrderBy` をcursor predicateの定義�
 `Limit` または `Offset` がある場合はderived `SELECT 1` を数え、paginationを結果へ反映します
 
 条件に一致する全row数が必要な場合は `Limit` と `Offset` を指定しません
+
+`Explain` は `Build` が表すroot SELECTへ `EXPLAIN` を実行し、TiDBのdefault row-format operatorを `[]orm.ExplainRow` として返します
+
+`SelectQuery` だけで利用できるため、mutationとcaller-supplied raw SQLはこのpathへ入りません
+
+inline to-one joinはplanへ含みます
+
+collection preload statementはparent keyを必要とするため含みません
+
+field、runtime boundary、TiDB固有の注意事項は[Statement observation](observability_ja.md#select-explain)を参照してください
+
+`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `[]orm.ExplainAnalyzeRow` として返すexplicit opt-in terminalです
+
+queryを変更するとplanも変わるためprotective `LIMIT` を自動追加しません
+
+実行するSELECTのdatabase resourceとRUを消費し、runtime plan収集のoverheadも追加され得ます
+
+typed mutationとcaller-supplied raw SQLはこのpathへ入りません
+
+collection preload statementは引き続き対象外です
 
 driver登録とconnection securityはcallerの責任です
 
@@ -397,7 +513,7 @@ inline to-one Relationだけを含むpreloadは1 statementで実行するため�
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
 
 `IDs` は延期しています
 

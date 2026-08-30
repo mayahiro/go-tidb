@@ -260,12 +260,25 @@ func TestInsertManyExecBoundsGeneratedOnlyRowsWithoutPlaceholders(t *testing.T) 
 		t.Fatalf("Build() error = %v, want multi-statement error", err)
 	}
 	executor := &recordingExecExecutor{result: mutationResult{rowsAffected: 1}}
-	affected, err := query.Exec(context.Background(), executor)
+	var affected int64
+	report, err := Debug(context.Background(), func(ctx context.Context) error {
+		var execErr error
+		affected, execErr = query.Exec(ctx, executor)
+		return execErr
+	})
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	if affected != 2 || executor.calls != 2 {
 		t.Fatalf("affected = %d, execution count = %d, want 2 statements", affected, executor.calls)
+	}
+	if len(report.Statements) != 2 {
+		t.Fatalf("Debug() statements = %#v, want 2", report.Statements)
+	}
+	for index, event := range report.Statements {
+		if event.Operation != StatementInsert || event.ArgumentCount != 0 || !event.RowsAffectedKnown || event.RowsAffected != 1 || event.Error != nil {
+			t.Fatalf("Debug() statement %d = %#v", index, event)
+		}
 	}
 }
 

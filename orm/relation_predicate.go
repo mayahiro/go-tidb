@@ -19,11 +19,13 @@ const (
 	relationJunctionAlias2             = "tidbgo_j2"
 	relationPredicateBaseSQLCapacity   = 96
 	relationManyToManyExtraSQLCapacity = 96
+	relationSemiJoinRewriteHint        = "/*+ SEMI_JOIN_REWRITE() */ "
 )
 
 type relationPredicatePlan struct {
 	sourceName       string
 	relationName     string
+	relationKind     model.RelationKind
 	target           *model.Descriptor
 	sourceColumns    []string
 	targetColumns    []string
@@ -56,6 +58,9 @@ func relationPredicateExtraSQLCapacity(descriptor *model.Descriptor, predicates 
 		childDescriptor := descriptor
 		if current.operator == predicateHasRelation {
 			if relation, ok := descriptor.RelationByName(current.field); ok {
+				if relation.IsCollection() && len(current.children) != 0 {
+					capacity += len(relationSemiJoinRewriteHint)
+				}
 				if relation.Kind() == model.RelationManyToMany {
 					capacity += relationManyToManyExtraSQLCapacity
 				}
@@ -107,6 +112,7 @@ func compileRelationPredicatePlan(source *model.Descriptor, relation model.Relat
 	plan := &relationPredicatePlan{
 		sourceName:    source.Name(),
 		relationName:  relation.GoName(),
+		relationKind:  relation.Kind(),
 		target:        target,
 		sourceColumns: relationFieldColumns(sourceKey),
 		targetColumns: relationFieldColumns(targetKey),
@@ -162,7 +168,11 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 		sourceAlias = c.descriptor.TableName()
 	}
 
-	c.query.WriteString("EXISTS (SELECT 1 FROM ")
+	c.query.WriteString("EXISTS (SELECT ")
+	if relationPredicateUsesSemiJoinRewrite(plan, current, c.negationDepth, c.disjunctionDepth) {
+		c.query.WriteString(relationSemiJoinRewriteHint)
+	}
+	c.query.WriteString("1 FROM ")
 	if plan.junction == nil {
 		writeAliasedRelationTable(c.query, plan.target.TableName(), targetAlias)
 		c.query.WriteString(" WHERE (")
@@ -185,11 +195,13 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 
 	if len(current.children) != 0 {
 		targetCompiler := predicateCompiler{
-			descriptor: plan.target,
-			query:      c.query,
-			arguments:  c.arguments,
-			qualifier:  targetAlias,
-			depth:      depth,
+			descriptor:       plan.target,
+			query:            c.query,
+			arguments:        c.arguments,
+			qualifier:        targetAlias,
+			depth:            depth,
+			negationDepth:    c.negationDepth,
+			disjunctionDepth: c.disjunctionDepth,
 		}
 		for index := range current.children {
 			c.query.WriteString(" AND ")
@@ -201,6 +213,12 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	}
 	c.query.WriteByte(')')
 	return nil
+}
+
+func relationPredicateUsesSemiJoinRewrite(plan *relationPredicatePlan, current predicate, negationDepth, disjunctionDepth int) bool {
+	return negationDepth == 0 && disjunctionDepth == 0 &&
+		len(current.children) != 0 &&
+		(plan.relationKind == model.RelationHasMany || plan.relationKind == model.RelationManyToMany)
 }
 
 func writeRelationRootAlias(query *strings.Builder) {

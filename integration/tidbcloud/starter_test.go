@@ -162,6 +162,19 @@ type starterRelationChild struct {
 	Node       *starterRelationNode `tidbgo:"belongs_to,join=NodeID:ID"`
 }
 
+type starterTopNVideo struct {
+	model.Meta  `tidbgo:"table=tidbgo_it_topn_videos"`
+	ID          int64 `tidbgo:",pk"`
+	Title       string
+	VideoGenres []starterTopNVideoGenre `tidbgo:"has_many,join=ID:VideoID"`
+}
+
+type starterTopNVideoGenre struct {
+	model.Meta `tidbgo:"table=tidbgo_it_topn_video_genres"`
+	VideoID    int64 `tidbgo:",pk"`
+	GenreID    int64 `tidbgo:",pk"`
+}
+
 type starterDecimal struct {
 	text string
 }
@@ -383,6 +396,25 @@ var fixtureTables = []fixtureTable{
 )`,
 		drop: "DROP TABLE tidbgo_it_relation_children",
 	},
+	{
+		name: "tidbgo_it_topn_videos",
+		create: `CREATE TABLE tidbgo_it_topn_videos (
+  id BIGINT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id)
+)`,
+		drop: "DROP TABLE tidbgo_it_topn_videos",
+	},
+	{
+		name: "tidbgo_it_topn_video_genres",
+		create: `CREATE TABLE tidbgo_it_topn_video_genres (
+  video_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (video_id, genre_id),
+  KEY tidbgo_it_topn_video_genres_genre_video (genre_id, video_id)
+)`,
+		drop: "DROP TABLE tidbgo_it_topn_video_genres",
+	},
 }
 
 type fixtureInsert struct {
@@ -555,6 +587,9 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("direct and many-to-many relation predicates", func(t *testing.T) {
 		testRelationPredicates(t, ctx, database, dsn)
 	})
+	t.Run("relation-first TopN compiler", func(t *testing.T) {
+		testRelationFirstTopN(t, ctx, database, dsn)
+	})
 	t.Run("preload in caller transaction", func(t *testing.T) {
 		testTransactionPreload(t, ctx, database, dsn)
 	})
@@ -576,6 +611,130 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("statement observation", func(t *testing.T) {
 		testStatementObservation(t, ctx, database, dsn)
 	})
+	t.Run("debug report", func(t *testing.T) {
+		testDebugReport(t, ctx, database, dsn)
+	})
+	t.Run("same-session ServerRU", func(t *testing.T) {
+		testServerRU(t, ctx, database, dsn)
+	})
+	t.Run("SELECT EXPLAIN", func(t *testing.T) {
+		testSelectExplain(t, ctx, database, dsn)
+	})
+	t.Run("SELECT EXPLAIN ANALYZE", func(t *testing.T) {
+		testSelectExplainAnalyze(t, ctx, database, dsn)
+	})
+}
+
+func testSelectExplain(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	plan, err := orm.Query[starterOrder]().
+		Select("ID", "UserID", "Total").
+		Where(orm.Equal("ID", int64(11))).
+		Explain(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain starter order SELECT", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("SELECT EXPLAIN returned an empty plan")
+	}
+	foundTable := false
+	for index, row := range plan {
+		if row.ID == "" || row.Task == "" || row.EstRows < 0 {
+			t.Fatalf("SELECT EXPLAIN row %d = %#v", index, row)
+		}
+		if strings.Contains(row.AccessObject, "table:tidbgo_it_orders") {
+			foundTable = true
+		}
+	}
+	if !foundTable {
+		t.Fatalf("SELECT EXPLAIN plan does not reference tidbgo_it_orders: %#v", plan)
+	}
+}
+
+func testSelectExplainAnalyze(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	plan, err := orm.Query[starterOrder]().
+		Select("ID", "UserID", "Total").
+		Where(orm.Equal("ID", int64(11))).
+		ExplainAnalyze(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain analyze starter order SELECT", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("SELECT EXPLAIN ANALYZE returned an empty plan")
+	}
+	foundTable := false
+	foundActualRootRow := false
+	foundRU := false
+	for index, row := range plan {
+		if row.ID == "" || row.Task == "" || row.EstRows < 0 || row.ActRows < 0 || row.ExecutionInfo == "" || row.Memory == "" || row.Disk == "" {
+			t.Fatalf("SELECT EXPLAIN ANALYZE row %d = %#v", index, row)
+		}
+		if strings.Contains(row.AccessObject, "table:tidbgo_it_orders") {
+			foundTable = true
+		}
+		if row.Task == "root" && row.ActRows == 1 {
+			foundActualRootRow = true
+		}
+		if strings.Contains(row.ExecutionInfo, "RU:") {
+			foundRU = true
+		}
+	}
+	if !foundTable || !foundActualRootRow || !foundRU {
+		t.Fatalf("SELECT EXPLAIN ANALYZE plan lacks table, actual root row, or RU data: %#v", plan)
+	}
+}
+
+func testServerRU(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "reserve connection for ServerRU", err)
+	}
+	defer func() {
+		if err := connection.Close(); err != nil {
+			t.Errorf("close ServerRU connection: %s", redact.Error(err, dsn))
+		}
+	}()
+
+	if _, err := orm.Query[starterOrder]().
+		Where(orm.Equal("ID", int64(11))).
+		Only(ctx, connection); err != nil {
+		fatalDatabaseError(t, dsn, "execute ServerRU connection query", err)
+	}
+	serverRU, err := orm.LastServerRU(ctx, connection)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "read connection ServerRU", err)
+	}
+	if serverRU <= 0 {
+		t.Fatalf("connection ServerRU = %v, want a positive value", serverRU)
+	}
+
+	transaction, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "begin ServerRU transaction", err)
+	}
+	if _, err := orm.Query[starterOrder]().
+		Where(orm.Equal("ID", int64(12))).
+		Only(ctx, transaction); err != nil {
+		_ = transaction.Rollback()
+		fatalDatabaseError(t, dsn, "execute ServerRU transaction query", err)
+	}
+	transactionRU, err := orm.LastServerRU(ctx, transaction)
+	if err != nil {
+		_ = transaction.Rollback()
+		fatalDatabaseError(t, dsn, "read transaction ServerRU", err)
+	}
+	if transactionRU <= 0 {
+		_ = transaction.Rollback()
+		t.Fatalf("transaction ServerRU = %v, want a positive value", transactionRU)
+	}
+	if err := transaction.Rollback(); err != nil {
+		fatalDatabaseError(t, dsn, "roll back ServerRU transaction", err)
+	}
 }
 
 func testConditionalUpdates(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
@@ -1126,6 +1285,137 @@ func testRelationPredicates(t *testing.T, ctx context.Context, database *sql.DB,
 	}
 }
 
+func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	videos := make([]starterTopNVideo, 100)
+	for index := range videos {
+		id := int64(index + 1)
+		videos[index] = starterTopNVideo{ID: id, Title: fmt.Sprintf("video-%03d", id)}
+	}
+	if affected, err := orm.InsertMany(videos).Exec(ctx, database); err != nil {
+		fatalDatabaseError(t, dsn, "insert relation TopN videos", err)
+	} else if affected != int64(len(videos)) {
+		t.Fatalf("relation TopN video inserts = %d, want %d", affected, len(videos))
+	}
+
+	links := make([]starterTopNVideoGenre, 0, 55)
+	for id := int64(2); id <= 100; id += 2 {
+		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 7})
+	}
+	for id := int64(1); id <= 10; id += 2 {
+		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 8})
+	}
+	if affected, err := orm.InsertMany(links).Exec(ctx, database); err != nil {
+		fatalDatabaseError(t, dsn, "insert relation TopN links", err)
+	} else if affected != int64(len(links)) {
+		t.Fatalf("relation TopN link inserts = %d, want %d", affected, len(links))
+	}
+
+	query := orm.Query[starterTopNVideo]().
+		Select("ID", "Title").
+		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
+	if diagnostics := query.Diagnostics(); len(diagnostics) != 0 {
+		t.Fatalf("relation TopN diagnostics = %#v, want none", diagnostics)
+	}
+	sqlText, _, err := query.Build()
+	if err != nil {
+		t.Fatalf("build relation TopN query: %v", err)
+	}
+	if !strings.Contains(sqlText, "FROM (SELECT `tidbgo_a0`.`video_id`") ||
+		!strings.Contains(sqlText, "LIMIT ?) AS `tidbgo_k0` JOIN `tidbgo_it_topn_videos` AS `tidbgo_t0`") ||
+		strings.Contains(sqlText, "EXISTS") {
+		t.Fatalf("relation TopN SQL = %q, want relation-first derived SELECT", sqlText)
+	}
+
+	selected, err := query.All(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "execute relation-first TopN query", err)
+	}
+	if len(selected) != 20 {
+		t.Fatalf("relation TopN result count = %d, want 20", len(selected))
+	}
+	for index := range selected {
+		wantID := int64(100 - index*2)
+		if selected[index].ID != wantID {
+			t.Fatalf("relation TopN result %d ID = %d, want %d", index, selected[index].ID, wantID)
+		}
+	}
+
+	func() {
+		connection, connectionErr := database.Conn(ctx)
+		if connectionErr != nil {
+			fatalDatabaseError(t, dsn, "reserve relation-filter count connection", connectionErr)
+		}
+		defer func() {
+			if closeErr := connection.Close(); closeErr != nil {
+				t.Errorf("close relation-filter count connection: %s", redact.Error(closeErr, dsn))
+			}
+		}()
+		count, countErr := orm.Query[starterTopNVideo]().
+			Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
+			Count(ctx, connection)
+		if countErr != nil {
+			fatalDatabaseError(t, dsn, "count relation-filtered videos through the semi-join rewrite", countErr)
+		}
+		if count != 50 {
+			t.Fatalf("relation-filtered video count = %d, want 50", count)
+		}
+		warningRows, warningErr := connection.QueryContext(ctx, "SHOW WARNINGS")
+		if warningErr != nil {
+			fatalDatabaseError(t, dsn, "read relation-filter count hint warnings", warningErr)
+		}
+		defer func() {
+			if closeErr := warningRows.Close(); closeErr != nil {
+				t.Errorf("close relation-filter count hint warnings: %s", redact.Error(closeErr, dsn))
+			}
+		}()
+		if warningRows.Next() {
+			var level string
+			var code int
+			var message string
+			if scanErr := warningRows.Scan(&level, &code, &message); scanErr != nil {
+				fatalDatabaseError(t, dsn, "scan relation-filter count hint warning", scanErr)
+			}
+			t.Fatalf("relation-filter count produced optimizer warning level=%s code=%d message=%q", level, code, message)
+		}
+		if rowsErr := warningRows.Err(); rowsErr != nil {
+			fatalDatabaseError(t, dsn, "iterate relation-filter count hint warnings", rowsErr)
+		}
+	}()
+
+	plan, err := query.ExplainAnalyze(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain analyze relation-first TopN query", err)
+	}
+	foundAssociation := false
+	foundIndex := false
+	foundPushedLimit := false
+	foundRU := false
+	for _, row := range plan {
+		if strings.Contains(row.AccessObject, "table:tidbgo_a0") {
+			foundAssociation = true
+		}
+		if strings.Contains(row.AccessObject, "index:tidbgo_it_topn_video_genres_genre_video") {
+			foundIndex = true
+			if row.ActRows != 20 {
+				t.Fatalf("relation TopN association index rows = %d, want 20: %#v", row.ActRows, row)
+			}
+		}
+		if strings.Contains(row.ID, "Limit") && row.Task == "cop[tikv]" && row.ActRows == 20 {
+			foundPushedLimit = true
+		}
+		if strings.Contains(row.ExecutionInfo, "RU:") {
+			foundRU = true
+		}
+	}
+	if !foundAssociation || !foundIndex || !foundPushedLimit || !foundRU {
+		t.Fatalf("relation TopN plan lacks association table, structural index, pushed Limit, or RU data: %#v", plan)
+	}
+}
+
 func relationGraphQuery() *orm.SelectQuery[starterRelationGraph] {
 	return orm.Query[starterRelationGraph]().
 		Select("ID", "NodeAID", "NodeBID", "NodeCID").
@@ -1576,6 +1866,46 @@ func testStatementObservation(t *testing.T, ctx context.Context, database *sql.D
 	}
 	if !errors.Is(events[len(events)-1].Error, sql.ErrNoRows) {
 		t.Fatalf("terminal statement event error = %v, want sql.ErrNoRows", events[len(events)-1].Error)
+	}
+}
+
+func testDebugReport(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	var user starterUser
+	report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+		var queryErr error
+		user, queryErr = orm.Query[starterUser]().
+			Select("ID", "Email").
+			Preload("Orders").
+			Where(orm.Equal("ID", int64(1))).
+			Only(debugContext, database)
+		return queryErr
+	})
+	if err != nil {
+		fatalDatabaseError(t, dsn, "debug a user and orders preload", err)
+	}
+	if user.ID != 1 || len(user.Orders) != 2 {
+		t.Fatalf("debug report result = %#v", user)
+	}
+	if report.StartedAt.IsZero() || report.Duration <= 0 || report.StatementDuration <= 0 || report.Duration < report.StatementDuration {
+		t.Fatalf("debug report timing = %#v", report)
+	}
+	if len(report.Statements) != 2 {
+		t.Fatalf("debug report statement count = %d, want 2: %#v", len(report.Statements), report.Statements)
+	}
+	if !strings.Contains(report.Statements[0].SQL, "FROM `tidbgo_it_users`") || !strings.Contains(report.Statements[1].SQL, "FROM `tidbgo_it_orders`") {
+		t.Fatalf("debug report SQL = %q, %q", report.Statements[0].SQL, report.Statements[1].SQL)
+	}
+	var statementDuration time.Duration
+	for index, event := range report.Statements {
+		statementDuration += event.Duration
+		if event.Operation != orm.StatementSelect || event.ArgumentCount == 0 || event.Arguments != nil || event.Error != nil {
+			t.Fatalf("debug report statement %d = %#v", index, event)
+		}
+	}
+	if report.StatementDuration != statementDuration {
+		t.Fatalf("debug report statement duration = %s, want %s", report.StatementDuration, statementDuration)
 	}
 }
 

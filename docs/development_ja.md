@@ -26,6 +26,7 @@ checkoutから現在のcommandを直接実行します
 
 ```sh
 go run ./cmd/tidbgo version
+go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
 ```
 
 release artifactをbuildする場合はGo linkerでversionを設定します
@@ -38,7 +39,8 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 
 - `model`: application-owned Go structのcached offline metadata
 - `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
-- `check`: 将来のcheckで共有するdiagnostic data type
+- `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
+- `check`: shared diagnostic data type、reason付きreportとsuppression、offline model、query、physical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界
 - `cmd/tidbgo`: CLI entry point
 - `internal`: 非公開のloggingとredaction support
@@ -48,6 +50,21 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 `integration` moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependencyを所有し、local module replacementで現在のroot checkoutを使用します
 
 root moduleとその利用者へtest dependencyは伝播しません
+
+## Schema compatibility client benchmark
+
+CREATE TABLE parseとparse済みcatalogに対する1 model compatibility checkを計測します
+
+```sh
+go test ./schema -run '^$' -bench '^BenchmarkParse$' -benchmem -count=5
+go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
+```
+
+どちらのbenchmarkもofflineで動作し、SQL実行、connection open、actual RU消費を行いません
+
+`BenchmarkParse` はlexical analysisとcatalog constructionを含みます
+
+`BenchmarkSchema` はparse済みcatalogとcached model metadataを再利用します
 
 ## TiDB Cloud Starter integration test
 
@@ -84,13 +101,55 @@ driverの[`interpolateParams` documentation](https://github.com/go-sql-driver/my
 
 suiteはconnection poolを1 connectionに制限します
 
-scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollbackを確認します
+scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTをまとめるoperation debug reportを確認します
 
 固定された18個の `tidbgo_it_*` tableを作成し、現在のrunが作成したtableだけを削除します
 
 既存fixture tableを検出した場合は削除せず失敗します
 
 同じdatabaseに対する複数suiteを同時実行しません
+
+## Debug report client benchmark
+
+完了した2 statement eventをまとめるclient-side costを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
+```
+
+local mutation executorを使い、MySQL driver、network call、TiDB execution、actual RU consumptionは含みません
+
+## EXPLAIN client benchmark
+
+1個のtyped SELECTをcompileし、3 operatorのTiDB row-format planをscanするclient-side costを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplain$' -benchmem -count=5
+```
+
+local `database/sql` test driverを使い、MySQL driver、network round trip、TiDB optimization、actual RU consumptionは含みません
+
+## EXPLAIN ANALYZE client benchmark
+
+1個のtyped SELECTをcompileし、3 operatorのTiDB runtime planをscanするclient-side costを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+```
+
+local `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
+
+## ServerRU client benchmark
+
+1個のServerRU valueを取得してdecodeするclient-side costを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
+```
+
+local `database/sql` test driverを使い、`database/sql` row pathとJSON decodeを含みます
+
+MySQL driver、network round trip、TiDB execution、actual RU consumptionは含みません
 
 ## Driver transport benchmark
 

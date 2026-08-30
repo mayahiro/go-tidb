@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/mayahiro/go-tidb/orm"
 )
 
 type queryMetricExecutor struct {
@@ -53,7 +55,7 @@ func (executor *queryMetricExecutor) finishRU(ctx context.Context) error {
 }
 
 func (executor *queryMetricExecutor) collectPendingRU(ctx context.Context) error {
-	ru, err := lastStatementRU(ctx, executor.connection)
+	ru, err := orm.LastServerRU(ctx, executor.connection)
 	if err != nil {
 		return fmt.Errorf("read statement RU: %w", err)
 	}

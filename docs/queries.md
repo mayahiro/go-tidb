@@ -35,12 +35,60 @@ field in struct declaration order. It never uses `SELECT *`. `Select` accepts
 Go field names, not physical column names, and preserves the requested scan
 order. Computed fields are available only through aliased `Raw[T]` results.
 
+## Check a query shape offline
+
+Call `Diagnostics` on the same builder to apply static query-shape checks:
+
+```go
+diagnostics := query.Diagnostics()
+```
+
+`Diagnostics` applies the same validation as `Build`, performs no database
+I/O, and does not execute custom `driver.Valuer` implementations. Diagnostics
+never include predicate or cursor values.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `QRY001` | error | Model metadata or the SELECT builder is invalid |
+| `QRY002` | warning | A positive OFFSET skips rows and its cost grows as the offset grows |
+| `QRY003` | warning | An explicit positive LIMIT has no ORDER BY |
+| `QRY004` | warning | `Contains` or `HasSuffix` builds a LIKE pattern with a leading wildcard |
+| `QRY005` | warning | An ordered, limited collection `Has` must use the `EXISTS` fallback |
+
+`QRY001` is not suppressible because the query cannot compile. The other
+diagnostics describe valid query shapes and set `Suppressible` to true. TiDB's
+[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
+recommends ordering paginated results and notes the increasing compute cost of
+larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
+Reasoned report and suppression behavior is documented in the [offline
+diagnostic report guide](checks.md).
+
+`Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
+matching behavior is defined by TiDB's
+[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like).
+The static check does not claim a specific physical plan because indexes,
+statistics, collation, and optimizer behavior are connected concerns. Use
+`Explain` or `ExplainAnalyze` to verify the actual access path.
+
+The same builder can be used with `All`, `First`, `Only`, `Exists`, `Count`, or
+plan terminals, so this method checks only state explicitly stored on the
+builder. It does not report terminal-implied limits or an unbounded `All` call.
+Raw SQL is outside the typed query AST and is not inspected.
+
+`QRY005` reports the metadata-only reason that relation-first TopN could not be
+applied, such as an unproven one-row-per-root condition, a different root
+order, a root predicate or active root soft-delete scope, a logical group,
+multiple collection predicates, `SeekAfter`, or `many_to_many`. It never
+includes target predicate values. The fallback remains a valid relation
+existence query; use `Explain` or `ExplainAnalyze` to decide whether its actual
+plan is acceptable.
+
 ## Soft-delete scope
 
 A model with one field tagged `tidbgo:",soft_delete"` receives
 `deleted_at IS NULL` automatically in `Build`, `All`, `First`, `Only`,
-`Exists`, and `Count`. Use `WithDeleted` only when both active and logically
-deleted root rows are required:
+`Exists`, `Count`, `Explain`, and `ExplainAnalyze`. Use `WithDeleted` only when
+both active and logically deleted root rows are required:
 
 ```go
 allVideos, err := orm.Query[Video]().
@@ -103,10 +151,54 @@ The relation name and every target field name are exported Go field names. Use
 `Has("Orders")` without target predicates for an existence-only condition.
 Logical predicates and nested `Has` conditions are valid in the target scope.
 
-Direct `belongs_to`, `has_one`, and `has_many` relations compile to a
-correlated target-table `EXISTS`. Pure `many_to_many` relations compile to a
-correlated junction-to-target `EXISTS`. Every declared component of a
-composite direct or junction mapping participates in the correlation.
+`Has` is a logical relation-existence predicate rather than a fixed SQL
+template. Direct relations normally compile to a correlated target-table
+`EXISTS`, while pure `many_to_many` relations normally compile to a correlated
+junction-to-target `EXISTS`. Every declared component of a composite direct or
+junction mapping participates in the correlation.
+
+For a filtered `has_many` or `many_to_many` predicate in a positive
+conjunctive context, the compiler places TiDB's `SEMI_JOIN_REWRITE()` hint in
+the `EXISTS` query block. The hint lets TiDB consider a join plan with the
+filtered relation side as the driving side. Unfiltered existence, to-one
+relations, and predicates below `Or` or `Not` retain an unhinted `EXISTS`.
+TiDB documents the hint in [Optimizer
+Hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite).
+
+The compiler goes further for this metadata-proven TopN shape:
+
+- The builder has one top-level direct `has_many` `Has` and no other root
+  predicate
+- A positive `Limit` and `OrderBy` are explicit, with the order exactly equal
+  to the complete root primary key
+- The relation source key is the complete root primary key
+- The relation target primary key is fully covered by the target key plus
+  conjunctive `Equal` predicates, proving at most one matching target row per
+  root
+- `SeekAfter` and the root default soft-delete scope are not active
+
+For that shape, the compiler filters and orders the relation target in a
+derived query, applies `LIMIT` there, then joins only those keys to the root
+table and inline to-one preloads. This is designed to let TiDB push Limit to an
+ordered association index before root lookups. TiDB's [TopN and Limit pushdown
+guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/) explains why
+placing these operators close to the data source reduces work.
+
+Relation mappings are a data-integrity contract even when the physical schema
+does not declare a foreign key: every target key represented by a direct
+relation must reference an existing source row. `go-tidb` does not create or
+check that constraint during a query. Relation-first TopN relies on this
+contract; orphan target rows can otherwise consume a page slot before the root
+join and underfill the result. Enforce the invariant with schema constraints
+or application writes as appropriate for the workload.
+
+The compiler cannot inspect physical indexes offline. For efficient
+relation-first TopN, an index normally needs equality-filter columns followed
+by the relation target key in root-order sequence, such as
+`(genre_id, video_id)` for `Equal("GenreID", ...)` plus
+`OrderBy(Desc("ID"))`. Confirm the actual ordered range scan, pushed Limit,
+and RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
+
 When the target model has a soft-delete field, `Has` considers active target
 rows only. Use `Raw[T]` when an existence condition must explicitly inspect
 deleted targets.
@@ -150,8 +242,8 @@ representation when NULL must be expressed.
 
 ## Execute explicitly
 
-`All`, `First`, `Only`, `Exists`, and `Count` perform I/O only when an existing
-executor is passed explicitly:
+`All`, `First`, `Only`, `Exists`, `Count`, `Explain`, and `ExplainAnalyze`
+perform I/O only when an existing executor is passed explicitly:
 
 ```go
 orders, err := query.All(ctx, db)
@@ -165,6 +257,12 @@ exists, err := orm.Query[User]().
 count, err := orm.Query[Order]().
     Where(orm.Equal("UserID", userID)).
     Count(ctx, db)
+plan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    Explain(ctx, db)
+runtimePlan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    ExplainAnalyze(ctx, db)
 ```
 
 `*sql.DB`, `*sql.Conn`, and `*sql.Tx` implement `orm.QueryExecutor`. Terminals
@@ -199,6 +297,22 @@ cursor predicate. Without `Limit` or `Offset`, `Count` uses a direct
 `COUNT(*)`. With `Limit` or `Offset`, it counts a derived `SELECT 1` so the
 pagination remains part of the result. Omit `Limit` and `Offset` when the total
 number of matching rows is required.
+
+`Explain` executes `EXPLAIN` for the root SELECT represented by `Build` and
+returns TiDB's default row-format operators as `[]orm.ExplainRow`. It is
+available only on `SelectQuery`, so mutations and caller-supplied raw SQL cannot
+enter this path. Inline to-one joins are part of the plan. Collection preload
+statements require parent keys and are not included. See [Statement
+observation](observability.md#select-explain) for the fields, runtime boundary,
+and TiDB-specific caveats.
+
+`ExplainAnalyze` is the explicit opt-in terminal that executes the complete
+root SELECT and returns TiDB's runtime plan as `[]orm.ExplainAnalyzeRow`. It
+does not add a protective `LIMIT`, because changing the query would change the
+measured plan. It consumes the executed SELECT's database resources and RU,
+and runtime-plan collection can add overhead. Typed mutations and
+caller-supplied raw SQL cannot enter this path. Collection preload statements
+remain excluded.
 
 The caller remains responsible for driver registration and connection
 security. `go-tidb` does not currently include a MySQL protocol driver or a
@@ -359,8 +473,8 @@ executes as one statement and does not need a cross-statement snapshot.
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, direct and pure many-to-many relation predicates, and nested direct or
-pure many-to-many preloads with target projection, collection ordering, and
-per-path soft-delete scope.
+`Count`, `Explain`, `ExplainAnalyze`, direct and pure many-to-many relation
+predicates, and nested direct or pure many-to-many preloads with target
+projection, collection ordering, and per-path soft-delete scope.
 `IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and
 other SQL outside the scalar builder surface.

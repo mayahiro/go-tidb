@@ -7,12 +7,14 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
-[Statement observation](docs/observability.md) | [Development](docs/development.md)
+[Offline checks](docs/checks.md) | [Statement observation](docs/observability.md) |
+[Development](docs/development.md)
 
 ## Available features
 
 - Application-owned Go structs without generated models
-- Offline model validation and SQL construction
+- Offline model validation, model-intent diagnostics, and SQL construction
+- Reasoned diagnostic suppression and deterministic text or JSON CLI reports
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -21,6 +23,10 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
+- Operation-scoped debug reports for multi-statement ORM calls
+- SELECT-only TiDB execution-plan inspection through the typed query builder
+- Explicit SELECT execution with actual TiDB runtime-plan inspection
+- Explicit same-session ServerRU reading for one completed DML statement
 
 ## Supported scope
 
@@ -92,6 +98,19 @@ Inspect and validate the mapping offline when tooling or tests need metadata:
 metadata, err := model.Describe[User]()
 ```
 
+Run intent-oriented checks separately when an application wants diagnostics
+for valid but potentially unintended declarations:
+
+```go
+diagnostics := check.Model[User]()
+```
+
+The check performs no database access and reports stable `MOD001` through
+`MOD007` codes for invalid metadata, ignored tags, likely tag-position
+mistakes, missing primary-key capability, and one-way custom scalar types.
+Applications explicitly list the model types they own; no generated registry
+or source scan is required.
+
 Unexported fields and fields tagged with `tidbgo:"-"` are ignored. Scalar tag
 values put an optional column name first and options after it. Without an
 explicit name, fields use deterministic snake_case columns. Primary keys use
@@ -121,6 +140,38 @@ track separate loaded-state metadata.
 See the [struct model guide](docs/models.md) and the runnable
 [starter app example](examples/starter-app/README.md).
 
+## Offline schema compatibility
+
+Parse a self-contained TiDB `CREATE TABLE` snapshot once and check each
+application model against it:
+
+```go
+catalog, err := schema.Parse(schemaSQL)
+if err != nil {
+	return err
+}
+
+diagnostics := check.Schema[User](catalog)
+```
+
+Both operations are offline and execute no SQL. The comparison is directional:
+every mapped, non-computed model field must have a compatible physical column,
+while database-only columns are accepted when they are nullable, defaulted, or
+generated. A required database-only column is a warning because it can make
+model inserts fail. The check also covers ordered primary keys, `AUTO_RANDOM`,
+native Go and SQL type families, nullability, writable generated columns, and
+physical Relation targets. Collection checks validate many-to-many junction
+keys and required columns, target identity, and the index prefixes used by
+deterministic `has_many` and `many_to_many` lookups through stable `CMP001`
+through `CMP014` codes. A model with relations therefore requires those target
+and junction tables in the supplied snapshot.
+
+`schema.Parse` accepts ordinary TiDB `CREATE TABLE` SQL and `SHOW CREATE TABLE`
+output, including TiDB executable comments. It ignores schema-dump wrapper
+statements such as `SET` and `DROP TABLE`, but does not replay `ALTER TABLE`
+history, require foreign keys, recommend general query indexes, or inspect a
+live database. See the [schema compatibility guide](docs/schema-checks.md).
+
 ## Struct-first scalar queries
 
 Build validated SQL and bind arguments offline using exported Go field names:
@@ -134,11 +185,18 @@ query := orm.Query[Order]().
     Limit(100)
 
 sqlText, arguments, err := query.Build()
+diagnostics := query.Diagnostics()
 ```
 
 `Build` does not access a database or execute custom `driver.Valuer`
 implementations. Values remain separate bind arguments, and physical
 identifiers come only from validated model metadata.
+
+`Diagnostics` is also offline. It converts build failures to `QRY001` and
+reports valid OFFSET pagination, unordered explicit pagination,
+leading-wildcard predicates, and relation-filtered TopN shapes that cannot use
+the relation-first compiler as `QRY002` through `QRY005` without including bind
+values.
 
 Execute the same query only when an existing executor is passed explicitly:
 
@@ -166,10 +224,17 @@ admins, err := orm.Query[User]().
     All(ctx, db)
 ```
 
-`Has` compiles direct and pure many-to-many relation conditions to correlated
-`EXISTS` subqueries. Pass target predicates to require a matching related row,
-or omit them for existence only. Relation and target field names are exported
-Go field names. `Build` validates and compiles them entirely offline.
+`Has` is a logical relation-existence predicate. The compiler normally emits
+`EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
+predicates in a positive conjunctive context. For a narrow, metadata-proven
+`has_many` + root-primary-key order + positive-limit shape, it instead applies
+the target filter and Limit before loading root rows. `QRY005` explains why an
+ordered, limited collection filter falls back to `EXISTS`. Pass target
+predicates to require a matching related row, or omit them for existence only.
+Relation and target field names are exported Go field names. `Build` validates
+and compiles them entirely offline. See the [scalar query
+guide](docs/queries.md#relation-predicates) for the exact rewrite conditions,
+relation-integrity contract, and index guidance.
 
 Preload a direct or pure many-to-many relation by its exported Go field name:
 
@@ -308,9 +373,110 @@ text. See the [statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
 
+Capture the root and relation statements from one ORM operation without adding
+database calls:
+
+```go
+var users []User
+report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+    var queryErr error
+    users, queryErr = orm.Query[User]().
+        Preload("Orders").
+        All(debugContext, db)
+    return queryErr
+})
+```
+
+`report.Statements` contains completed events and `report.StatementDuration`
+contains their cumulative duration. `report.Duration` measures the complete
+callback. Bind values remain excluded unless `IncludeStatementArguments` is
+passed to `Debug`. The wrapper performs no `EXPLAIN`, ServerRU read, or other
+database I/O.
+
+## TiDB diagnostics
+
+Inspect the plan for a typed SELECT without executing its root query:
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+`Explain` returns TiDB's default five-column row format as
+`[]orm.ExplainRow`. It accepts neither mutation nor raw SQL, adds one database
+round trip, and describes only the root SELECT, including inline to-one joins.
+Collection preload statements are not included. TiDB can evaluate certain
+subqueries while optimizing an `EXPLAIN`. See the [statement observation
+guide](docs/observability.md#select-explain) for the complete boundary.
+
+Run the typed SELECT and collect actual operator data only when explicitly
+requested:
+
+```go
+runtimePlan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    ExplainAnalyze(ctx, db)
+```
+
+`ExplainAnalyze` returns actual rows, execution information, memory, and disk
+usage as `[]orm.ExplainAnalyzeRow`. It executes the complete root SELECT without
+adding a limit and consumes database resources and RU. Mutation, raw SQL, and
+collection preload statements remain outside this path. See the [runtime-plan
+boundary](docs/observability.md#explain-analyze) before enabling it in an
+application.
+
+Read TiDB's ServerRU for one completed DML statement from the same pinned
+session:
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+`LastServerRU` accepts only `*sql.Conn` or an active `*sql.Tx`; `*sql.DB` is
+excluded because a second call can use another pooled connection. It adds one
+round trip and reports only the last DML statement recorded on the session, so
+a preload or split bulk operation is not aggregated. ServerRU is a diagnostic
+value reported by TiDB and is not billed RU. See the [statement observation
+guide](docs/observability.md#serverru) for the complete boundary.
+
 ## CLI
 
-The `tidbgo` CLI currently exposes version information only:
+Report an application-owned JSON diagnostic array from standard input or one
+explicit file:
+
+```sh
+go run ./examples/starter-app/cmd/check | tidbgo check
+tidbgo check diagnostics.json --json
+```
+
+Active errors return status `1`; warnings and info do not fail the command.
+Suppressions require an exact code and reason, remain visible in the report,
+and reject non-suppressible or unused entries:
+
+```sh
+go run ./examples/starter-app/cmd/check | \
+  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
+```
+
+The application check command explicitly selects model types, query builders,
+and schema snapshots. `tidbgo check` performs no source scan, code generation,
+configuration discovery, or database access. See the [offline diagnostic
+report guide](docs/checks.md)
+
+Print version information with:
 
 ```sh
 tidbgo version
@@ -327,6 +493,8 @@ build time.
 - Typed builders keep values separate from SQL text as bind arguments
 - Model-derived identifiers are validated before being written into SQL
 - The built-in statement logger excludes argument values by default
+- Debug reports exclude argument values by default but retain SQL templates and
+  errors
 - Enabling `IncludeStatementArguments` can expose credentials, tokens, or
   personal data and must be limited to controlled debugging
 - Raw SQL is trusted application code and receives none of the typed builder's
@@ -337,16 +505,19 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 ## Known limitations
 
 - The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
-  `Exists`, and `Count`; `IDs` is not implemented yet.
+  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
+  yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
+  Filtered positive collection predicates use TiDB's semi-join rewrite hint,
+  and eligible ordered direct `has_many` pages use relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
-- No database connection constructor, bundled protocol driver, or migration
-  API is available yet.
+- No database connection constructor, bundled protocol driver, migration
+  application API, or live-schema introspection API is available yet.
 
 ## License
 

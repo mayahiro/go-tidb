@@ -145,6 +145,15 @@ order.User = &user
 
 `go-tidb` does not add loaded-state bookkeeping to model fields. Code that
 executes a query remains responsible for knowing which relations it requested.
+
+A direct relation mapping is also a data-integrity contract. Every non-NULL
+foreign-key or target-key value represented by the mapping must reference an
+existing row on the other side. `go-tidb` does not create, inspect, or enforce
+physical foreign keys at runtime. Preloads and relation predicates naturally
+ignore unreachable rows, and the relation-first TopN query optimization can
+apply Limit before the root join, so orphan target rows can underfill a page.
+Use physical constraints or application write rules to maintain the contract.
+
 Relation fields do not perform I/O or lazy loading, and assigning a field does
 not persist a relation.
 
@@ -178,6 +187,49 @@ for _, relation := range metadata.Relations() {
 descriptor. Inspection does not invoke methods on `User`, read environment
 credentials, or perform network I/O.
 
+## Check model intent
+
+`model.Describe` rejects metadata that cannot be executed safely. The separate
+`check` package also reports valid declarations that may not match application
+intent:
+
+```go
+diagnostics := check.Model[User]()
+```
+
+`check.ModelType` accepts a runtime `reflect.Type` when a caller already has
+one. Both APIs are deterministic, execute no user methods, read no
+configuration, and perform no database I/O. Applications explicitly list
+their model types; this check does not require source scanning or a generated
+registry.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `MOD001` | error | The model type or executable metadata is invalid |
+| `MOD002` | warning | An exported field has a `db` tag that go-tidb ignores |
+| `MOD003` | warning | An unexported field has unused `tidbgo` metadata |
+| `MOD004` | warning | The column position resembles a known option or a one-edit typo of one |
+| `MOD005` | info | The model has no primary key and cannot use primary-key update or delete |
+| `MOD006` | warning | A custom field can scan but cannot be bound as a database argument |
+| `MOD007` | warning | A custom field can be bound but cannot be scanned |
+
+`MOD001` is not suppressible because the runtime cannot compile the model.
+The other diagnostics describe valid or ignored declarations and set
+`Suppressible` to true. Apply reason-carrying suppressions through
+`check.NewReport` or `tidbgo check`; see the [offline diagnostic report
+guide](checks.md).
+
+`MOD004` never changes mapping behavior. The first tag value remains a column
+name. The rule warns only when that value differs from the inferred column and
+is at most one edit from a known option such as `pk`, so an explicit
+default-equal column remains quiet. A physical column with the warned name is
+still valid.
+
+Physical column types, indexes, and constraints are outside this model-intent
+check. Parse a TiDB `CREATE TABLE` snapshot with `schema.Parse` and pass its
+catalog to `check.Schema` when those facts should be compared offline. See the
+[schema compatibility guide](schema-checks.md).
+
 ## Supported scalar representations
 
 The current slice recognizes:
@@ -197,10 +249,12 @@ and does not import a decimal package for user-owned models.
 
 ## Current boundary
 
-This slice does not yet describe SQL column types, indexes, or physical
-constraints. The query runtime can compile SELECT and mutation statements
-offline and execute them through an explicitly supplied `database/sql`
-executor. `belongs_to` and `has_one` preloads use deterministic inline
+Model metadata intentionally does not duplicate SQL column types, indexes, or
+physical constraints. The separate `schema` and `check` packages can compare
+those facts from a SQL snapshot without changing the model. The query runtime
+can compile SELECT and mutation statements offline and execute them through an
+explicitly supplied `database/sql` executor. `belongs_to` and `has_one`
+preloads use deterministic inline
 `LEFT JOIN`s, while `has_many` and pure `many_to_many` preloads use
 deterministic secondary queries. They populate ordinary relation fields and
 support dot-separated nested paths, target projection, and collection

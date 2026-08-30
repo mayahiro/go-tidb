@@ -121,7 +121,11 @@ func queryRows(ctx context.Context, executor QueryExecutor, compiled compiledSel
 }
 
 func queryTextRows(ctx context.Context, executor QueryExecutor, modelName, query string, arguments []any) (queryResultRows, error) {
-	observation := beginStatementObservation(ctx, StatementSelect, query, arguments)
+	return queryTextRowsOperation(ctx, executor, StatementSelect, modelName, query, arguments)
+}
+
+func queryTextRowsOperation(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any) (queryResultRows, error) {
+	observation := beginStatementObservation(ctx, operation, query, arguments)
 	rows, err := executor.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: query %s rows: %w", modelName, err)

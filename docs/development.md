@@ -27,6 +27,7 @@ Run the current command directly from the checkout:
 
 ```sh
 go run ./cmd/tidbgo version
+go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
 ```
 
 Set a release version through the Go linker when building a release artifact:
@@ -40,7 +41,9 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `model`: cached offline metadata for application-owned Go structs
 - `orm`: offline query and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
-- `check`: shared diagnostic data types for future checks
+- `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
+- `check`: shared diagnostic data types, reasoned reports and suppression, and
+  offline model, query, and physical schema checks
 - `migrate`: reserved boundary for standalone migration tooling
 - `cmd/tidbgo`: CLI entry point
 - `internal`: non-public logging and redaction support
@@ -51,6 +54,20 @@ The `integration` module owns the
 [`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependency and
 uses the current root checkout through a local module replacement. The root
 module and its users do not inherit that test dependency
+
+## Schema compatibility client benchmarks
+
+Measure CREATE TABLE parsing and one pre-parsed model compatibility check:
+
+```sh
+go test ./schema -run '^$' -bench '^BenchmarkParse$' -benchmem -count=5
+go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
+```
+
+Both benchmarks are offline. They execute no SQL, open no connection, and
+consume no actual RU. `BenchmarkParse` includes lexical and catalog
+construction work. `BenchmarkSchema` reuses a parsed catalog and cached model
+metadata.
 
 ## TiDB Cloud Starter integration tests
 
@@ -83,12 +100,60 @@ for this suite. See the driver's
 The suite limits the connection pool to one connection. It covers scalar
 terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
-`AUTO_RANDOM`, typed raw SQL, soft deletion, restore, and
-transaction commit and rollback paths
+`AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
+rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
+ServerRU reads, plus operation debug reports spanning root and preload SELECTs
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
+
+## Debug report client benchmark
+
+Measure the client-side cost of grouping two completed statement events:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
+```
+
+This benchmark uses a local mutation executor. It excludes the MySQL driver,
+network calls, TiDB execution, and actual RU consumption
+
+## EXPLAIN client benchmark
+
+Measure the client-side cost of compiling one typed SELECT and scanning a
+three-operator TiDB row-format plan:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplain$' -benchmem -count=5
+```
+
+This benchmark uses a local `database/sql` test driver. It excludes the MySQL
+driver, network round trip, TiDB optimization, and actual RU consumption
+
+## EXPLAIN ANALYZE client benchmark
+
+Measure the client-side cost of compiling one typed SELECT and scanning a
+three-operator TiDB runtime plan:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+```
+
+This benchmark uses a local `database/sql` test driver. It measures neither
+the SELECT execution nor TiDB runtime cost and consumes no actual RU
+
+## ServerRU client benchmark
+
+Measure the client-side cost of reading and decoding one ServerRU value:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
+```
+
+This benchmark uses a local `database/sql` test driver. It includes the
+`database/sql` row path and JSON decoding but excludes the MySQL driver,
+network round trip, TiDB execution, and actual RU consumption
 
 ## Driver transport benchmark
 

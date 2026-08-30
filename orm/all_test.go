@@ -54,7 +54,17 @@ func (*allTestConn) Close() error {
 }
 
 func (*allTestConn) Begin() (driver.Tx, error) {
-	return nil, driver.ErrSkip
+	return allTestTx{}, nil
+}
+
+type allTestTx struct{}
+
+func (allTestTx) Commit() error {
+	return nil
+}
+
+func (allTestTx) Rollback() error {
+	return nil
 }
 
 func (c *allTestConn) QueryContext(_ context.Context, query string, arguments []driver.NamedValue) (driver.Rows, error) {

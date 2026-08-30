@@ -93,6 +93,9 @@ func inlinePreloadPlans(plans []*preloadPlan) []*preloadPlan {
 	if count == 0 {
 		return nil
 	}
+	if count == len(plans) {
+		return plans
+	}
 	result := make([]*preloadPlan, 0, count)
 	for _, plan := range plans {
 		if plan.inline {

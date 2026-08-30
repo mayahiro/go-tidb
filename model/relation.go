@@ -17,6 +17,10 @@ const (
 )
 
 // Relation is immutable metadata for one mapped relation field.
+//
+// A direct mapping is also a data-integrity contract: mapped non-NULL key
+// values identify an existing row on the other side. go-tidb does not enforce
+// a physical foreign key, but query optimizations may rely on this invariant.
 type Relation struct {
 	goName     string
 	kind       RelationKind

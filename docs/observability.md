@@ -75,9 +75,9 @@ ctx = orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
 `StatementEvent` retains the SQL template and argument count. `Arguments` is nil
 by default and contains a shallow slice snapshot only when
 `IncludeStatementArguments` is enabled. A mutation sets `RowsAffectedKnown`
-only after `sql.Result.RowsAffected` succeeds. A SELECT duration covers
-`QueryContext`, row scanning, iteration, and row closing. Terminal errors such
-as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
+only after `sql.Result.RowsAffected` succeeds. A SELECT or EXPLAIN duration
+covers `QueryContext`, row scanning, iteration, and row closing. Terminal errors
+such as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
 
 Observers run synchronously after the duration is captured. Custom observers
 should return quickly, be concurrency-safe when contexts are shared, and not
@@ -85,12 +85,169 @@ panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited observer.
 
+## Operation debug reports
+
+Use `Debug` to group every statement completed by one application operation:
+
+```go
+var users []User
+report, err := orm.Debug(ctx, func(debugContext context.Context) error {
+    var queryErr error
+    users, queryErr = orm.Query[User]().
+        Preload("Orders").
+        All(debugContext, db)
+    return queryErr
+})
+```
+
+The callback must execute the operation with `debugContext`. `Statements` is a
+non-nil slice in observer delivery order and includes root queries, collection
+preloads, automatically split bulk mutations, raw statements, and transaction
+lifecycle events when those paths use that context. Each entry is the same
+`StatementEvent` shape used by custom observers.
+
+`Duration` measures the complete callback including observer work.
+`StatementDuration` is the sum of captured event durations and can exceed the
+callback duration when statements execute concurrently. The callback must wait
+for any goroutines that use `debugContext`; events completed after it returns
+are outside the report. A callback error is returned unchanged with the report
+of statements that already completed.
+
+`Debug` only collects existing events. It adds no database calls, `EXPLAIN`,
+ServerRU reads, or implicit transaction. An observer already present on `ctx`
+continues to receive the events. Bind arguments are excluded from the report by
+default and can be enabled independently with `IncludeStatementArguments`:
+
+```go
+report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
+```
+
+Argument values can contain secrets, personal data, or large payloads. The
+report stores SQL templates and errors even in the default mode, so apply the
+same output and retention controls as statement logging.
+
+## SELECT EXPLAIN
+
+Call `Explain` on a typed `SelectQuery` to inspect the plan chosen by TiDB:
+
+```go
+plan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    Explain(ctx, db)
+```
+
+The result is a non-nil `[]orm.ExplainRow` in TiDB's default row format. Each
+row contains `ID`, `EstRows`, `Task`, `AccessObject`, and `OperatorInfo`, which
+map directly to the five columns documented by TiDB. `EstRows` is an optimizer
+estimate, not an observed row count. Unexpected estimates or access paths can
+indicate stale table statistics.
+
+`Explain` is available only on `SelectQuery`. It cannot receive a mutation or
+caller-supplied raw SQL, and it preserves the typed SELECT's bind arguments.
+The plan covers the root SQL returned by `Build`, including inline to-one
+joins. Collection preload statements depend on parent keys returned at runtime
+and are not included.
+
+The call adds one database round trip. TiDB normally returns the plan without
+executing the root SELECT, although TiDB documents that certain subqueries can
+be evaluated during optimization. This is not `EXPLAIN ANALYZE` and contains
+no actual row counts, execution timing, memory, or disk measurements.
+
+An observed call emits one `StatementEvent` with `Operation` set to
+`StatementExplain` after all plan rows are scanned and closed. The built-in
+logger renders `EXPLAIN` in bright cyan on a supported interactive terminal.
+Bind values remain excluded unless `IncludeStatementArguments` is enabled.
+See TiDB's [EXPLAIN statement
+reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain/) and
+[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/).
+
+### EXPLAIN ANALYZE
+
+Call `ExplainAnalyze` only when the typed SELECT should actually run:
+
+```go
+runtimePlan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    ExplainAnalyze(ctx, db)
+```
+
+The explicit method call is the opt-in. It executes the complete root SELECT
+without adding a protective limit, then returns a non-nil
+`[]orm.ExplainAnalyzeRow`. The result maps TiDB's nine default columns to
+`ID`, `EstRows`, `ActRows`, `Task`, `AccessObject`, `ExecutionInfo`,
+`OperatorInfo`, `Memory`, and `Disk`. It returns the runtime plan rather than
+hydrating application models.
+
+`ExplainAnalyze` has the same typed boundary as `Explain`: mutation builders
+and caller-supplied raw SQL cannot enter it, inline to-one joins are part of the
+root SELECT, and collection preload statements are excluded. It executes the
+SELECT and consumes its database resources; collecting the runtime plan can
+add overhead. Use the caller context for cancellation or a deadline, and do
+not run it automatically on production traffic. Adding `Limit` is an
+application decision because it changes the measured query and plan.
+
+TiDB includes the RU consumed by this execution in the top-level
+`ExecutionInfo`. `go-tidb` preserves that server text without parsing its
+format. RU and timing can vary between runs because of caches and service
+conditions.
+
+An observed call emits `StatementExplainAnalyze` after the SELECT executes and
+all plan rows are scanned and closed. The built-in logger renders
+`EXPLAIN ANALYZE` in bright yellow on a supported interactive terminal. Bind
+values remain opt-in. See TiDB's [EXPLAIN ANALYZE statement
+reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
+
+## ServerRU
+
+`LastServerRU` reads the `ru_consumption` reported by TiDB for the last DML
+statement recorded on the same session:
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().
+    Where(orm.Equal("Active", true)).
+    All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+The `ServerRUSession` constraint accepts only a pinned `*sql.Conn` or an active
+`*sql.Tx`. A pooled `*sql.DB` is excluded at compile time because the metric is
+a session variable and a follow-up query can use another connection. ORM query
+terminals consume and close their rows before returning. When the measured SQL
+is executed outside an ORM terminal, close all rows before reading the metric.
+
+Each read executes `SELECT @@tidb_last_query_info` and therefore adds one
+database round trip. It is a diagnostic read and does not emit a
+`StatementEvent`. Call it immediately after the target DML statement. For an
+operation with preloads, automatically split bulk writes, or any other
+multi-statement path, it reports only the last DML statement and does not
+aggregate the operation.
+
+ServerRU is the statement value reported by TiDB. It is not billed RU and can
+vary between executions because of caches and service conditions. A missing,
+null, malformed, negative, or otherwise invalid `ru_consumption` is returned as
+an error. See TiDB's [`tidb_last_query_info` system variable
+reference](https://docs.pingcap.com/tidb/stable/system-variables/#tidb_last_query_info)
+and the [TiDB Cloud Starter RU
+FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter#how-can-i-estimate-the-number-of-rus-required-by-my-workloads-and-plan-my-monthly-budget).
+
 ## Covered operations
 
-Typed and raw SELECTs, preloads, typed mutations, automatically split bulk
-mutations, relation mutations, and `RawExec` are observed. Typed upserts use the
-logical `UPSERT` operation. `RawExec` recognizes a leading `INSERT`, `UPDATE`,
-or `DELETE`; other raw mutations use `EXEC`.
+Typed and raw SELECTs, typed SELECT `EXPLAIN` and `EXPLAIN ANALYZE`, preloads,
+typed mutations, automatically split bulk mutations, relation mutations, and
+`RawExec` are observed. Typed upserts use the logical `UPSERT` operation.
+`RawExec` recognizes a leading `INSERT`, `UPDATE`, or `DELETE`; other raw
+mutations use `EXEC`.
 
 `Transaction` emits separate `BEGIN`, `COMMIT`, and `ROLLBACK` events. Statements
 executed through `go-tidb` inside its callback use the observer from the context

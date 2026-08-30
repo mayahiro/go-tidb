@@ -14,8 +14,8 @@ planned is not available until the README marks it as implemented.
 
 - A struct-first application runtime for CRUD, explicit relations, deterministic SQL,
   transactions, historical reads, and opt-in query observations
-- Planned standalone development and deployment tools for diagnostics,
-  migration planning, migration application, and schema verification
+- Offline development diagnostics and planned standalone deployment tools for
+  migration planning, migration application, and connected schema verification
 
 The implemented runtime uses application-model metadata directly. Future
 tooling may share that metadata where it provides a concrete benefit, but
@@ -96,6 +96,9 @@ The following decisions apply throughout v0.1:
 13. Raw SQL is an explicit escape hatch without typed relation hydration or
     static query-AST diagnostics. Returned columns may still use model-aware
     scanning.
+14. Offline checks are selected explicitly by application code. Diagnostic
+    reporting performs no source scan, generated registration, configuration
+    discovery, or database access.
 
 ### 3.1 Implemented surface
 
@@ -119,8 +122,10 @@ The currently implemented surface provides:
   `HasMany` and pure `ManyToMany` preloading through deterministic full-source
   or bounded keyed secondary SELECTs, with automatic key projection, target
   projection, collection ordering, and no loaded-state fields
-- Direct and pure `ManyToMany` relation predicates compiled offline as
-  correlated `EXISTS` subqueries without implicit preloading
+- Logical direct and pure `ManyToMany` relation predicates compiled offline as
+  `EXISTS`, with TiDB semi-join hints for filtered positive collections and a
+  metadata-proven relation-first TopN rewrite for eligible direct `HasMany`
+  pages, without implicit preloading
 - TiDB-default NULL ordering and primary-key-backed deterministic keyset
   validation
 - Typed slice `IN` and `NOT IN` predicates
@@ -135,18 +140,33 @@ The currently implemented surface provides:
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   argument values excluded by default and available through an explicit option
-- Shared diagnostic data types for future offline and connected checks
-- The `tidbgo version` command
+- Operation-scoped debug reports that aggregate completed root, relation,
+  split-bulk, raw, and transaction statement events without database I/O
+- SELECT-only execution-plan inspection using TiDB's default row-format
+  `EXPLAIN` output
+- Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
+  runtime output
+- Same-session ServerRU reading for one completed DML statement through a pinned
+  `*sql.Conn` or active `*sql.Tx`
+- Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
+  snapshots, including SHOW CREATE TABLE executable comments
+- Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
+  columns, type families, nullability, primary keys, `AUTO_RANDOM`, generated
+  columns, required database-only columns, Relation target identity,
+  many-to-many junction pair uniqueness and insert shape, and deterministic
+  collection-relation index prefixes
+- Shared diagnostic data types, immutable active and suppressed reports, and
+  exact-code suppression with a required recorded reason
+- The `tidbgo version` command and `tidbgo check` text or JSON report command
 
 ## 4. Planned runtime surface
 
 The struct-first runtime is planned to provide:
 
 - Read-only `AsOf` and fixed-duration stale snapshot clients
-- Server RU measurement
 
-Per-parent preload limits, opaque cursors, lazy loading, automatic query-plan
-selection, and object-graph persistence are outside v0.1.
+Per-parent preload limits, opaque cursors, lazy loading, connected cost-based
+plan probing, and object-graph persistence are outside v0.1.
 
 The `IDs` terminal is deferred until a measured large-ID workload justifies a
 dedicated result API and any resulting minimum-Go-version cost.
@@ -180,12 +200,36 @@ will not automatically execute down migrations.
 
 The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
-an optional source location, and an optional reference. Concrete public rule
-codes have not been fixed yet.
+an optional source location, and an optional reference. Offline model checks
+currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
+use `QRY001` through `QRY005` and never include bind values. Offline physical
+schema compatibility checks use `CMP001` through `CMP014`.
+
+The implemented offline checks cover executable model metadata, ignored and
+likely misplaced tags, primary-key and custom-scalar capabilities, invalid
+typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
+wildcard predicates, relation-filtered TopN fallback, directional model and
+SQL-snapshot compatibility, and Relation target and junction correctness. They
+also warn when deterministic
+`has_many` or `many_to_many` lookups have no structural source-key index
+prefix. They do not require source generation, configuration, or a database
+connection. Terminal-specific unbounded-query detection and raw SQL are not
+inferred from a reusable query builder.
+
+`check.NewReport` applies one fixed policy: active errors fail, while warnings
+and info remain successful. A suppression matches every suppressible
+diagnostic with one exact code, requires a non-empty reason, and remains in the
+report with that reason. Duplicate codes, unused suppressions, and attempts to
+suppress non-suppressible diagnostics are rejected.
+
+`tidbgo check` reads one JSON diagnostic array from standard input or one
+explicit file. It emits deterministic text by default or the complete report
+with `--json`, returns status `1` for active errors, and performs no check
+discovery or database access.
 
 Planned catalogs cover:
 
-- Schema integrity and relation index shape
+- General application-query index shape and optional foreign-key policy
 - Unsafe mutations, large offsets, unbounded queries, and preload limits
 - Connected plan regressions and unexpectedly large scans
 - Probable N+1 behavior and query-count regressions
@@ -193,9 +237,9 @@ Planned catalogs cover:
 - Migration checksums, destructive changes, unsupported Starter SQL, schema
   drift, and migration locking
 
-Suppression will require a reason and will itself remain visible in reports.
-Safety errors such as unqualified updates and deletes will not be generally
-suppressible.
+Future diagnostics continue to choose suppressibility as part of each rule
+contract. Safety errors such as unqualified updates and deletes will not be
+generally suppressible.
 
 ## 7. Configuration
 
@@ -225,12 +269,16 @@ configuration.
   `tidbgo version` command, and shared diagnostic data types
 - Implemented: offline struct metadata, query construction and execution,
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
-  deletion, typed raw SQL, and statement observation
-- In progress: Server RU measurement, SELECT-only `EXPLAIN` and opt-in
-  `EXPLAIN ANALYZE`, and query-level debug reports
-- Planned next: struct-first and query static analysis, SQL dump and Go struct
-  compatibility checks, versioned migration tooling, historical reads, and
-  release hardening
+  deletion, typed raw SQL, statement observation, and same-session ServerRU
+  reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
+  SELECT-only `EXPLAIN ANALYZE`
+- Implemented: offline struct-first model intent checks, typed SELECT builder
+  diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
+  compatibility checks, Relation target identity, pure-junction correctness,
+  and deterministic collection-relation index-prefix checks
+- Planned next: source and terminal-aware static analysis, schema snapshot
+  generation and normalization, versioned migration tooling, historical reads,
+  and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value
 
@@ -247,3 +295,6 @@ connected service instead of relying only on a version string.
 - [TiDB Cloud feature matrix](https://docs.pingcap.com/tidbcloud/features/)
 - [TiDB Cloud Starter FAQs](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter)
 - [Limited SQL features on TiDB X instances](https://docs.pingcap.com/tidbcloud/limited-sql-features-tidb-x/)
+- [CREATE TABLE statement](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)
+- [AUTO_RANDOM](https://docs.pingcap.com/tidbcloud/auto-random/)
+- [TiDB and MySQL compatibility](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)

@@ -18,6 +18,10 @@ type StatementOperation string
 const (
 	// StatementSelect identifies a model or raw SELECT.
 	StatementSelect StatementOperation = "SELECT"
+	// StatementExplain identifies a SELECT execution-plan inspection.
+	StatementExplain StatementOperation = "EXPLAIN"
+	// StatementExplainAnalyze identifies an executed SELECT plan inspection.
+	StatementExplainAnalyze StatementOperation = "EXPLAIN ANALYZE"
 	// StatementInsert identifies a single or bulk INSERT.
 	StatementInsert StatementOperation = "INSERT"
 	// StatementUpsert identifies INSERT ON DUPLICATE KEY UPDATE.
@@ -40,8 +44,8 @@ const (
 //
 // SQL contains the statement template and ArgumentCount contains only the bind
 // count. Arguments is nil unless IncludeStatementArguments was explicitly
-// enabled. Duration includes scanning and closing rows for SELECT statements,
-// but excludes observer work.
+// enabled. Duration includes scanning and closing rows for SELECT and EXPLAIN
+// statements, but excludes observer work.
 type StatementEvent struct {
 	// Operation is the logical statement kind.
 	Operation StatementOperation
@@ -98,8 +102,8 @@ func IncludeStatementArguments() StatementObserverOption {
 
 // WithStatementObserver returns a context that observes ORM statements.
 //
-// The observer is called once after each attempted SELECT, mutation, begin,
-// commit, or rollback. Argument values are omitted unless
+// The observer is called once after each attempted SELECT, EXPLAIN, mutation,
+// begin, commit, or rollback. Argument values are omitted unless
 // IncludeStatementArguments is passed. Passing nil disables an observer
 // inherited from ctx.
 func WithStatementObserver(ctx context.Context, observer StatementObserver, options ...StatementObserverOption) context.Context {
@@ -343,6 +347,10 @@ func statementOperationColor(operation StatementOperation) string {
 	switch operation {
 	case StatementSelect:
 		return "\x1b[32m"
+	case StatementExplain:
+		return "\x1b[96m"
+	case StatementExplainAnalyze:
+		return "\x1b[93m"
 	case StatementInsert:
 		return "\x1b[34m"
 	case StatementUpsert:
