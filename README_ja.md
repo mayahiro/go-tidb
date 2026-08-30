@@ -163,11 +163,15 @@ diagnostics := check.Schema[User](catalog)
 
 databaseだけに存在する必須columnはmodel insertが失敗する可能性があるためwarningになります
 
-ordered primary key、`AUTO_RANDOM`、native GoとSQLのtype family、nullability、writableなgenerated column、to-one Relation targetの物理unique性もstableな `CMP001` から `CMP011` でcheckします
+ordered primary key、`AUTO_RANDOM`、native GoとSQLのtype family、nullability、writableなgenerated column、物理Relation targetもcheckします
+
+collection checkはmany-to-many junction keyと必須column、target identity、決定的な `has_many` と `many_to_many` lookupが使うindex prefixをstableな `CMP001` から `CMP014` で検査します
+
+Relationを持つmodelでは、渡すsnapshotにtarget tableとjunction tableも必要です
 
 `schema.Parse` は通常のTiDB `CREATE TABLE` SQLとTiDB executable commentを含む `SHOW CREATE TABLE` outputを受け付けます
 
-schema dumpの `SET` や `DROP TABLE` などのwrapper statementは無視しますが、`ALTER TABLE` historyのreplayとlive databaseのinspectは行いません
+schema dumpの `SET` や `DROP TABLE` などのwrapper statementは無視しますが、`ALTER TABLE` historyのreplay、foreign keyの要求、一般queryのindex推奨、live databaseのinspectは行いません
 
 詳細は[Schema compatibility guide](docs/schema-checks_ja.md)を参照してください
 

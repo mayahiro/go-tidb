@@ -160,14 +160,17 @@ while database-only columns are accepted when they are nullable, defaulted, or
 generated. A required database-only column is a warning because it can make
 model inserts fail. The check also covers ordered primary keys, `AUTO_RANDOM`,
 native Go and SQL type families, nullability, writable generated columns, and
-physical uniqueness for to-one relation targets through stable `CMP001`
-through `CMP011` codes.
+physical Relation targets. Collection checks validate many-to-many junction
+keys and required columns, target identity, and the index prefixes used by
+deterministic `has_many` and `many_to_many` lookups through stable `CMP001`
+through `CMP014` codes. A model with relations therefore requires those target
+and junction tables in the supplied snapshot.
 
 `schema.Parse` accepts ordinary TiDB `CREATE TABLE` SQL and `SHOW CREATE TABLE`
 output, including TiDB executable comments. It ignores schema-dump wrapper
 statements such as `SET` and `DROP TABLE`, but does not replay `ALTER TABLE`
-history or inspect a live database. See the [schema compatibility
-guide](docs/schema-checks.md).
+history, require foreign keys, recommend general query indexes, or inspect a
+live database. See the [schema compatibility guide](docs/schema-checks.md).
 
 ## Struct-first scalar queries
 

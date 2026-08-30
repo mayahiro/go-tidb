@@ -101,9 +101,11 @@ connection.
 The [`cmd/check`](cmd/check) example combines the model and query diagnostics
 into one JSON array that can be piped directly to `tidbgo check`.
 `CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
-checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability, and
-required database-only columns entirely offline. The omitted database-managed
-`created_at` column is accepted because it has a default.
+checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability,
+required database-only columns, relation targets, the pure junction, and
+collection lookup index prefixes entirely offline. The snapshot includes the
+declared `orders`, `roles`, and `user_roles` relation tables. The omitted
+database-managed `created_at` column is accepted because it has a default.
 
 Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema

@@ -81,6 +81,23 @@ func TestApplicationSchemaCanBeCheckedOffline(t *testing.T) {
   email VARCHAR(255) NOT NULL,
   created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id)
+);
+CREATE TABLE orders (
+  id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
+  user_id BIGINT NOT NULL,
+  total DECIMAL(20, 2) NOT NULL,
+  PRIMARY KEY (id),
+  KEY orders_user_id (user_id)
+);
+CREATE TABLE roles (
+  id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
+  name VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id)
+);
+CREATE TABLE user_roles (
+  user_id BIGINT NOT NULL,
+  role_id BIGINT NOT NULL,
+  PRIMARY KEY (user_id, role_id)
 );`
 	diagnostics, err := CheckUserSchema(sqlText)
 	if err != nil {

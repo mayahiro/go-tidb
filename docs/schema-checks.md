@@ -24,7 +24,9 @@ diagnostics = append(diagnostics, check.Schema[Order](catalog)...)
 
 `schema.Parse`, `check.Schema`, and `check.SchemaType` perform no database I/O,
 read no connection configuration, and execute no SQL or user methods. A caller
-that already has a `reflect.Type` can use `check.SchemaType`.
+that already has a `reflect.Type` can use `check.SchemaType`. The snapshot for a
+model with relations must also contain its declared relation-target and
+many-to-many junction tables.
 
 ## Accepted SQL snapshots
 
@@ -66,8 +68,16 @@ cardinality:
   physical primary key
 - A mapped column must declare `AUTO_RANDOM` on both sides or neither side
 - A physical generated column cannot be an ordinary writable model field
-- A `belongs_to` or `has_one` target must have a primary or unique key that
-  proves at-most-one-row semantics
+- Every declared relation target and many-to-many junction table and key column
+  must exist, and known relation-key and SQL type families must be compatible
+- A `belongs_to`, `has_one`, or `many_to_many` target must have a primary or
+  unique key that proves target identity
+- A pure many-to-many junction must have a primary or unique key over exactly
+  the complete source-target pair
+- A pure junction cannot contain an additional `NOT NULL` column without a
+  default or database generation because relation insertion supplies only keys
+- A `has_many` target or many-to-many junction without an index whose leading
+  columns cover the complete source key is a warning
 
 Database-only columns are deliberately not errors merely because the struct
 omits them. Nullable, defaulted, and database-generated columns are accepted.
@@ -84,16 +94,19 @@ reports the unavailable primary-key mutation capability as `MOD005`.
 | Code | Default severity | Meaning |
 | --- | --- | --- |
 | `CMP001` | error | A non-nil parsed schema catalog was not supplied |
-| `CMP002` | error | A model or to-one relation target physical table is absent |
-| `CMP003` | error | A mapped non-computed field or to-one target key has no physical column |
-| `CMP004` | error | A known native Go representation and SQL type family are incompatible |
+| `CMP002` | error | A model, relation target, or junction physical table is absent |
+| `CMP003` | error | A mapped model or relation key has no physical column |
+| `CMP004` | error | A known model or relation-key representation and SQL type family are incompatible |
 | `CMP005` | warning | A nullable physical column uses a non-nullable native Go field |
 | `CMP006` | warning | A nullable Go representation maps to a `NOT NULL` column |
 | `CMP007` | error | The model and physical ordered primary keys differ |
 | `CMP008` | error | The mapped field and physical column disagree about `AUTO_RANDOM` |
 | `CMP009` | error | An ordinary writable model field maps to a generated column |
 | `CMP010` | warning | A required database-only column can make model inserts fail |
-| `CMP011` | error | A to-one relation target is not proven unique by the snapshot |
+| `CMP011` | error | A to-one or many-to-many target identity is not proven unique by the snapshot |
+| `CMP012` | error | A many-to-many junction has no exact unique source-target pair |
+| `CMP013` | error | A many-to-many junction requires insert data beyond its mapped keys |
+| `CMP014` | warning | A collection relation has no index starting with its complete source key |
 
 A value-form `time.Time` soft-delete field is treated as nullable because the
 runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
@@ -101,10 +114,17 @@ runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
 Invalid model metadata is returned through the existing non-suppressible
 `MOD001` diagnostic before physical compatibility is evaluated.
 
-Warnings are suppressible in the shared diagnostic representation through
-`check.NewReport` or `tidbgo check`. Errors represent an executable mapping or
+Warnings, including the structural relation-index warning, are suppressible in
+the shared diagnostic representation through `check.NewReport` or
+`tidbgo check`. Errors represent an executable mapping, insertion, or
 cardinality conflict and are not suppressible. See the [offline diagnostic
 report guide](checks.md).
+
+For a composite relation key, the leading index positions may order the mapped
+columns differently because every component is constrained by the generated
+relation lookup. An expression index does not prove this structural coverage.
+An exact junction pair can likewise use either source-target or target-source
+order, but it cannot include an additional unique-key component.
 
 ## Type-check boundary
 
@@ -115,12 +135,20 @@ default expressions. Unknown future SQL types and application-selected custom
 types implementing `sql.Scanner` or `driver.Valuer` are not guessed. Custom
 type semantics remain the application's responsibility.
 
-The parser records ordinary indexes, but this slice checks only uniqueness
-needed for to-one relation correctness. It does not yet diagnose missing
-performance indexes, foreign keys, junction-table constraints, migration
-history, or live database drift.
+The relation-index diagnostic is deliberately limited to access paths that the
+ORM generates deterministically for `has_many` and `many_to_many`. It reports
+only that the snapshot lacks structural prefix coverage; it does not predict
+optimizer selection or recommend general application-query indexes. Verify
+actual access paths with `Explain` or `ExplainAnalyze` before changing a
+production index.
+
+Foreign keys are neither required nor inspected. Referential-integrity policy,
+general performance indexes, migration history, and live database drift remain
+outside this offline comparison.
 
 TiDB documents the current [`CREATE TABLE`
 grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/),
 [`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/), and
 [case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/).
+The structural warning follows TiDB's
+[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/).

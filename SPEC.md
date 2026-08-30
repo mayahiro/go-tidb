@@ -150,7 +150,9 @@ The currently implemented surface provides:
   snapshots, including SHOW CREATE TABLE executable comments
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
   columns, type families, nullability, primary keys, `AUTO_RANDOM`, generated
-  columns, required database-only columns, and to-one target uniqueness
+  columns, required database-only columns, Relation target identity,
+  many-to-many junction pair uniqueness and insert shape, and deterministic
+  collection-relation index prefixes
 - Shared diagnostic data types, immutable active and suppressed reports, and
   exact-code suppression with a required recorded reason
 - The `tidbgo version` command and `tidbgo check` text or JSON report command
@@ -199,15 +201,17 @@ The implemented diagnostic representation has a code, a severity of `info`,
 an optional source location, and an optional reference. Offline model checks
 currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
 use `QRY001` through `QRY004` and never include bind values. Offline physical
-schema compatibility checks use `CMP001` through `CMP011`.
+schema compatibility checks use `CMP001` through `CMP014`.
 
 The implemented offline checks cover executable model metadata, ignored and
 likely misplaced tags, primary-key and custom-scalar capabilities, invalid
 typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
 wildcard predicates, directional model and SQL-snapshot compatibility, and
-to-one target uniqueness. They do not require source generation,
-configuration, or a database connection. Terminal-specific unbounded-query
-detection and raw SQL are not inferred from a reusable query builder.
+Relation target and junction correctness. They also warn when deterministic
+`has_many` or `many_to_many` lookups have no structural source-key index
+prefix. They do not require source generation, configuration, or a database
+connection. Terminal-specific unbounded-query detection and raw SQL are not
+inferred from a reusable query builder.
 
 `check.NewReport` applies one fixed policy: active errors fail, while warnings
 and info remain successful. A suppression matches every suppressible
@@ -222,7 +226,7 @@ discovery or database access.
 
 Planned catalogs cover:
 
-- Performance index shape, foreign keys, and junction-table constraints
+- General application-query index shape and optional foreign-key policy
 - Unsafe mutations, large offsets, unbounded queries, and preload limits
 - Connected plan regressions and unexpectedly large scans
 - Probable N+1 behavior and query-count regressions
@@ -267,7 +271,8 @@ configuration.
   SELECT-only `EXPLAIN ANALYZE`
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
-  compatibility checks, and to-one target uniqueness checks
+  compatibility checks, Relation target identity, pure-junction correctness,
+  and deterministic collection-relation index-prefix checks
 - Planned next: source and terminal-aware static analysis, schema snapshot
   generation and normalization, versioned migration tooling, historical reads,
   and release hardening

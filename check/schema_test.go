@@ -37,6 +37,28 @@ type schemaCheckSoftDelete struct {
 	DeletedAt  time.Time `tidbgo:"deleted_at,soft_delete"`
 }
 
+type schemaCheckRelationParent struct {
+	model.Meta `tidbgo:"table=schema_check_relation_parents"`
+	TenantID   int64                       `tidbgo:"tenant_id,pk"`
+	ID         int64                       `tidbgo:"id,pk"`
+	Children   []schemaCheckRelationChild  `tidbgo:"has_many,join=TenantID:ParentTenantID,join=ID:ParentID"`
+	Roles      []schemaCheckRelationTarget `tidbgo:"many_to_many,through=schema_check_relation_links,source=TenantID:parent_tenant_id,source=ID:parent_id,target=role_tenant_id:TenantID,target=role_id:ID"`
+}
+
+type schemaCheckRelationChild struct {
+	model.Meta     `tidbgo:"table=schema_check_relation_children"`
+	ID             int64 `tidbgo:"id,pk"`
+	ParentTenantID int64
+	ParentID       int64
+}
+
+type schemaCheckRelationTarget struct {
+	model.Meta `tidbgo:"table=schema_check_relation_targets"`
+	TenantID   int64 `tidbgo:"tenant_id,pk"`
+	ID         int64 `tidbgo:"id,pk"`
+	Name       string
+}
+
 const compatibleSchemaSQL = `
 CREATE TABLE schema_check_parents (
   id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
@@ -53,6 +75,34 @@ CREATE TABLE schema_check_children (
   parent_id BIGINT NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY schema_check_children_parent_key (parent_id)
+);`
+
+const compatibleRelationSchemaSQL = `
+CREATE TABLE schema_check_relation_parents (
+  tenant_id BIGINT NOT NULL,
+  id BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE schema_check_relation_children (
+  id BIGINT NOT NULL,
+  parent_tenant_id BIGINT NOT NULL,
+  parent_id BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  KEY schema_check_relation_children_parent (parent_id, parent_tenant_id)
+);
+CREATE TABLE schema_check_relation_targets (
+  tenant_id BIGINT NOT NULL,
+  id BIGINT NOT NULL,
+  name VARCHAR(64) NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE schema_check_relation_links (
+  parent_tenant_id BIGINT NOT NULL,
+  parent_id BIGINT NOT NULL,
+  role_tenant_id BIGINT NOT NULL,
+  role_id BIGINT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY schema_check_relation_links_pair (parent_tenant_id, parent_id, role_tenant_id, role_id)
 );`
 
 func TestSchemaReturnsNoDiagnosticsForCompatibleDirectionalMapping(t *testing.T) {
@@ -182,11 +232,167 @@ func TestSchemaRequiresPhysicalUniquenessForToOneTarget(t *testing.T) {
 
 	sql := strings.Replace(compatibleSchemaSQL, "UNIQUE KEY schema_check_children_parent_key", "KEY schema_check_children_parent_key", 1)
 	diagnostics := Schema[schemaCheckParent](parseSchemaCheckCatalog(t, sql))
-	if got, want := diagnosticCodes(diagnostics), []string{codeToOneTargetNotUnique}; !reflect.DeepEqual(got, want) {
+	if got, want := diagnosticCodes(diagnostics), []string{codeRelationTargetNotUnique}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codes = %#v, want %#v", got, want)
 	}
 	if diagnostics[0].Severity != SeverityError || diagnostics[0].Suppressible {
 		t.Fatalf("to-one diagnostic = %#v", diagnostics[0])
+	}
+}
+
+func TestSchemaReturnsNoDiagnosticsForCompatibleCollectionRelations(t *testing.T) {
+	t.Parallel()
+
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, compatibleRelationSchemaSQL))
+	if diagnostics == nil || len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want non-nil empty", diagnostics)
+	}
+}
+
+func TestSchemaReportsMissingCollectionRelationTables(t *testing.T) {
+	t.Parallel()
+
+	sqlText := compatibleRelationSchemaSQL[:strings.Index(compatibleRelationSchemaSQL, "CREATE TABLE schema_check_relation_children")]
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	want := []string{codeMissingPhysicalTable, codeMissingPhysicalTable, codeMissingPhysicalTable}
+	if got := diagnosticCodes(diagnostics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestSchemaReportsMissingCollectionTargetAndJunctionColumns(t *testing.T) {
+	t.Parallel()
+
+	sqlText := strings.Replace(
+		compatibleRelationSchemaSQL,
+		"  parent_id BIGINT NOT NULL,\n  PRIMARY KEY (id),\n  KEY schema_check_relation_children_parent (parent_id, parent_tenant_id)",
+		"  PRIMARY KEY (id),\n  KEY schema_check_relation_children_parent (parent_tenant_id)",
+		1,
+	)
+	sqlText = strings.Replace(
+		sqlText,
+		"  role_id BIGINT NOT NULL,\n  created_at",
+		"  created_at",
+		1,
+	)
+	sqlText = strings.Replace(
+		sqlText,
+		"(parent_tenant_id, parent_id, role_tenant_id, role_id)",
+		"(parent_tenant_id, parent_id, role_tenant_id)",
+		1,
+	)
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	want := []string{codeMissingPhysicalColumn, codeMissingPhysicalColumn}
+	if got := diagnosticCodes(diagnostics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestSchemaReportsCollectionRelationTypeIncompatibilities(t *testing.T) {
+	t.Parallel()
+
+	sqlText := strings.Replace(
+		compatibleRelationSchemaSQL,
+		"  parent_id BIGINT NOT NULL,\n  PRIMARY KEY (id)",
+		"  parent_id VARCHAR(64) NOT NULL,\n  PRIMARY KEY (id)",
+		1,
+	)
+	sqlText = strings.Replace(sqlText, "  role_id BIGINT NOT NULL,\n  created_at", "  role_id VARCHAR(64) NOT NULL,\n  created_at", 1)
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	want := []string{codeIncompatibleColumnType, codeIncompatibleColumnType}
+	if got := diagnosticCodes(diagnostics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Location.Line == 0 || diagnostic.Location.Column == 0 {
+			t.Fatalf("diagnostic location = %#v", diagnostic)
+		}
+	}
+}
+
+func TestSchemaRequiresUniqueManyToManyTargetIdentity(t *testing.T) {
+	t.Parallel()
+
+	sqlText := strings.Replace(
+		compatibleRelationSchemaSQL,
+		"  name VARCHAR(64) NOT NULL,\n  PRIMARY KEY (tenant_id, id)",
+		"  name VARCHAR(64) NOT NULL,\n  KEY schema_check_relation_targets_identity (tenant_id, id)",
+		1,
+	)
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	if got, want := diagnosticCodes(diagnostics), []string{codeRelationTargetNotUnique}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+	if diagnostics[0].Severity != SeverityError || diagnostics[0].Suppressible {
+		t.Fatalf("diagnostic = %#v", diagnostics[0])
+	}
+}
+
+func TestSchemaRequiresExactUniqueJunctionPair(t *testing.T) {
+	t.Parallel()
+
+	for name, sqlText := range map[string]string{
+		"ordinary": strings.Replace(compatibleRelationSchemaSQL, "UNIQUE KEY schema_check_relation_links_pair", "KEY schema_check_relation_links_pair", 1),
+		"superset": strings.Replace(
+			strings.Replace(compatibleRelationSchemaSQL, "  created_at", "  note VARCHAR(64) NULL,\n  created_at", 1),
+			"(parent_tenant_id, parent_id, role_tenant_id, role_id)",
+			"(parent_tenant_id, parent_id, role_tenant_id, role_id, note)",
+			1,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+			if got, want := diagnosticCodes(diagnostics), []string{codeJunctionPairNotUnique}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("codes = %#v, want %#v", got, want)
+			}
+			if diagnostics[0].Severity != SeverityError || diagnostics[0].Suppressible {
+				t.Fatalf("diagnostic = %#v", diagnostics[0])
+			}
+		})
+	}
+}
+
+func TestSchemaReportsRequiredUnmappedJunctionColumn(t *testing.T) {
+	t.Parallel()
+
+	sqlText := strings.Replace(compatibleRelationSchemaSQL, "  created_at", "  payload VARCHAR(64) NOT NULL,\n  created_at", 1)
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	if got, want := diagnosticCodes(diagnostics), []string{codeRequiredJunctionColumn}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+	if diagnostics[0].Severity != SeverityError || diagnostics[0].Suppressible || diagnostics[0].Location.Line == 0 {
+		t.Fatalf("diagnostic = %#v", diagnostics[0])
+	}
+}
+
+func TestSchemaWarnsWhenCollectionRelationHasNoSourcePrefixIndex(t *testing.T) {
+	t.Parallel()
+
+	sqlText := strings.Replace(
+		compatibleRelationSchemaSQL,
+		"  PRIMARY KEY (id),\n  KEY schema_check_relation_children_parent (parent_id, parent_tenant_id)",
+		"  PRIMARY KEY (id)",
+		1,
+	)
+	sqlText = strings.Replace(
+		sqlText,
+		"(parent_tenant_id, parent_id, role_tenant_id, role_id)",
+		"(role_tenant_id, role_id, parent_tenant_id, parent_id)",
+		1,
+	)
+	diagnostics := Schema[schemaCheckRelationParent](parseSchemaCheckCatalog(t, sqlText))
+	want := []string{codeMissingRelationIndex, codeMissingRelationIndex}
+	if got := diagnosticCodes(diagnostics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity != SeverityWarning || !diagnostic.Suppressible || diagnostic.Reference != relationIndexReference {
+			t.Fatalf("diagnostic = %#v", diagnostic)
+		}
+		if diagnostic.Location.Line == 0 || diagnostic.Location.Column == 0 {
+			t.Fatalf("diagnostic location = %#v", diagnostic)
+		}
 	}
 }
 
@@ -248,6 +454,23 @@ func BenchmarkSchema(b *testing.B) {
 	var diagnostics []Diagnostic
 	for b.Loop() {
 		diagnostics = Schema[schemaCheckParent](catalog)
+	}
+	schemaDiagnosticSink = diagnostics
+}
+
+func BenchmarkSchemaCollectionRelations(b *testing.B) {
+	catalog, err := physicalschema.Parse(compatibleRelationSchemaSQL)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if diagnostics := Schema[schemaCheckRelationParent](catalog); len(diagnostics) != 0 {
+		b.Fatalf("setup diagnostics = %#v", diagnostics)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	var diagnostics []Diagnostic
+	for b.Loop() {
+		diagnostics = Schema[schemaCheckRelationParent](catalog)
 	}
 	schemaDiagnosticSink = diagnostics
 }

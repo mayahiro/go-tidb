@@ -124,7 +124,8 @@ func CheckModels() []check.Diagnostic {
 }
 
 // CheckUserSchema parses a TiDB CREATE TABLE snapshot and checks its physical
-// compatibility with User without opening a database connection.
+// compatibility with User and its declared relations without opening a
+// database connection.
 func CheckUserSchema(sqlText string) ([]check.Diagnostic, error) {
 	catalog, err := physicalschema.Parse(sqlText)
 	if err != nil {
