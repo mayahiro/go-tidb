@@ -178,6 +178,48 @@ for _, relation := range metadata.Relations() {
 descriptor. Inspection does not invoke methods on `User`, read environment
 credentials, or perform network I/O.
 
+## Check model intent
+
+`model.Describe` rejects metadata that cannot be executed safely. The separate
+`check` package also reports valid declarations that may not match application
+intent:
+
+```go
+diagnostics := check.Model[User]()
+```
+
+`check.ModelType` accepts a runtime `reflect.Type` when a caller already has
+one. Both APIs are deterministic, execute no user methods, read no
+configuration, and perform no database I/O. Applications explicitly list
+their model types; this check does not require source scanning or a generated
+registry.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `MOD001` | error | The model type or executable metadata is invalid |
+| `MOD002` | warning | An exported field has a `db` tag that go-tidb ignores |
+| `MOD003` | warning | An unexported field has unused `tidbgo` metadata |
+| `MOD004` | warning | The column position resembles a known option or a one-edit typo of one |
+| `MOD005` | info | The model has no primary key and cannot use primary-key update or delete |
+| `MOD006` | warning | A custom field can scan but cannot be bound as a database argument |
+| `MOD007` | warning | A custom field can be bound but cannot be scanned |
+
+`MOD001` is not suppressible because the runtime cannot compile the model.
+The other diagnostics describe valid or ignored declarations and set
+`Suppressible` to true. A built-in suppression configuration is not currently
+provided; callers decide how each returned diagnostic affects their tests or
+tooling.
+
+`MOD004` never changes mapping behavior. The first tag value remains a column
+name. The rule warns only when that value differs from the inferred column and
+is at most one edit from a known option such as `pk`, so an explicit
+default-equal column remains quiet. A physical column with the warned name is
+still valid.
+
+Physical column types, indexes, and constraints are outside this offline
+check. For example, confirming that a `has_one` target key is unique requires
+schema information and is not reported here.
+
 ## Supported scalar representations
 
 The current slice recognizes:

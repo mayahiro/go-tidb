@@ -11,7 +11,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 ## 利用できる機能
 
 - generated modelを必要としないapplication-owned Go struct
-- offline model validationとSQL構築
+- offline model validation、model intent diagnostic、SQL構築
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -92,6 +92,16 @@ toolingまたはtestでmetadataが必要な場合はofflineで解析できます
 metadata, err := model.Describe[User]()
 ```
 
+有効ではあるものの意図と異なる可能性がある宣言は、独立したcheckで診断できます
+
+```go
+diagnostics := check.Model[User]()
+```
+
+checkはDBへ接続せず、不正なmetadata、無視されるtag、tag位置の間違い候補、primary key capabilityの不足、片方向だけのcustom scalar typeをstableな `MOD001` から `MOD007` で報告します
+
+applicationが所有するmodel typeは明示的に列挙し、generated registryとsource scanを必要としません
+
 unexported fieldと `tidbgo:"-"` を指定したfieldは無視します
 
 scalarの `tidbgo` tagは省略可能なcolumn名を第1要素、optionを第2要素以降に指定します
@@ -145,11 +155,16 @@ query := orm.Query[Order]().
     Limit(100)
 
 sqlText, arguments, err := query.Build()
+diagnostics := query.Diagnostics()
 ```
 
 `Build`はDBへ接続せず、custom `driver.Valuer`も実行しません
 
 valueはbind argumentとしてSQLから分離し、物理identifierにはvalidated model metadataだけを使います
+
+`Diagnostics` もofflineで動作します
+
+build failureを `QRY001` へ変換し、有効なOFFSET pagination、明示的なpaginationのorder不足、leading wildcard predicateをbind valueなしの `QRY002` から `QRY004` で報告します
 
 既存executorを明示的に渡した場合だけ同じqueryを実行します
 

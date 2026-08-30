@@ -189,6 +189,50 @@ for _, relation := range metadata.Relations() {
 
 解析時に `User` のmethod実行、environment credentialの読込、network I/Oは行いません
 
+## Model intentのcheck
+
+`model.Describe` は安全に実行できないmetadataを拒否します
+
+独立した `check` packageは、有効ではあるもののapplicationの意図と異なる可能性がある宣言も報告します
+
+```go
+diagnostics := check.Model[User]()
+```
+
+callerがruntimeの `reflect.Type` を既に持つ場合は `check.ModelType` を使用できます
+
+どちらのAPIも結果が決定的で、user methodの実行、configurationの読込、DB I/Oを行いません
+
+applicationがmodel typeを明示的に列挙するため、source scanとgenerated registryは不要です
+
+| Code | Severity | 意味 |
+| --- | --- | --- |
+| `MOD001` | error | model typeまたは実行可能なmetadataが不正 |
+| `MOD002` | warning | exported fieldにgo-tidbが無視する `db` tagがある |
+| `MOD003` | warning | unexported fieldに未使用の `tidbgo` metadataがある |
+| `MOD004` | warning | column位置が既知optionまたは1 editだけ異なる値に見える |
+| `MOD005` | info | primary keyがなくprimary-key updateとdeleteを使用できない |
+| `MOD006` | warning | custom fieldをscanできるがdatabase argumentとしてbindできない |
+| `MOD007` | warning | custom fieldをbindできるがscanできない |
+
+runtimeがmodelをcompileできないため、`MOD001` はsuppressibleではありません
+
+他のdiagnosticは有効または無視される宣言を対象とし、`Suppressible` をtrueにします
+
+built-inのsuppression configurationは現時点で提供せず、callerがtestまたはtoolingで各diagnosticの扱いを決めます
+
+`MOD004` はmapping behaviorを変更しません
+
+tagの第1要素は引き続きcolumn名です
+
+このruleは値が推定columnと異なり、`pk` などの既知optionと最大1 editだけ異なる場合に限ってwarningを出すため、defaultと同じcolumn名を明示してもwarningになりません
+
+warning対象と同名の物理columnも有効です
+
+物理column type、index、constraintはこのoffline checkの対象外です
+
+例えば `has_one` のtarget keyがuniqueかどうかの確認にはschema情報が必要なため、ここでは報告しません
+
 ## 対応するscalar representation
 
 現在は次を認識します

@@ -187,8 +187,16 @@ will not automatically execute down migrations.
 
 The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
-an optional source location, and an optional reference. Concrete public rule
-codes have not been fixed yet.
+an optional source location, and an optional reference. Offline model checks
+currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
+use `QRY001` through `QRY004` and never include bind values.
+
+The implemented offline checks cover executable model metadata, ignored and
+likely misplaced tags, primary-key and custom-scalar capabilities, invalid
+typed SELECTs, OFFSET pagination, unordered explicit pagination, and leading
+wildcard predicates. They do not require source generation, configuration, or
+a database connection. Terminal-specific unbounded-query detection, raw SQL,
+and physical schema facts are not inferred from a reusable query builder.
 
 Planned catalogs cover:
 
@@ -235,9 +243,11 @@ configuration.
   deletion, typed raw SQL, statement observation, and same-session ServerRU
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
   SELECT-only `EXPLAIN ANALYZE`
-- Planned next: struct-first and query static analysis, SQL dump and Go struct
-  compatibility checks, versioned migration tooling, historical reads, and
-  release hardening
+- Implemented: offline struct-first model intent checks and typed SELECT
+  builder diagnostics
+- Planned next: source and terminal-aware static analysis, SQL dump and Go
+  struct compatibility checks, versioned migration tooling, historical reads,
+  and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value
 

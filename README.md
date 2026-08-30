@@ -12,7 +12,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 ## Available features
 
 - Application-owned Go structs without generated models
-- Offline model validation and SQL construction
+- Offline model validation, model-intent diagnostics, and SQL construction
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -96,6 +96,19 @@ Inspect and validate the mapping offline when tooling or tests need metadata:
 metadata, err := model.Describe[User]()
 ```
 
+Run intent-oriented checks separately when an application wants diagnostics
+for valid but potentially unintended declarations:
+
+```go
+diagnostics := check.Model[User]()
+```
+
+The check performs no database access and reports stable `MOD001` through
+`MOD007` codes for invalid metadata, ignored tags, likely tag-position
+mistakes, missing primary-key capability, and one-way custom scalar types.
+Applications explicitly list the model types they own; no generated registry
+or source scan is required.
+
 Unexported fields and fields tagged with `tidbgo:"-"` are ignored. Scalar tag
 values put an optional column name first and options after it. Without an
 explicit name, fields use deterministic snake_case columns. Primary keys use
@@ -138,11 +151,17 @@ query := orm.Query[Order]().
     Limit(100)
 
 sqlText, arguments, err := query.Build()
+diagnostics := query.Diagnostics()
 ```
 
 `Build` does not access a database or execute custom `driver.Valuer`
 implementations. Values remain separate bind arguments, and physical
 identifiers come only from validated model metadata.
+
+`Diagnostics` is also offline. It converts build failures to `QRY001` and
+reports valid OFFSET pagination, unordered explicit pagination, and
+leading-wildcard predicates as `QRY002` through `QRY004` without including bind
+values.
 
 Execute the same query only when an existing executor is passed explicitly:
 

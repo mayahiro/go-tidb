@@ -10,6 +10,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
 )
@@ -107,16 +108,39 @@ type WatchLater struct {
 	Video      *Video `tidbgo:"belongs_to"`
 }
 
+// CheckModels runs the example application's model-intent checks without a
+// database connection or generated registry.
+func CheckModels() []check.Diagnostic {
+	diagnostics := make([]check.Diagnostic, 0)
+	diagnostics = append(diagnostics, check.Model[User]()...)
+	diagnostics = append(diagnostics, check.Model[Order]()...)
+	diagnostics = append(diagnostics, check.Model[Role]()...)
+	diagnostics = append(diagnostics, check.Model[UserRole]()...)
+	diagnostics = append(diagnostics, check.Model[JobLease]()...)
+	diagnostics = append(diagnostics, check.Model[Video]()...)
+	diagnostics = append(diagnostics, check.Model[WatchLater]()...)
+	return diagnostics
+}
+
 // BuildRecentOrdersQuery compiles a keyset-paginated query without a database
 // connection or generated code.
 func BuildRecentOrdersQuery(userID, afterID int64) (string, []any, error) {
+	return recentOrdersQuery(userID, afterID).Build()
+}
+
+// CheckRecentOrdersQuery returns offline diagnostics for the same query shape
+// used by BuildRecentOrdersQuery.
+func CheckRecentOrdersQuery(userID, afterID int64) []check.Diagnostic {
+	return recentOrdersQuery(userID, afterID).Diagnostics()
+}
+
+func recentOrdersQuery(userID, afterID int64) *orm.SelectQuery[Order] {
 	return orm.Query[Order]().
 		Select("ID", "UserID", "Total").
 		Where(orm.Equal("UserID", userID)).
 		OrderBy(orm.Desc("ID")).
 		SeekAfter(afterID).
-		Limit(100).
-		Build()
+		Limit(100)
 }
 
 // FirstRecentOrder returns the newest order for a user through an explicitly

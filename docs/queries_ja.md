@@ -39,6 +39,45 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
+## Query shapeのoffline check
+
+同じbuilderへstatic query-shape checkを適用する場合は `Diagnostics` を呼び出します
+
+```go
+diagnostics := query.Diagnostics()
+```
+
+`Diagnostics` は `Build` と同じvalidationを行い、DB I/Oとcustom `driver.Valuer` の実行を行いません
+
+diagnosticへpredicateまたはcursorのvalueを含めません
+
+| Code | Severity | 意味 |
+| --- | --- | --- |
+| `QRY001` | error | model metadataまたはSELECT builderが不正 |
+| `QRY002` | warning | positive OFFSETがrowをskipし、offsetの増加に伴ってcostが増える |
+| `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
+| `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
+
+queryをcompileできないため、`QRY001` はsuppressibleではありません
+
+他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
+
+TiDBの[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)はpaginated resultのorderを推奨し、offsetが大きくなるほどcompute resourceを消費すると説明しています
+
+applicationでstable cursorを保持できる場合は `SeekAfter` を優先します
+
+`Contains` と `HasSuffix` は意図的にpatternを `%` で開始し、そのmatching behaviorはTiDBの[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like)に従います
+
+index、statistics、collation、optimizer behaviorはconnected concernであるため、static checkは特定のphysical planを断定しません
+
+実際のaccess pathは `Explain` または `ExplainAnalyze` で確認します
+
+同じbuilderを `All`、`First`、`Only`、`Exists`、`Count`、plan terminalで使用できるため、このmethodはbuilderへ明示的に保存されたstateだけをcheckします
+
+terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
+
+Raw SQLはtyped query ASTの外にあるため解析しません
+
 ## Soft delete scope
 
 `tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します

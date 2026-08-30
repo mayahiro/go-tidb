@@ -9,6 +9,7 @@ It demonstrates the current struct-first foundation:
 - No generated model files
 - No project configuration file
 - No database connection for model inspection
+- Offline model-intent diagnostics through explicit model registration
 - Inferred columns and an explicit default-equal column name in the first
   `tidbgo` tag position
 - Explicit physical table names through the zero-size `model.Meta` marker
@@ -20,6 +21,7 @@ It demonstrates the current struct-first foundation:
 - Ordinary pointers and slices for direct and many-to-many relations
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
+- Offline query-shape diagnostics without exposing bind values
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
@@ -44,8 +46,8 @@ It demonstrates the current struct-first foundation:
 application model does not need to mirror every physical column.
 
 See [app.go](app.go) for the models and queries and [app_test.go](app_test.go)
-for offline inspection through `model.Describe` and SQL construction through
-`orm.Query`.
+for offline inspection through `model.Describe`, model-intent diagnostics
+through `check.Model`, and SQL construction through `orm.Query`.
 
 Run the example test from the repository root:
 
@@ -54,11 +56,13 @@ go test ./examples/starter-app
 ```
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
-connection. `FirstRecentOrder`, `FindUserByEmail`, `HasUserWithEmail`, and
-`CountOrdersForUser` demonstrate connected `First`, `Only`, `Exists`, and
-`Count` terminals. `ListUsersWithOrders` demonstrates projected and ordered
-`Preload("Orders.User")`, loading Orders in one secondary SELECT and joining
-each User into that statement. `ListUsersWithRoles` demonstrates a pure
+connection, and `CheckRecentOrdersQuery` applies static query-shape diagnostics
+to the same builder. `FirstRecentOrder`, `FindUserByEmail`,
+`HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
+`Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
+projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
+SELECT and joining each User into that statement. `ListUsersWithRoles`
+demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
@@ -88,6 +92,9 @@ returns actual rows, execution information, memory, and disk usage for each
 operator.
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
 its TiDB-reported ServerRU immediately afterward.
+`CheckModels` explicitly lists the application-owned model types and returns
+their diagnostics without source generation, configuration, or a database
+connection.
 
 Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation and SQL schema

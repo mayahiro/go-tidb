@@ -35,6 +35,43 @@ field in struct declaration order. It never uses `SELECT *`. `Select` accepts
 Go field names, not physical column names, and preserves the requested scan
 order. Computed fields are available only through aliased `Raw[T]` results.
 
+## Check a query shape offline
+
+Call `Diagnostics` on the same builder to apply static query-shape checks:
+
+```go
+diagnostics := query.Diagnostics()
+```
+
+`Diagnostics` applies the same validation as `Build`, performs no database
+I/O, and does not execute custom `driver.Valuer` implementations. Diagnostics
+never include predicate or cursor values.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `QRY001` | error | Model metadata or the SELECT builder is invalid |
+| `QRY002` | warning | A positive OFFSET skips rows and its cost grows as the offset grows |
+| `QRY003` | warning | An explicit positive LIMIT has no ORDER BY |
+| `QRY004` | warning | `Contains` or `HasSuffix` builds a LIKE pattern with a leading wildcard |
+
+`QRY001` is not suppressible because the query cannot compile. The other
+diagnostics describe valid query shapes and set `Suppressible` to true. TiDB's
+[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
+recommends ordering paginated results and notes the increasing compute cost of
+larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
+
+`Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
+matching behavior is defined by TiDB's
+[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like).
+The static check does not claim a specific physical plan because indexes,
+statistics, collation, and optimizer behavior are connected concerns. Use
+`Explain` or `ExplainAnalyze` to verify the actual access path.
+
+The same builder can be used with `All`, `First`, `Only`, `Exists`, `Count`, or
+plan terminals, so this method checks only state explicitly stored on the
+builder. It does not report terminal-implied limits or an unbounded `All` call.
+Raw SQL is outside the typed query AST and is not inspected.
+
 ## Soft-delete scope
 
 A model with one field tagged `tidbgo:",soft_delete"` receives

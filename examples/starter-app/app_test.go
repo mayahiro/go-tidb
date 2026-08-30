@@ -65,6 +65,14 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 	}
 }
 
+func TestApplicationModelsPassOfflineChecks(t *testing.T) {
+	t.Parallel()
+
+	if diagnostics := CheckModels(); len(diagnostics) != 0 {
+		t.Fatalf("CheckModels() = %#v, want no diagnostics", diagnostics)
+	}
+}
+
 func TestApplicationRelationsUseOrdinaryGoValues(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +116,9 @@ func TestApplicationDecimalUsesDatabaseSQLInterfaces(t *testing.T) {
 func TestApplicationBuildsScalarQueryOffline(t *testing.T) {
 	t.Parallel()
 
+	if diagnostics := CheckRecentOrdersQuery(7, 1000); len(diagnostics) != 0 {
+		t.Fatalf("CheckRecentOrdersQuery() = %#v, want none", diagnostics)
+	}
 	sqlText, arguments, err := BuildRecentOrdersQuery(7, 1000)
 	if err != nil {
 		t.Fatalf("BuildRecentOrdersQuery() error = %v", err)
