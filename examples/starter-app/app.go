@@ -13,6 +13,7 @@ import (
 	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 var (
@@ -120,6 +121,16 @@ func CheckModels() []check.Diagnostic {
 	diagnostics = append(diagnostics, check.Model[Video]()...)
 	diagnostics = append(diagnostics, check.Model[WatchLater]()...)
 	return diagnostics
+}
+
+// CheckUserSchema parses a TiDB CREATE TABLE snapshot and checks its physical
+// compatibility with User without opening a database connection.
+func CheckUserSchema(sqlText string) ([]check.Diagnostic, error) {
+	catalog, err := physicalschema.Parse(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	return check.Schema[User](catalog), nil
 }
 
 // BuildRecentOrdersQuery compiles a keyset-paginated query without a database

@@ -142,6 +142,33 @@ Relation fieldはlazy loadを行わず、独立したloaded-state metadataも保
 
 詳細は[Struct model guide](docs/models_ja.md)と実行可能な[starter app example](examples/starter-app/README.md)を参照してください
 
+## Offline schema compatibility
+
+self-containedなTiDB `CREATE TABLE` snapshotを1回parseし、application modelごとにcheckします
+
+```go
+catalog, err := schema.Parse(schemaSQL)
+if err != nil {
+	return err
+}
+
+diagnostics := check.Schema[User](catalog)
+```
+
+どちらのoperationもofflineで動作し、SQLを実行しません
+
+比較は方向付きで、modelがmappingするcomputed以外のfieldには互換性のある物理columnを必要とし、databaseだけに存在するcolumnはnullable、default付き、generatedのいずれかなら許容します
+
+databaseだけに存在する必須columnはmodel insertが失敗する可能性があるためwarningになります
+
+ordered primary key、`AUTO_RANDOM`、native GoとSQLのtype family、nullability、writableなgenerated column、to-one Relation targetの物理unique性もstableな `CMP001` から `CMP011` でcheckします
+
+`schema.Parse` は通常のTiDB `CREATE TABLE` SQLとTiDB executable commentを含む `SHOW CREATE TABLE` outputを受け付けます
+
+schema dumpの `SET` や `DROP TABLE` などのwrapper statementは無視しますが、`ALTER TABLE` historyのreplayとlive databaseのinspectは行いません
+
+詳細は[Schema compatibility guide](docs/schema-checks_ja.md)を参照してください
+
 ## Struct-first scalar query
 
 exported Go field名を使い、validated SQLとbind argumentをofflineで構築します
@@ -467,7 +494,7 @@ command helpは `tidbgo --help` で表示できます
 - directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
-- database connection constructor、bundled protocol driver、Migration APIはまだ存在しない
+- database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License
 

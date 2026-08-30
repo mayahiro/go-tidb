@@ -14,8 +14,8 @@ planned is not available until the README marks it as implemented.
 
 - A struct-first application runtime for CRUD, explicit relations, deterministic SQL,
   transactions, historical reads, and opt-in query observations
-- Planned standalone development and deployment tools for diagnostics,
-  migration planning, migration application, and schema verification
+- Offline development diagnostics and planned standalone deployment tools for
+  migration planning, migration application, and connected schema verification
 
 The implemented runtime uses application-model metadata directly. Future
 tooling may share that metadata where it provides a concrete benefit, but
@@ -143,7 +143,12 @@ The currently implemented surface provides:
   runtime output
 - Same-session ServerRU reading for one completed DML statement through a pinned
   `*sql.Conn` or active `*sql.Tx`
-- Shared diagnostic data types for future offline and connected checks
+- Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
+  snapshots, including SHOW CREATE TABLE executable comments
+- Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
+  columns, type families, nullability, primary keys, `AUTO_RANDOM`, generated
+  columns, required database-only columns, and to-one target uniqueness
+- Shared diagnostic data types for offline and future connected checks
 - The `tidbgo version` command
 
 ## 4. Planned runtime surface
@@ -189,18 +194,20 @@ The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
 an optional source location, and an optional reference. Offline model checks
 currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
-use `QRY001` through `QRY004` and never include bind values.
+use `QRY001` through `QRY004` and never include bind values. Offline physical
+schema compatibility checks use `CMP001` through `CMP011`.
 
 The implemented offline checks cover executable model metadata, ignored and
 likely misplaced tags, primary-key and custom-scalar capabilities, invalid
-typed SELECTs, OFFSET pagination, unordered explicit pagination, and leading
-wildcard predicates. They do not require source generation, configuration, or
-a database connection. Terminal-specific unbounded-query detection, raw SQL,
-and physical schema facts are not inferred from a reusable query builder.
+typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
+wildcard predicates, directional model and SQL-snapshot compatibility, and
+to-one target uniqueness. They do not require source generation,
+configuration, or a database connection. Terminal-specific unbounded-query
+detection and raw SQL are not inferred from a reusable query builder.
 
 Planned catalogs cover:
 
-- Schema integrity and relation index shape
+- Performance index shape, foreign keys, and junction-table constraints
 - Unsafe mutations, large offsets, unbounded queries, and preload limits
 - Connected plan regressions and unexpectedly large scans
 - Probable N+1 behavior and query-count regressions
@@ -243,10 +250,11 @@ configuration.
   deletion, typed raw SQL, statement observation, and same-session ServerRU
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
   SELECT-only `EXPLAIN ANALYZE`
-- Implemented: offline struct-first model intent checks and typed SELECT
-  builder diagnostics
-- Planned next: source and terminal-aware static analysis, SQL dump and Go
-  struct compatibility checks, versioned migration tooling, historical reads,
+- Implemented: offline struct-first model intent checks, typed SELECT builder
+  diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
+  compatibility checks, and to-one target uniqueness checks
+- Planned next: source and terminal-aware static analysis, schema snapshot
+  generation and normalization, versioned migration tooling, historical reads,
   and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value
@@ -264,3 +272,6 @@ connected service instead of relying only on a version string.
 - [TiDB Cloud feature matrix](https://docs.pingcap.com/tidbcloud/features/)
 - [TiDB Cloud Starter FAQs](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter)
 - [Limited SQL features on TiDB X instances](https://docs.pingcap.com/tidbcloud/limited-sql-features-tidb-x/)
+- [CREATE TABLE statement](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)
+- [AUTO_RANDOM](https://docs.pingcap.com/tidbcloud/auto-random/)
+- [TiDB and MySQL compatibility](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)

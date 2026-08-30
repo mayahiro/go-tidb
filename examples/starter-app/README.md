@@ -10,6 +10,7 @@ It demonstrates the current struct-first foundation:
 - No project configuration file
 - No database connection for model inspection
 - Offline model-intent diagnostics through explicit model registration
+- Offline TiDB CREATE TABLE parsing and directional model compatibility checks
 - Inferred columns and an explicit default-equal column name in the first
   `tidbgo` tag position
 - Explicit physical table names through the zero-size `model.Meta` marker
@@ -47,7 +48,8 @@ application model does not need to mirror every physical column.
 
 See [app.go](app.go) for the models and queries and [app_test.go](app_test.go)
 for offline inspection through `model.Describe`, model-intent diagnostics
-through `check.Model`, and SQL construction through `orm.Query`.
+through `check.Model`, physical compatibility through `schema.Parse` and
+`check.Schema`, and SQL construction through `orm.Query`.
 
 Run the example test from the repository root:
 
@@ -95,13 +97,19 @@ its TiDB-reported ServerRU immediately afterward.
 `CheckModels` explicitly lists the application-owned model types and returns
 their diagnostics without source generation, configuration, or a database
 connection.
+`CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
+checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability, and
+required database-only columns entirely offline. The omitted database-managed
+`created_at` column is accepted because it has a default.
 
 Execution is available only when the caller explicitly passes an existing
-`*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation and SQL schema
-comparison are not implemented.
+`*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
+introspection, and migration application are not implemented.
 
 The [struct model guide](../../docs/models.md) documents the complete current
 mapping boundary. The [scalar query guide](../../docs/queries.md) documents the
 public query API, and the [mutation guide](../../docs/mutations.md) documents
 writes and raw SQL. The [statement observation guide](../../docs/observability.md)
 documents query logging and custom observers.
+The [schema compatibility guide](../../docs/schema-checks.md) documents the
+offline physical-schema boundary.

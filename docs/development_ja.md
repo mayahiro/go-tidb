@@ -38,7 +38,8 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 
 - `model`: application-owned Go structのcached offline metadata
 - `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
-- `check`: 将来のcheckで共有するdiagnostic data type
+- `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
+- `check`: shared diagnostic data typeとoffline model、query、physical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界
 - `cmd/tidbgo`: CLI entry point
 - `internal`: 非公開のloggingとredaction support
@@ -48,6 +49,21 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 `integration` moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependencyを所有し、local module replacementで現在のroot checkoutを使用します
 
 root moduleとその利用者へtest dependencyは伝播しません
+
+## Schema compatibility client benchmark
+
+CREATE TABLE parseとparse済みcatalogに対する1 model compatibility checkを計測します
+
+```sh
+go test ./schema -run '^$' -bench '^BenchmarkParse$' -benchmem -count=5
+go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
+```
+
+どちらのbenchmarkもofflineで動作し、SQL実行、connection open、actual RU消費を行いません
+
+`BenchmarkParse` はlexical analysisとcatalog constructionを含みます
+
+`BenchmarkSchema` はparse済みcatalogとcached model metadataを再利用します
 
 ## TiDB Cloud Starter integration test
 

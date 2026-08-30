@@ -216,9 +216,10 @@ is at most one edit from a known option such as `pk`, so an explicit
 default-equal column remains quiet. A physical column with the warned name is
 still valid.
 
-Physical column types, indexes, and constraints are outside this offline
-check. For example, confirming that a `has_one` target key is unique requires
-schema information and is not reported here.
+Physical column types, indexes, and constraints are outside this model-intent
+check. Parse a TiDB `CREATE TABLE` snapshot with `schema.Parse` and pass its
+catalog to `check.Schema` when those facts should be compared offline. See the
+[schema compatibility guide](schema-checks.md).
 
 ## Supported scalar representations
 
@@ -239,10 +240,12 @@ and does not import a decimal package for user-owned models.
 
 ## Current boundary
 
-This slice does not yet describe SQL column types, indexes, or physical
-constraints. The query runtime can compile SELECT and mutation statements
-offline and execute them through an explicitly supplied `database/sql`
-executor. `belongs_to` and `has_one` preloads use deterministic inline
+Model metadata intentionally does not duplicate SQL column types, indexes, or
+physical constraints. The separate `schema` and `check` packages can compare
+those facts from a SQL snapshot without changing the model. The query runtime
+can compile SELECT and mutation statements offline and execute them through an
+explicitly supplied `database/sql` executor. `belongs_to` and `has_one`
+preloads use deterministic inline
 `LEFT JOIN`s, while `has_many` and pure `many_to_many` preloads use
 deterministic secondary queries. They populate ordinary relation fields and
 support dot-separated nested paths, target projection, and collection

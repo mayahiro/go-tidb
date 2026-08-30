@@ -229,9 +229,11 @@ tagの第1要素は引き続きcolumn名です
 
 warning対象と同名の物理columnも有効です
 
-物理column type、index、constraintはこのoffline checkの対象外です
+物理column type、index、constraintはこのmodel-intent checkの対象外です
 
-例えば `has_one` のtarget keyがuniqueかどうかの確認にはschema情報が必要なため、ここでは報告しません
+これらの事実をofflineで比較する場合はTiDB `CREATE TABLE` snapshotを `schema.Parse` でparseし、そのcatalogを `check.Schema` へ渡します
+
+詳細は[Schema compatibility guide](schema-checks_ja.md)を参照してください
 
 ## 対応するscalar representation
 
@@ -252,7 +254,9 @@ applicationは任意のDecimalまたはidentifier libraryを選択できます
 
 ## 現在の境界
 
-現在のsliceではSQL column type、index、physical constraintをまだ表現しません
+model metadataはSQL column type、index、physical constraintを意図的に重複記載しません
+
+独立した `schema` と `check` packageがmodelを変更せずSQL snapshotからこれらの事実を比較できます
 
 query runtimeはSELECTとmutationをofflineでcompileし、明示的に渡した `database/sql` executorで実行できます
 

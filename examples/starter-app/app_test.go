@@ -73,6 +73,24 @@ func TestApplicationModelsPassOfflineChecks(t *testing.T) {
 	}
 }
 
+func TestApplicationSchemaCanBeCheckedOffline(t *testing.T) {
+	t.Parallel()
+
+	sqlText := `CREATE TABLE users (
+  id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
+  email VARCHAR(255) NOT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id)
+);`
+	diagnostics, err := CheckUserSchema(sqlText)
+	if err != nil {
+		t.Fatalf("CheckUserSchema() error = %v", err)
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("CheckUserSchema() = %#v, want no diagnostics", diagnostics)
+	}
+}
+
 func TestApplicationRelationsUseOrdinaryGoValues(t *testing.T) {
 	t.Parallel()
 

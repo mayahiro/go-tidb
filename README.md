@@ -138,6 +138,35 @@ track separate loaded-state metadata.
 See the [struct model guide](docs/models.md) and the runnable
 [starter app example](examples/starter-app/README.md).
 
+## Offline schema compatibility
+
+Parse a self-contained TiDB `CREATE TABLE` snapshot once and check each
+application model against it:
+
+```go
+catalog, err := schema.Parse(schemaSQL)
+if err != nil {
+	return err
+}
+
+diagnostics := check.Schema[User](catalog)
+```
+
+Both operations are offline and execute no SQL. The comparison is directional:
+every mapped, non-computed model field must have a compatible physical column,
+while database-only columns are accepted when they are nullable, defaulted, or
+generated. A required database-only column is a warning because it can make
+model inserts fail. The check also covers ordered primary keys, `AUTO_RANDOM`,
+native Go and SQL type families, nullability, writable generated columns, and
+physical uniqueness for to-one relation targets through stable `CMP001`
+through `CMP011` codes.
+
+`schema.Parse` accepts ordinary TiDB `CREATE TABLE` SQL and `SHOW CREATE TABLE`
+output, including TiDB executable comments. It ignores schema-dump wrapper
+statements such as `SET` and `DROP TABLE`, but does not replay `ALTER TABLE`
+history or inspect a live database. See the [schema compatibility
+guide](docs/schema-checks.md).
+
 ## Struct-first scalar queries
 
 Build validated SQL and bind arguments offline using exported Go field names:
@@ -450,8 +479,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
-- No database connection constructor, bundled protocol driver, or migration
-  API is available yet.
+- No database connection constructor, bundled protocol driver, migration
+  application API, or live-schema introspection API is available yet.
 
 ## License
 

@@ -40,7 +40,9 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `model`: cached offline metadata for application-owned Go structs
 - `orm`: offline query and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
-- `check`: shared diagnostic data types for future checks
+- `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
+- `check`: shared diagnostic data types and offline model, query, and physical
+  schema checks
 - `migrate`: reserved boundary for standalone migration tooling
 - `cmd/tidbgo`: CLI entry point
 - `internal`: non-public logging and redaction support
@@ -51,6 +53,20 @@ The `integration` module owns the
 [`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependency and
 uses the current root checkout through a local module replacement. The root
 module and its users do not inherit that test dependency
+
+## Schema compatibility client benchmarks
+
+Measure CREATE TABLE parsing and one pre-parsed model compatibility check:
+
+```sh
+go test ./schema -run '^$' -bench '^BenchmarkParse$' -benchmem -count=5
+go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
+```
+
+Both benchmarks are offline. They execute no SQL, open no connection, and
+consume no actual RU. `BenchmarkParse` includes lexical and catalog
+construction work. `BenchmarkSchema` reuses a parsed catalog and cached model
+metadata.
 
 ## TiDB Cloud Starter integration tests
 
