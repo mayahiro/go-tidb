@@ -5,9 +5,24 @@ import (
 	"fmt"
 )
 
-const explainPrefix = "EXPLAIN "
+const (
+	explainPrefix        = "EXPLAIN "
+	explainAnalyzePrefix = "EXPLAIN ANALYZE "
+)
 
 var explainColumnNames = [...]string{"id", "estRows", "task", "access object", "operator info"}
+
+var explainAnalyzeColumnNames = [...]string{
+	"id",
+	"estRows",
+	"actRows",
+	"task",
+	"access object",
+	"execution info",
+	"operator info",
+	"memory",
+	"disk",
+}
 
 // ExplainRow describes one operator in TiDB's default row-format EXPLAIN
 // output.
@@ -24,6 +39,29 @@ type ExplainRow struct {
 	OperatorInfo string
 }
 
+// ExplainAnalyzeRow describes one operator in TiDB's default row-format
+// EXPLAIN ANALYZE output.
+type ExplainAnalyzeRow struct {
+	// ID is the operator identifier and contains TiDB's plan-tree indentation.
+	ID string
+	// EstRows is TiDB's estimated number of output rows for the operator.
+	EstRows float64
+	// ActRows is the actual number of output rows observed for the operator.
+	ActRows int64
+	// Task identifies where TiDB executed the operator, such as root or cop.
+	Task string
+	// AccessObject describes the table, partition, or index that was accessed.
+	AccessObject string
+	// ExecutionInfo contains TiDB's operator timing, loops, RPC, and RU details.
+	ExecutionInfo string
+	// OperatorInfo contains operator-specific planning details.
+	OperatorInfo string
+	// Memory is TiDB's formatted peak operator memory usage or N/A.
+	Memory string
+	// Disk is TiDB's formatted peak operator disk usage or N/A.
+	Disk string
+}
+
 // Explain asks TiDB for the default row-format execution plan of this SELECT.
 //
 // Explain never accepts mutation or raw SQL because it is a terminal on
@@ -33,6 +71,31 @@ type ExplainRow struct {
 // the root SELECT, although TiDB can evaluate certain subqueries during query
 // optimization.
 func (q *SelectQuery[T]) Explain(ctx context.Context, executor QueryExecutor) ([]ExplainRow, error) {
+	rows, err := q.queryExplainRows(ctx, executor, StatementExplain, explainPrefix)
+	if err != nil {
+		return nil, err
+	}
+	return collectExplainRows(rows)
+}
+
+// ExplainAnalyze executes this SELECT and asks TiDB for its default row-format
+// runtime plan.
+//
+// Calling ExplainAnalyze is an explicit opt-in to executing the complete root
+// SELECT and consuming its database resources. It never accepts mutation or
+// raw SQL because it is a terminal on SelectQuery. The result includes actual
+// operator rows, execution details, memory, and disk usage. Inline to-one joins
+// execute as part of the root SELECT. Collection preload statements are not
+// executed or analyzed.
+func (q *SelectQuery[T]) ExplainAnalyze(ctx context.Context, executor QueryExecutor) ([]ExplainAnalyzeRow, error) {
+	rows, err := q.queryExplainRows(ctx, executor, StatementExplainAnalyze, explainAnalyzePrefix)
+	if err != nil {
+		return nil, err
+	}
+	return collectExplainAnalyzeRows(rows)
+}
+
+func (q *SelectQuery[T]) queryExplainRows(ctx context.Context, executor QueryExecutor, operation StatementOperation, prefix string) (queryResultRows, error) {
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return nil, err
 	}
@@ -40,19 +103,15 @@ func (q *SelectQuery[T]) Explain(ctx context.Context, executor QueryExecutor) ([
 	if err != nil {
 		return nil, err
 	}
-	statement := explainPrefix + compiled.statement.sql
-	rows, err := queryTextRowsOperation(
+	statement := prefix + compiled.statement.sql
+	return queryTextRowsOperation(
 		ctx,
 		executor,
-		StatementExplain,
-		"EXPLAIN",
+		operation,
+		string(operation),
 		statement,
 		compiled.arguments,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return collectExplainRows(rows)
 }
 
 func collectExplainRows(rows queryResultRows) ([]ExplainRow, error) {
@@ -79,12 +138,49 @@ func collectExplainRows(rows queryResultRows) ([]ExplainRow, error) {
 }
 
 func validateExplainColumns(columns []string) error {
-	if len(columns) != len(explainColumnNames) {
-		return fmt.Errorf("orm: TiDB EXPLAIN returned columns %q, want %q", columns, explainColumnNames)
+	return validatePlanColumns("EXPLAIN", columns, explainColumnNames[:])
+}
+
+func collectExplainAnalyzeRows(rows queryResultRows) ([]ExplainAnalyzeRow, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, fmt.Errorf("orm: read EXPLAIN ANALYZE columns: %w", err))
+	}
+	if err := validatePlanColumns("EXPLAIN ANALYZE", columns, explainAnalyzeColumnNames[:]); err != nil {
+		return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, err)
+	}
+
+	result := make([]ExplainAnalyzeRow, 0, 4)
+	for rows.Next() {
+		var row ExplainAnalyzeRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.EstRows,
+			&row.ActRows,
+			&row.Task,
+			&row.AccessObject,
+			&row.ExecutionInfo,
+			&row.OperatorInfo,
+			&row.Memory,
+			&row.Disk,
+		); err != nil {
+			return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, fmt.Errorf("orm: scan EXPLAIN ANALYZE row: %w", err))
+		}
+		result = append(result, row)
+	}
+	if err := finishRows("EXPLAIN ANALYZE", rows); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func validatePlanColumns(operation string, columns, expected []string) error {
+	if len(columns) != len(expected) {
+		return fmt.Errorf("orm: TiDB %s returned columns %q, want %q", operation, columns, expected)
 	}
 	for index, column := range columns {
-		if column != explainColumnNames[index] {
-			return fmt.Errorf("orm: TiDB EXPLAIN returned columns %q, want %q", columns, explainColumnNames)
+		if column != expected[index] {
+			return fmt.Errorf("orm: TiDB %s returned columns %q, want %q", operation, columns, expected)
 		}
 	}
 	return nil

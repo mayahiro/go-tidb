@@ -121,6 +121,43 @@ See TiDB's [EXPLAIN statement
 reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain/) and
 [execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/).
 
+### EXPLAIN ANALYZE
+
+Call `ExplainAnalyze` only when the typed SELECT should actually run:
+
+```go
+runtimePlan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    ExplainAnalyze(ctx, db)
+```
+
+The explicit method call is the opt-in. It executes the complete root SELECT
+without adding a protective limit, then returns a non-nil
+`[]orm.ExplainAnalyzeRow`. The result maps TiDB's nine default columns to
+`ID`, `EstRows`, `ActRows`, `Task`, `AccessObject`, `ExecutionInfo`,
+`OperatorInfo`, `Memory`, and `Disk`. It returns the runtime plan rather than
+hydrating application models.
+
+`ExplainAnalyze` has the same typed boundary as `Explain`: mutation builders
+and caller-supplied raw SQL cannot enter it, inline to-one joins are part of the
+root SELECT, and collection preload statements are excluded. It executes the
+SELECT and consumes its database resources; collecting the runtime plan can
+add overhead. Use the caller context for cancellation or a deadline, and do
+not run it automatically on production traffic. Adding `Limit` is an
+application decision because it changes the measured query and plan.
+
+TiDB includes the RU consumed by this execution in the top-level
+`ExecutionInfo`. `go-tidb` preserves that server text without parsing its
+format. RU and timing can vary between runs because of caches and service
+conditions.
+
+An observed call emits `StatementExplainAnalyze` after the SELECT executes and
+all plan rows are scanned and closed. The built-in logger renders
+`EXPLAIN ANALYZE` in bright yellow on a supported interactive terminal. Bind
+values remain opt-in. See TiDB's [EXPLAIN ANALYZE statement
+reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
+
 ## ServerRU
 
 `LastServerRU` reads the `ru_consumption` reported by TiDB for the last DML
@@ -165,10 +202,11 @@ FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter#how-can-i-
 
 ## Covered operations
 
-Typed and raw SELECTs, SELECT `EXPLAIN`, preloads, typed mutations,
-automatically split bulk mutations, relation mutations, and `RawExec` are
-observed. Typed upserts use the logical `UPSERT` operation. `RawExec` recognizes
-a leading `INSERT`, `UPDATE`, or `DELETE`; other raw mutations use `EXEC`.
+Typed and raw SELECTs, typed SELECT `EXPLAIN` and `EXPLAIN ANALYZE`, preloads,
+typed mutations, automatically split bulk mutations, relation mutations, and
+`RawExec` are observed. Typed upserts use the logical `UPSERT` operation.
+`RawExec` recognizes a leading `INSERT`, `UPDATE`, or `DELETE`; other raw
+mutations use `EXEC`.
 
 `Transaction` emits separate `BEGIN`, `COMMIT`, and `ROLLBACK` events. Statements
 executed through `go-tidb` inside its callback use the observer from the context

@@ -41,7 +41,7 @@ computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
 ## Soft delete scope
 
-`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain` へ `deleted_at IS NULL` を自動追加します
+`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
 
 active rowとlogical deleted rowの両方が必要な場合だけ `WithDeleted` を使います
 
@@ -163,7 +163,7 @@ custom non-pointer valueの `driver.Valuer` をNULL判定のために実行し�
 
 ## 明示的な実行
 
-`All`、`First`、`Only`、`Exists`、`Count`、`Explain` は既存executorを明示的に渡した場合だけI/Oを行います
+`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
 
 ```go
 orders, err := query.All(ctx, db)
@@ -180,6 +180,9 @@ count, err := orm.Query[Order]().
 plan, err := orm.Query[Order]().
     Where(orm.Equal("UserID", userID)).
     Explain(ctx, db)
+runtimePlan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    ExplainAnalyze(ctx, db)
 ```
 
 `*sql.DB`、`*sql.Conn`、`*sql.Tx` は `orm.QueryExecutor` を実装します
@@ -237,6 +240,16 @@ inline to-one joinはplanへ含みます
 collection preload statementはparent keyを必要とするため含みません
 
 field、runtime boundary、TiDB固有の注意事項は[Statement observation](observability_ja.md#select-explain)を参照してください
+
+`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `[]orm.ExplainAnalyzeRow` として返すexplicit opt-in terminalです
+
+queryを変更するとplanも変わるためprotective `LIMIT` を自動追加しません
+
+実行するSELECTのdatabase resourceとRUを消費し、runtime plan収集のoverheadも追加され得ます
+
+typed mutationとcaller-supplied raw SQLはこのpathへ入りません
+
+collection preload statementは引き続き対象外です
 
 driver登録とconnection securityはcallerの責任です
 
@@ -410,7 +423,7 @@ inline to-one Relationだけを含むpreloadは1 statementで実行するため�
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
 
 `IDs` は延期しています
 

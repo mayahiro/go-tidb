@@ -22,6 +22,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
 - SELECT-only TiDB execution-plan inspection through the typed query builder
+- Explicit SELECT execution with actual TiDB runtime-plan inspection
 - Explicit same-session ServerRU reading for one completed DML statement
 
 ## Supported scope
@@ -328,6 +329,23 @@ Collection preload statements are not included. TiDB can evaluate certain
 subqueries while optimizing an `EXPLAIN`. See the [statement observation
 guide](docs/observability.md#select-explain) for the complete boundary.
 
+Run the typed SELECT and collect actual operator data only when explicitly
+requested:
+
+```go
+runtimePlan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    ExplainAnalyze(ctx, db)
+```
+
+`ExplainAnalyze` returns actual rows, execution information, memory, and disk
+usage as `[]orm.ExplainAnalyzeRow`. It executes the complete root SELECT without
+adding a limit and consumes database resources and RU. Mutation, raw SQL, and
+collection preload statements remain outside this path. See the [runtime-plan
+boundary](docs/observability.md#explain-analyze) before enabling it in an
+application.
+
 Read TiDB's ServerRU for one completed DML statement from the same pinned
 session:
 
@@ -381,7 +399,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 ## Known limitations
 
 - The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
-  `Exists`, `Count`, and `Explain`; `IDs` is not implemented yet.
+  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
+  yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are

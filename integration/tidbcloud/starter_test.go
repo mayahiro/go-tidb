@@ -582,6 +582,9 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("SELECT EXPLAIN", func(t *testing.T) {
 		testSelectExplain(t, ctx, database, dsn)
 	})
+	t.Run("SELECT EXPLAIN ANALYZE", func(t *testing.T) {
+		testSelectExplainAnalyze(t, ctx, database, dsn)
+	})
 }
 
 func testSelectExplain(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
@@ -608,6 +611,41 @@ func testSelectExplain(t *testing.T, ctx context.Context, database *sql.DB, dsn 
 	}
 	if !foundTable {
 		t.Fatalf("SELECT EXPLAIN plan does not reference tidbgo_it_orders: %#v", plan)
+	}
+}
+
+func testSelectExplainAnalyze(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	plan, err := orm.Query[starterOrder]().
+		Select("ID", "UserID", "Total").
+		Where(orm.Equal("ID", int64(11))).
+		ExplainAnalyze(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain analyze starter order SELECT", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("SELECT EXPLAIN ANALYZE returned an empty plan")
+	}
+	foundTable := false
+	foundActualRootRow := false
+	foundRU := false
+	for index, row := range plan {
+		if row.ID == "" || row.Task == "" || row.EstRows < 0 || row.ActRows < 0 || row.ExecutionInfo == "" || row.Memory == "" || row.Disk == "" {
+			t.Fatalf("SELECT EXPLAIN ANALYZE row %d = %#v", index, row)
+		}
+		if strings.Contains(row.AccessObject, "table:tidbgo_it_orders") {
+			foundTable = true
+		}
+		if row.Task == "root" && row.ActRows == 1 {
+			foundActualRootRow = true
+		}
+		if strings.Contains(row.ExecutionInfo, "RU:") {
+			foundRU = true
+		}
+	}
+	if !foundTable || !foundActualRootRow || !foundRU {
+		t.Fatalf("SELECT EXPLAIN ANALYZE plan lacks table, actual root row, or RU data: %#v", plan)
 	}
 }
 

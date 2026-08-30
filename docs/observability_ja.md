@@ -132,6 +132,47 @@ bind valueは `IncludeStatementArguments` を有効にしない限り除外し�
 
 TiDBの[EXPLAIN statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain/)と[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)を参照してください
 
+### EXPLAIN ANALYZE
+
+typed SELECTを実際に実行する場合だけ `ExplainAnalyze` を呼び出します
+
+```go
+runtimePlan, err := orm.Query[User]().
+    Select("ID", "Email").
+    Where(orm.Equal("Email", email)).
+    ExplainAnalyze(ctx, db)
+```
+
+明示的なmethod call自体がopt-inです
+
+protective limitを追加せずcompleteなroot SELECTを実行し、non-nilな `[]orm.ExplainAnalyzeRow` を返します
+
+TiDB default formatの9 columnを `ID`、`EstRows`、`ActRows`、`Task`、`AccessObject`、`ExecutionInfo`、`OperatorInfo`、`Memory`、`Disk` へ対応させます
+
+application modelをhydrateせずruntime planを返します
+
+`Explain` と同じtyped boundaryを持ち、mutation builderとcaller-supplied raw SQLは対象外です
+
+inline to-one joinはroot SELECTの一部として実行し、collection preload statementは除外します
+
+SELECT自体のdatabase resourceを消費し、runtime plan収集のoverheadも追加され得ます
+
+cancellationまたはdeadlineにはcaller contextを使い、production trafficへ自動実行しないでください
+
+`Limit` の追加は測定するqueryとplanを変更するためapplication側の判断とします
+
+TiDBは今回の実行で消費したRUをtop-level `ExecutionInfo` へ含めます
+
+`go-tidb` はserver textのformatをparseせず保持します
+
+cacheとservice conditionによってRUとtimingは実行ごとに変化し得ます
+
+observerを設定した場合はSELECT実行と全plan rowのscanおよびclose後に `StatementExplainAnalyze` を生成します
+
+built-in loggerは対応するinteractive terminalで `EXPLAIN ANALYZE` をbright yellowにし、bind valueはopt-inのままです
+
+TiDBの[EXPLAIN ANALYZE statement reference](https://docs.pingcap.com/ja/tidb/stable/sql-statement-explain-analyze/)を参照してください
+
 ## ServerRU
 
 `LastServerRU` は同じsessionに記録された最後のDML statementについて、TiDBが報告する `ru_consumption` を取得します
@@ -176,7 +217,7 @@ TiDBの[`tidb_last_query_info` system variable reference](https://docs.pingcap.c
 
 ## 対象operation
 
-typedとrawのSELECT、SELECT `EXPLAIN`、preload、typed mutation、自動分割したbulk mutation、Relation mutation、`RawExec` を観測します
+typedとrawのSELECT、typed SELECTの `EXPLAIN` と `EXPLAIN ANALYZE`、preload、typed mutation、自動分割したbulk mutation、Relation mutation、`RawExec` を観測します
 
 typed upsertはlogical `UPSERT` operationを使います
 

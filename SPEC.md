@@ -137,6 +137,8 @@ The currently implemented surface provides:
   argument values excluded by default and available through an explicit option
 - SELECT-only execution-plan inspection using TiDB's default row-format
   `EXPLAIN` output
+- Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
+  runtime output
 - Same-session ServerRU reading for one completed DML statement through a pinned
   `*sql.Conn` or active `*sql.Tx`
 - Shared diagnostic data types for future offline and connected checks
@@ -229,9 +231,9 @@ configuration.
 - Implemented: offline struct metadata, query construction and execution,
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
   deletion, typed raw SQL, statement observation, and same-session ServerRU
-  reading, plus SELECT-only `EXPLAIN`
-- In progress: opt-in SELECT-only `EXPLAIN ANALYZE` and query-level debug
-  reports
+  reading, plus SELECT-only `EXPLAIN` and explicit SELECT-only
+  `EXPLAIN ANALYZE`
+- In progress: query-level debug reports
 - Planned next: struct-first and query static analysis, SQL dump and Go struct
   compatibility checks, versioned migration tooling, historical reads, and
   release hardening

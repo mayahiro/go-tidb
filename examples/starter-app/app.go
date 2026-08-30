@@ -146,6 +146,15 @@ func ExplainUserByEmail(ctx context.Context, executor orm.QueryExecutor, email s
 		Explain(ctx, executor)
 }
 
+// ExplainAnalyzeUserByEmail executes the typed lookup and returns TiDB's
+// runtime execution plan.
+func ExplainAnalyzeUserByEmail(ctx context.Context, executor orm.QueryExecutor, email string) ([]orm.ExplainAnalyzeRow, error) {
+	return orm.Query[User]().
+		Select("ID", "Email").
+		Where(orm.Equal("Email", email)).
+		ExplainAnalyze(ctx, executor)
+}
+
 // FindUserByEmailWithServerRU runs one query on a pinned connection and reads
 // the ServerRU reported by TiDB for that completed DML statement.
 func FindUserByEmailWithServerRU(ctx context.Context, connection *sql.Conn, email string) (User, float64, error) {

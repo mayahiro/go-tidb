@@ -39,8 +39,8 @@ order. Computed fields are available only through aliased `Raw[T]` results.
 
 A model with one field tagged `tidbgo:",soft_delete"` receives
 `deleted_at IS NULL` automatically in `Build`, `All`, `First`, `Only`,
-`Exists`, `Count`, and `Explain`. Use `WithDeleted` only when both active and
-logically deleted root rows are required:
+`Exists`, `Count`, `Explain`, and `ExplainAnalyze`. Use `WithDeleted` only when
+both active and logically deleted root rows are required:
 
 ```go
 allVideos, err := orm.Query[Video]().
@@ -150,8 +150,8 @@ representation when NULL must be expressed.
 
 ## Execute explicitly
 
-`All`, `First`, `Only`, `Exists`, `Count`, and `Explain` perform I/O only when
-an existing executor is passed explicitly:
+`All`, `First`, `Only`, `Exists`, `Count`, `Explain`, and `ExplainAnalyze`
+perform I/O only when an existing executor is passed explicitly:
 
 ```go
 orders, err := query.All(ctx, db)
@@ -168,6 +168,9 @@ count, err := orm.Query[Order]().
 plan, err := orm.Query[Order]().
     Where(orm.Equal("UserID", userID)).
     Explain(ctx, db)
+runtimePlan, err := orm.Query[Order]().
+    Where(orm.Equal("UserID", userID)).
+    ExplainAnalyze(ctx, db)
 ```
 
 `*sql.DB`, `*sql.Conn`, and `*sql.Tx` implement `orm.QueryExecutor`. Terminals
@@ -210,6 +213,14 @@ enter this path. Inline to-one joins are part of the plan. Collection preload
 statements require parent keys and are not included. See [Statement
 observation](observability.md#select-explain) for the fields, runtime boundary,
 and TiDB-specific caveats.
+
+`ExplainAnalyze` is the explicit opt-in terminal that executes the complete
+root SELECT and returns TiDB's runtime plan as `[]orm.ExplainAnalyzeRow`. It
+does not add a protective `LIMIT`, because changing the query would change the
+measured plan. It consumes the executed SELECT's database resources and RU,
+and runtime-plan collection can add overhead. Typed mutations and
+caller-supplied raw SQL cannot enter this path. Collection preload statements
+remain excluded.
 
 The caller remains responsible for driver registration and connection
 security. `go-tidb` does not currently include a MySQL protocol driver or a
@@ -370,8 +381,8 @@ executes as one statement and does not need a cross-statement snapshot.
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, `Explain`, direct and pure many-to-many relation predicates, and
-nested direct or pure many-to-many preloads with target projection, collection
-ordering, and per-path soft-delete scope.
+`Count`, `Explain`, `ExplainAnalyze`, direct and pure many-to-many relation
+predicates, and nested direct or pure many-to-many preloads with target
+projection, collection ordering, and per-path soft-delete scope.
 `IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and
 other SQL outside the scalar builder surface.

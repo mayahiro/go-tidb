@@ -20,6 +20,8 @@ const (
 	StatementSelect StatementOperation = "SELECT"
 	// StatementExplain identifies a SELECT execution-plan inspection.
 	StatementExplain StatementOperation = "EXPLAIN"
+	// StatementExplainAnalyze identifies an executed SELECT plan inspection.
+	StatementExplainAnalyze StatementOperation = "EXPLAIN ANALYZE"
 	// StatementInsert identifies a single or bulk INSERT.
 	StatementInsert StatementOperation = "INSERT"
 	// StatementUpsert identifies INSERT ON DUPLICATE KEY UPDATE.
@@ -347,6 +349,8 @@ func statementOperationColor(operation StatementOperation) string {
 		return "\x1b[32m"
 	case StatementExplain:
 		return "\x1b[96m"
+	case StatementExplainAnalyze:
+		return "\x1b[93m"
 	case StatementInsert:
 		return "\x1b[34m"
 	case StatementUpsert:
