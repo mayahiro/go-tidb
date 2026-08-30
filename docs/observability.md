@@ -85,6 +85,48 @@ panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited observer.
 
+## ServerRU
+
+`LastServerRU` reads the `ru_consumption` reported by TiDB for the last DML
+statement recorded on the same session:
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().
+    Where(orm.Equal("Active", true)).
+    All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+The `ServerRUSession` constraint accepts only a pinned `*sql.Conn` or an active
+`*sql.Tx`. A pooled `*sql.DB` is excluded at compile time because the metric is
+a session variable and a follow-up query can use another connection. ORM query
+terminals consume and close their rows before returning. When the measured SQL
+is executed outside an ORM terminal, close all rows before reading the metric.
+
+Each read executes `SELECT @@tidb_last_query_info` and therefore adds one
+database round trip. It is a diagnostic read and does not emit a
+`StatementEvent`. Call it immediately after the target DML statement. For an
+operation with preloads, automatically split bulk writes, or any other
+multi-statement path, it reports only the last DML statement and does not
+aggregate the operation.
+
+ServerRU is the statement value reported by TiDB. It is not billed RU and can
+vary between executions because of caches and service conditions. A missing,
+null, malformed, negative, or otherwise invalid `ru_consumption` is returned as
+an error. See TiDB's [`tidb_last_query_info` system variable
+reference](https://docs.pingcap.com/tidb/stable/system-variables/#tidb_last_query_info)
+and the [TiDB Cloud Starter RU
+FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter#how-can-i-estimate-the-number-of-rus-required-by-my-workloads-and-plan-my-monthly-budget).
+
 ## Covered operations
 
 Typed and raw SELECTs, preloads, typed mutations, automatically split bulk

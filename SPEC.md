@@ -135,6 +135,8 @@ The currently implemented surface provides:
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   argument values excluded by default and available through an explicit option
+- Same-session ServerRU reading for one completed DML statement through a pinned
+  `*sql.Conn` or active `*sql.Tx`
 - Shared diagnostic data types for future offline and connected checks
 - The `tidbgo version` command
 
@@ -143,7 +145,6 @@ The currently implemented surface provides:
 The struct-first runtime is planned to provide:
 
 - Read-only `AsOf` and fixed-duration stale snapshot clients
-- Server RU measurement
 
 Per-parent preload limits, opaque cursors, lazy loading, automatic query-plan
 selection, and object-graph persistence are outside v0.1.
@@ -225,9 +226,10 @@ configuration.
   `tidbgo version` command, and shared diagnostic data types
 - Implemented: offline struct metadata, query construction and execution,
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
-  deletion, typed raw SQL, and statement observation
-- In progress: Server RU measurement, SELECT-only `EXPLAIN` and opt-in
-  `EXPLAIN ANALYZE`, and query-level debug reports
+  deletion, typed raw SQL, statement observation, and same-session ServerRU
+  reading
+- In progress: SELECT-only `EXPLAIN`, opt-in `EXPLAIN ANALYZE`, and query-level
+  debug reports
 - Planned next: struct-first and query static analysis, SQL dump and Go struct
   compatibility checks, versioned migration tooling, historical reads, and
   release hardening

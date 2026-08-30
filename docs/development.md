@@ -83,12 +83,24 @@ for this suite. See the driver's
 The suite limits the connection pool to one connection. It covers scalar
 terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
-`AUTO_RANDOM`, typed raw SQL, soft deletion, restore, and
-transaction commit and rollback paths
+`AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
+rollback paths, and same-session ServerRU reads
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
+
+## ServerRU client benchmark
+
+Measure the client-side cost of reading and decoding one ServerRU value:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
+```
+
+This benchmark uses a local `database/sql` test driver. It includes the
+`database/sql` row path and JSON decoding but excludes the MySQL driver,
+network round trip, TiDB execution, and actual RU consumption
 
 ## Driver transport benchmark
 

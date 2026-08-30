@@ -91,6 +91,48 @@ custom observerは短時間でreturnし、contextを共有する場合はconcurr
 
 `WithStatementObserver` へnilを渡すと継承したobserverを無効化します
 
+## ServerRU
+
+`LastServerRU` は同じsessionに記録された最後のDML statementについて、TiDBが報告する `ru_consumption` を取得します
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().
+    Where(orm.Equal("Active", true)).
+    All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+`ServerRUSession` constraintが受け付けるのはpinned `*sql.Conn` またはactiveな `*sql.Tx` だけです
+
+metricはsession variableでありfollow-up queryが別connectionを使い得るため、pooled `*sql.DB` はcompile時に対象外となります
+
+ORM query terminalはreturn前にrowを最後まで処理してcloseします
+
+ORM terminal以外で測定対象SQLを実行する場合はmetricを読む前に全rowをcloseしてください
+
+取得ごとに `SELECT @@tidb_last_query_info` を実行するため1 database round tripを追加します
+
+diagnostic readは `StatementEvent` を生成しません
+
+対象DML statementの直後に呼び出してください
+
+preload、自動分割bulk write、その他のmulti-statement pathでは最後の1 DML statementだけを返し、operation全体を合計しません
+
+ServerRUはTiDBが報告するstatement valueであり請求RUではなく、cacheやservice conditionによって実行ごとに変化し得ます
+
+`ru_consumption` が欠落、null、不正JSON、負数、その他の不正値の場合はerrorを返します
+
+TiDBの[`tidb_last_query_info` system variable reference](https://docs.pingcap.com/tidb/stable/system-variables/#tidb_last_query_info)と[TiDB Cloud Starter RU FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/?plan=starter#how-can-i-estimate-the-number-of-rus-required-by-my-workloads-and-plan-my-monthly-budget)を参照してください
+
 ## 対象operation
 
 typedとrawのSELECT、preload、typed mutation、自動分割したbulk mutation、Relation mutation、`RawExec` を観測します

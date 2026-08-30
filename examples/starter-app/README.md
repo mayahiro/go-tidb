@@ -34,6 +34,7 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Context-scoped statement logging with automatic terminal colors and no bind
   argument values
+- Explicit same-session ServerRU reading for one completed DML statement
 
 `User` intentionally omits a database-managed `created_at` column because an
 application model does not need to mirror every physical column.
@@ -73,6 +74,8 @@ pure-junction relation mutations.
 `orm.Raw[User]`.
 `WithQueryLog` enables the built-in statement logger for selected operations
 without replacing the application-owned executor.
+`FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
+its TiDB-reported ServerRU immediately afterward.
 
 Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation and SQL schema

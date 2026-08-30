@@ -138,6 +138,17 @@ func FindUserByEmail(ctx context.Context, executor orm.QueryExecutor, email stri
 		Only(ctx, executor)
 }
 
+// FindUserByEmailWithServerRU runs one query on a pinned connection and reads
+// the ServerRU reported by TiDB for that completed DML statement.
+func FindUserByEmailWithServerRU(ctx context.Context, connection *sql.Conn, email string) (User, float64, error) {
+	user, err := FindUserByEmail(ctx, connection, email)
+	if err != nil {
+		return User{}, 0, err
+	}
+	serverRU, err := orm.LastServerRU(ctx, connection)
+	return user, serverRU, err
+}
+
 // HasUserWithEmail reports whether an email address is already present through
 // an explicitly supplied database/sql executor.
 func HasUserWithEmail(ctx context.Context, executor orm.QueryExecutor, email string) (bool, error) {

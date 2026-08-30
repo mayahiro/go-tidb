@@ -576,6 +576,59 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("statement observation", func(t *testing.T) {
 		testStatementObservation(t, ctx, database, dsn)
 	})
+	t.Run("same-session ServerRU", func(t *testing.T) {
+		testServerRU(t, ctx, database, dsn)
+	})
+}
+
+func testServerRU(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+	t.Helper()
+
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "reserve connection for ServerRU", err)
+	}
+	defer func() {
+		if err := connection.Close(); err != nil {
+			t.Errorf("close ServerRU connection: %s", redact.Error(err, dsn))
+		}
+	}()
+
+	if _, err := orm.Query[starterOrder]().
+		Where(orm.Equal("ID", int64(11))).
+		Only(ctx, connection); err != nil {
+		fatalDatabaseError(t, dsn, "execute ServerRU connection query", err)
+	}
+	serverRU, err := orm.LastServerRU(ctx, connection)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "read connection ServerRU", err)
+	}
+	if serverRU <= 0 {
+		t.Fatalf("connection ServerRU = %v, want a positive value", serverRU)
+	}
+
+	transaction, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "begin ServerRU transaction", err)
+	}
+	if _, err := orm.Query[starterOrder]().
+		Where(orm.Equal("ID", int64(12))).
+		Only(ctx, transaction); err != nil {
+		_ = transaction.Rollback()
+		fatalDatabaseError(t, dsn, "execute ServerRU transaction query", err)
+	}
+	transactionRU, err := orm.LastServerRU(ctx, transaction)
+	if err != nil {
+		_ = transaction.Rollback()
+		fatalDatabaseError(t, dsn, "read transaction ServerRU", err)
+	}
+	if transactionRU <= 0 {
+		_ = transaction.Rollback()
+		t.Fatalf("transaction ServerRU = %v, want a positive value", transactionRU)
+	}
+	if err := transaction.Rollback(); err != nil {
+		fatalDatabaseError(t, dsn, "roll back ServerRU transaction", err)
+	}
 }
 
 func testConditionalUpdates(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {

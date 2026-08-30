@@ -20,6 +20,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
 - terminalの自動色付きcontext-scoped statement observation
+- 完了した1 DML statementに対する明示的なsame-session ServerRU取得
 
 ## サポート範囲
 
@@ -333,6 +334,32 @@ interactive terminalでは自動的に色を付け、redirect先にはplain text
 lifecycleの対象、custom observer、logの安全境界は[Statement observation guide](docs/observability_ja.md)を参照してください
 
 bind argument valueが必要な場合だけ `IncludeStatementArguments` で明示的に有効化できます
+
+完了した1 DML statementについて、同じpinned sessionからTiDBのServerRUを取得できます
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+`LastServerRU` が受け付けるのは `*sql.Conn` またはactiveな `*sql.Tx` だけです
+
+2回目のcallが別のpooled connectionを使い得るため `*sql.DB` は対象外です
+
+1 round tripを追加し、sessionに記録された最後の1 DML statementだけを返すため、preloadや分割bulk operationのRUは合計しません
+
+ServerRUはTiDBが報告するdiagnostic valueであり請求RUではありません
+
+詳細は[Statement observation guide](docs/observability_ja.md#serverru)を参照してください
 
 ## CLI
 

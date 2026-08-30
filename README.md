@@ -21,6 +21,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
+- Explicit same-session ServerRU reading for one completed DML statement
 
 ## Supported scope
 
@@ -307,6 +308,30 @@ terminal output uses colors automatically, while redirected output is plain
 text. See the [statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
+
+Read TiDB's ServerRU for one completed DML statement from the same pinned
+session:
+
+```go
+connection, err := db.Conn(ctx)
+if err != nil {
+    return err
+}
+defer connection.Close()
+
+users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, connection)
+if err != nil {
+    return err
+}
+serverRU, err := orm.LastServerRU(ctx, connection)
+```
+
+`LastServerRU` accepts only `*sql.Conn` or an active `*sql.Tx`; `*sql.DB` is
+excluded because a second call can use another pooled connection. It adds one
+round trip and reports only the last DML statement recorded on the session, so
+a preload or split bulk operation is not aggregated. ServerRU is a diagnostic
+value reported by TiDB and is not billed RU. See the [statement observation
+guide](docs/observability.md#serverru) for the complete boundary.
 
 ## CLI
 

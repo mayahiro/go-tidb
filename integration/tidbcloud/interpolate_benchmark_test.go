@@ -3,20 +3,17 @@ package tidbcloud
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+
+	"github.com/mayahiro/go-tidb/orm"
 )
 
 const interpolateBenchmarkQuery = "SELECT id FROM tidbgo_it_users WHERE email = ?"
-
-type lastQueryInfo struct {
-	RUConsumption *float64 `json:"ru_consumption"`
-}
 
 func BenchmarkTiDBCloudStarterInterpolateParams(b *testing.B) {
 	dsn := os.Getenv(testDSNEnvironment)
@@ -90,7 +87,7 @@ func benchmarkInterpolateParams(b *testing.B, ctx context.Context, baseConfig *m
 		if err := executeInterpolateBenchmarkQuery(ctx, connection); err != nil {
 			fatalDatabaseError(b, dsn, "sample benchmark RU", err)
 		}
-		ru, err := lastStatementRU(ctx, connection)
+		ru, err := orm.LastServerRU(ctx, connection)
 		if err != nil {
 			fatalDatabaseError(b, dsn, "read benchmark RU", err)
 		}
@@ -108,19 +105,4 @@ func executeInterpolateBenchmarkQuery(ctx context.Context, connection *sql.Conn)
 		return fmt.Errorf("interpolateParams benchmark ID = %d, want 1", id)
 	}
 	return nil
-}
-
-func lastStatementRU(ctx context.Context, connection *sql.Conn) (float64, error) {
-	var raw string
-	if err := connection.QueryRowContext(ctx, "SELECT @@tidb_last_query_info").Scan(&raw); err != nil {
-		return 0, err
-	}
-	var info lastQueryInfo
-	if err := json.Unmarshal([]byte(raw), &info); err != nil {
-		return 0, err
-	}
-	if info.RUConsumption == nil {
-		return 0, fmt.Errorf("tidb_last_query_info did not contain ru_consumption")
-	}
-	return *info.RUConsumption, nil
 }
