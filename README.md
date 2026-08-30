@@ -7,12 +7,14 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
-[Statement observation](docs/observability.md) | [Development](docs/development.md)
+[Offline checks](docs/checks.md) | [Statement observation](docs/observability.md) |
+[Development](docs/development.md)
 
 ## Available features
 
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction
+- Reasoned diagnostic suppression and deterministic text or JSON CLI reports
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -441,7 +443,29 @@ guide](docs/observability.md#serverru) for the complete boundary.
 
 ## CLI
 
-The `tidbgo` CLI currently exposes version information only:
+Report an application-owned JSON diagnostic array from standard input or one
+explicit file:
+
+```sh
+go run ./examples/starter-app/cmd/check | tidbgo check
+tidbgo check diagnostics.json --json
+```
+
+Active errors return status `1`; warnings and info do not fail the command.
+Suppressions require an exact code and reason, remain visible in the report,
+and reject non-suppressible or unused entries:
+
+```sh
+go run ./examples/starter-app/cmd/check | \
+  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
+```
+
+The application check command explicitly selects model types, query builders,
+and schema snapshots. `tidbgo check` performs no source scan, code generation,
+configuration discovery, or database access. See the [offline diagnostic
+report guide](docs/checks.md)
+
+Print version information with:
 
 ```sh
 tidbgo version

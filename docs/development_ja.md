@@ -26,6 +26,7 @@ checkoutから現在のcommandを直接実行します
 
 ```sh
 go run ./cmd/tidbgo version
+go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
 ```
 
 release artifactをbuildする場合はGo linkerでversionを設定します
@@ -39,7 +40,7 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `model`: application-owned Go structのcached offline metadata
 - `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
 - `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
-- `check`: shared diagnostic data typeとoffline model、query、physical schema check
+- `check`: shared diagnostic data type、reason付きreportとsuppression、offline model、query、physical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界
 - `cmd/tidbgo`: CLI entry point
 - `internal`: 非公開のloggingとredaction support

@@ -59,6 +59,8 @@ diagnostics describe valid query shapes and set `Suppressible` to true. TiDB's
 [pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
 recommends ordering paginated results and notes the increasing compute cost of
 larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
+Reasoned report and suppression behavior is documented in the [offline
+diagnostic report guide](checks.md).
 
 `Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
 matching behavior is defined by TiDB's

@@ -62,6 +62,8 @@ queryをcompileできないため、`QRY001` はsuppressibleではありませ�
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
 
+reason付きreportとsuppressionの挙動は[Offline diagnostic report guide](checks_ja.md)を参照してください
+
 TiDBの[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)はpaginated resultのorderを推奨し、offsetが大きくなるほどcompute resourceを消費すると説明しています
 
 applicationでstable cursorを保持できる場合は `SeekAfter` を優先します

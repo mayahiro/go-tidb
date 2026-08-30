@@ -101,10 +101,10 @@ runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
 Invalid model metadata is returned through the existing non-suppressible
 `MOD001` diagnostic before physical compatibility is evaluated.
 
-Warnings are suppressible in the shared diagnostic representation. A built-in
-suppression configuration and CLI report are not currently implemented.
-Errors represent an executable mapping or cardinality conflict and are not
-suppressible.
+Warnings are suppressible in the shared diagnostic representation through
+`check.NewReport` or `tidbgo check`. Errors represent an executable mapping or
+cardinality conflict and are not suppressible. See the [offline diagnostic
+report guide](checks.md).
 
 ## Type-check boundary
 

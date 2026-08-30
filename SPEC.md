@@ -96,6 +96,9 @@ The following decisions apply throughout v0.1:
 13. Raw SQL is an explicit escape hatch without typed relation hydration or
     static query-AST diagnostics. Returned columns may still use model-aware
     scanning.
+14. Offline checks are selected explicitly by application code. Diagnostic
+    reporting performs no source scan, generated registration, configuration
+    discovery, or database access.
 
 ### 3.1 Implemented surface
 
@@ -148,8 +151,9 @@ The currently implemented surface provides:
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
   columns, type families, nullability, primary keys, `AUTO_RANDOM`, generated
   columns, required database-only columns, and to-one target uniqueness
-- Shared diagnostic data types for offline and future connected checks
-- The `tidbgo version` command
+- Shared diagnostic data types, immutable active and suppressed reports, and
+  exact-code suppression with a required recorded reason
+- The `tidbgo version` command and `tidbgo check` text or JSON report command
 
 ## 4. Planned runtime surface
 
@@ -205,6 +209,17 @@ to-one target uniqueness. They do not require source generation,
 configuration, or a database connection. Terminal-specific unbounded-query
 detection and raw SQL are not inferred from a reusable query builder.
 
+`check.NewReport` applies one fixed policy: active errors fail, while warnings
+and info remain successful. A suppression matches every suppressible
+diagnostic with one exact code, requires a non-empty reason, and remains in the
+report with that reason. Duplicate codes, unused suppressions, and attempts to
+suppress non-suppressible diagnostics are rejected.
+
+`tidbgo check` reads one JSON diagnostic array from standard input or one
+explicit file. It emits deterministic text by default or the complete report
+with `--json`, returns status `1` for active errors, and performs no check
+discovery or database access.
+
 Planned catalogs cover:
 
 - Performance index shape, foreign keys, and junction-table constraints
@@ -215,9 +230,9 @@ Planned catalogs cover:
 - Migration checksums, destructive changes, unsupported Starter SQL, schema
   drift, and migration locking
 
-Suppression will require a reason and will itself remain visible in reports.
-Safety errors such as unqualified updates and deletes will not be generally
-suppressible.
+Future diagnostics continue to choose suppressibility as part of each rule
+contract. Safety errors such as unqualified updates and deletes will not be
+generally suppressible.
 
 ## 7. Configuration
 

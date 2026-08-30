@@ -96,9 +96,11 @@ value-formの `time.Time` soft-delete fieldはruntimeがSQL `NULL` をzero time�
 
 warningはshared diagnostic representationでsuppressibleです
 
-built-in suppression configurationとCLI reportは現時点では未実装です
+`check.NewReport` または `tidbgo check` でreason付きsuppressionを適用できます
 
 errorは実行可能なmappingまたはcardinalityの矛盾を表すためsuppressibleではありません
+
+詳細は[Offline diagnostic report guide](checks_ja.md)を参照してください
 
 ## Type checkの境界
 

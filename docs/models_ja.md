@@ -219,7 +219,9 @@ runtimeがmodelをcompileできないため、`MOD001` はsuppressibleではあ�
 
 他のdiagnosticは有効または無視される宣言を対象とし、`Suppressible` をtrueにします
 
-built-inのsuppression configurationは現時点で提供せず、callerがtestまたはtoolingで各diagnosticの扱いを決めます
+reason付きsuppressionは `check.NewReport` または `tidbgo check` で適用します
+
+詳細は[Offline diagnostic report guide](checks_ja.md)を参照してください
 
 `MOD004` はmapping behaviorを変更しません
 

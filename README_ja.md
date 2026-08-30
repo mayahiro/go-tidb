@@ -6,12 +6,14 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 [English](README.md) | [Struct model](docs/models_ja.md) |
 [Query](docs/queries_ja.md) | [Mutationとraw SQL](docs/mutations_ja.md) |
-[Statement observation](docs/observability_ja.md) | [Development](docs/development_ja.md)
+[Offline check](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
+[Development](docs/development_ja.md)
 
 ## 利用できる機能
 
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
+- reason付きdiagnostic suppressionと決定的なtextまたはJSON CLI report
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -465,7 +467,29 @@ ServerRUはTiDBが報告するdiagnostic valueであり請求RUではありま�
 
 ## CLI
 
-`tidbgo` CLIで現在利用できるのはversion情報だけです
+applicationが所有するJSON diagnostic arrayをstandard inputまたは1個の明示的なfileからreportします
+
+```sh
+go run ./examples/starter-app/cmd/check | tidbgo check
+tidbgo check diagnostics.json --json
+```
+
+active errorがある場合はstatus `1`、warningとinfoだけの場合はsuccessになります
+
+suppressionにはexact codeとreasonが必須でreportへ残り、non-suppressibleまたは未使用の指定はerrorになります
+
+```sh
+go run ./examples/starter-app/cmd/check | \
+  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
+```
+
+application側のcheck commandがmodel type、query builder、schema snapshotを明示的に選択します
+
+`tidbgo check` はsource scan、code generation、configuration discovery、DB accessを行いません
+
+詳細は[Offline diagnostic report guide](docs/checks_ja.md)を参照してください
+
+version情報は次のcommandで出力します
 
 ```sh
 tidbgo version

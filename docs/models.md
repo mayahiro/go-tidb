@@ -206,9 +206,9 @@ registry.
 
 `MOD001` is not suppressible because the runtime cannot compile the model.
 The other diagnostics describe valid or ignored declarations and set
-`Suppressible` to true. A built-in suppression configuration is not currently
-provided; callers decide how each returned diagnostic affects their tests or
-tooling.
+`Suppressible` to true. Apply reason-carrying suppressions through
+`check.NewReport` or `tidbgo check`; see the [offline diagnostic report
+guide](checks.md).
 
 `MOD004` never changes mapping behavior. The first tag value remains a column
 name. The rule warns only when that value differs from the inferred column and

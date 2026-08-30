@@ -23,6 +23,7 @@ It demonstrates the current struct-first foundation:
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
 - Offline query-shape diagnostics without exposing bind values
+- Application-owned diagnostic JSON and deterministic `tidbgo check` reports
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
@@ -97,6 +98,8 @@ its TiDB-reported ServerRU immediately afterward.
 `CheckModels` explicitly lists the application-owned model types and returns
 their diagnostics without source generation, configuration, or a database
 connection.
+The [`cmd/check`](cmd/check) example combines the model and query diagnostics
+into one JSON array that can be piped directly to `tidbgo check`.
 `CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
 checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability, and
 required database-only columns entirely offline. The omitted database-managed
@@ -113,3 +116,5 @@ writes and raw SQL. The [statement observation guide](../../docs/observability.m
 documents query logging and custom observers.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
+The [offline diagnostic report guide](../../docs/checks.md) documents CLI
+input, fixed exit statuses, and reason-carrying suppression.

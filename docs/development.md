@@ -27,6 +27,7 @@ Run the current command directly from the checkout:
 
 ```sh
 go run ./cmd/tidbgo version
+go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
 ```
 
 Set a release version through the Go linker when building a release artifact:
@@ -41,8 +42,8 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `orm`: offline query and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
-- `check`: shared diagnostic data types and offline model, query, and physical
-  schema checks
+- `check`: shared diagnostic data types, reasoned reports and suppression, and
+  offline model, query, and physical schema checks
 - `migrate`: reserved boundary for standalone migration tooling
 - `cmd/tidbgo`: CLI entry point
 - `internal`: non-public logging and redaction support
