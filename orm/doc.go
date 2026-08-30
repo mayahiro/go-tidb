@@ -3,7 +3,9 @@
 //
 // Query.Build compiles SQL offline. All, First, Only, Exists, and Count perform
 // I/O only through an explicitly supplied database/sql executor. Has compiles
-// relation existence conditions without implicit loading.
+// relation existence conditions without implicit loading. Diagnostics checks
+// a typed builder offline, while DiagnosticsWithSchema also compares clear
+// ordered LIMIT accesses with a parsed physical index snapshot.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and pure many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root

@@ -17,11 +17,16 @@ diagnostics := make([]check.Diagnostic, 0)
 diagnostics = append(diagnostics, check.Model[User]()...)
 diagnostics = append(diagnostics, recentOrdersQuery.Diagnostics()...)
 diagnostics = append(diagnostics, check.Schema[User](catalog)...)
+diagnostics = append(diagnostics, recentClipsQuery.DiagnosticsWithSchema(catalog)...)
 
 err := json.NewEncoder(os.Stdout).Encode(diagnostics)
 ```
 
 `tidbgo check` のJSON inputは `check.Diagnostic` objectのarrayを1個だけ含みます
+
+`DiagnosticsWithSchema` はparse済みsnapshotを再利用し、確度の高いordered query accessと物理index prefixを照合します
+
+完全offlineで動作し、出力するschema-aware evidenceにはbind valueを含まないquery fingerprintを記録します
 
 modelとqueryを明示的に登録する実行例は[`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check)を参照してください
 
@@ -96,7 +101,9 @@ if report.HasErrors() {
 
 ## Securityとdata boundary
 
-現在のmodel checkとquery checkはbind valueを含まず、schema checkは渡されたsnapshotだけを使用します
+現在のmodel checkとquery checkはbind valueを含まず、schema-aware checkは渡されたsnapshotだけを使用します
+
+query fingerprintもbind valueとpagination valueを除外します
 
 diagnostic messageにはmodel名、schema identifier、source path、parser errorが含まれる場合があります
 

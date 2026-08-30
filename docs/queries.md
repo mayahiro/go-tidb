@@ -47,6 +47,21 @@ diagnostics := query.Diagnostics()
 I/O, and does not execute custom `driver.Valuer` implementations. Diagnostics
 never include predicate or cursor values.
 
+When a parsed physical snapshot is available, apply the same checks and the
+high-confidence index-prefix check in one call:
+
+```go
+catalog, err := schema.Parse(schemaSQL)
+if err != nil {
+    return err
+}
+diagnostics := query.DiagnosticsWithSchema(catalog)
+```
+
+`DiagnosticsWithSchema` remains fully offline. When it emits `QRY006` or
+`QRY007`, it records a versioned query fingerprint as evidence without
+including bind or pagination values.
+
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `QRY001` | error | Model metadata or the SELECT builder is invalid |
@@ -54,9 +69,12 @@ never include predicate or cursor values.
 | `QRY003` | warning | An explicit positive LIMIT has no ORDER BY |
 | `QRY004` | warning | `Contains` or `HasSuffix` builds a LIKE pattern with a leading wildcard |
 | `QRY005` | warning | An ordered, limited collection `Has` must use the `EXISTS` fallback |
+| `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
+| `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
-`QRY001` is not suppressible because the query cannot compile. The other
-diagnostics describe valid query shapes and set `Suppressible` to true. TiDB's
+`QRY001` and `QRY006` are not suppressible because the query or its requested
+schema-aware check cannot be completed. The other diagnostics describe valid
+query shapes and set `Suppressible` to true. TiDB's
 [pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
 recommends ordering paginated results and notes the increasing compute cost of
 larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
@@ -66,14 +84,34 @@ diagnostic report guide](checks.md).
 `Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
 matching behavior is defined by TiDB's
 [`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like).
-The static check does not claim a specific physical plan because indexes,
-statistics, collation, and optimizer behavior are connected concerns. Use
-`Explain` or `ExplainAnalyze` to verify the actual access path.
+The schema-aware rule applies only when one index candidate is structurally
+clear: a positive `Limit`, a uniform-direction `OrderBy`, and only
+conjunctive `Equal` filters for a root access, or the association access
+produced by relation-first TopN. An active default soft-delete scope contributes
+its generated `IS NULL` column to the equality prefix. Equality columns can
+occupy the leading prefix in any order and must be followed by the ordered
+columns. An expression or prefix-length index does not prove this coverage. A
+simple unique key fully constrained by the equality filters also satisfies the
+rule because ordering at most one row needs no additional index component.
+Partial, invisible, FULLTEXT, and SPATIAL indexes do not prove a default-usable
+unconditional lookup for this rule.
+
+The first rule deliberately does not diagnose `Or`, `Not`, range filters,
+mixed order directions, or fallback `EXISTS` access. It also does not claim a
+specific physical plan because statistics, data distribution, collation, and
+optimizer behavior remain connected concerns. Use `Explain` or
+`ExplainAnalyze` to verify the actual access path before changing an index.
 
 The same builder can be used with `All`, `First`, `Only`, `Exists`, `Count`, or
 plan terminals, so this method checks only state explicitly stored on the
 builder. It does not report terminal-implied limits or an unbounded `All` call.
 Raw SQL is outside the typed query AST and is not inspected.
+
+The `q1:` fingerprint identifies the bind-free logical and compiler shape. It
+changes with projection, predicate structure, ordering, preload, or compiler
+rewrite, while different bind values and different `Limit` or `Offset` values
+retain the same fingerprint when the compiler decision remains unchanged
+because they use the same SQL placeholder shape.
 
 `QRY005` reports the metadata-only reason that relation-first TopN could not be
 applied, such as an unproven one-row-per-root condition, a different root

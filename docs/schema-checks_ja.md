@@ -115,7 +115,13 @@ composite Relation keyでは全componentを生成queryが制約するため、in
 
 expression indexはこのstructural coverageを証明しません
 
+prefix length付きindex partもcolumn全体を表さないため、Relation lookupまたはunique性のcoverageを証明しません
+
 exact junction pairもsource-targetまたはtarget-sourceのどちらの順序でもよい一方、追加のunique-key componentを含めることはできません
+
+partial indexはunconditional lookupまたはunique性を証明しません
+
+invisible unique indexはunique性を証明しますがdefault optimizerのlookupを証明せず、FULLTEXTとSPATIAL indexはいずれも証明しません
 
 ## Type checkの境界
 

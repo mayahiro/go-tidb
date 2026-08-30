@@ -69,6 +69,24 @@ consume no actual RU. `BenchmarkParse` includes lexical and catalog
 construction work. `BenchmarkSchema` reuses a parsed catalog and cached model
 metadata.
 
+## Query diagnostic client benchmarks
+
+Measure the existing builder-only checks and the schema-aware index-prefix
+check with a pre-parsed catalog:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnostics$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsWithSchema$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison$' -benchmem -count=5
+go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+```
+
+These benchmarks are offline and exclude SQL execution, network calls, TiDB
+optimization, and actual RU consumption. The schema-aware benchmark includes
+QueryShape construction and physical index-prefix matching. Fingerprinting is
+lazy when evidence is not needed and has its own benchmark. The comparison
+benchmark uses the same builder for both diagnostic paths.
+
 ## TiDB Cloud Starter integration tests
 
 The connected suite is opt-in. Without `TIDBGO_TEST_DSN`, its connected tests

@@ -202,14 +202,16 @@ The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
 an optional source location, and an optional reference. Offline model checks
 currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
-use `QRY001` through `QRY005` and never include bind values. Offline physical
+use `QRY001` through `QRY007` and never include bind values. Offline physical
 schema compatibility checks use `CMP001` through `CMP014`.
 
 The implemented offline checks cover executable model metadata, ignored and
 likely misplaced tags, primary-key and custom-scalar capabilities, invalid
 typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
 wildcard predicates, relation-filtered TopN fallback, directional model and
-SQL-snapshot compatibility, and Relation target and junction correctness. They
+SQL-snapshot compatibility, schema-aware ordered-LIMIT index-prefix coverage,
+and Relation target and junction correctness. Schema-aware query checks attach
+a versioned bind-free fingerprint and do not predict optimizer selection. They
 also warn when deterministic
 `has_many` or `many_to_many` lookups have no structural source-key index
 prefix. They do not require source generation, configuration, or a database

@@ -123,8 +123,13 @@ report guide](checks.md).
 For a composite relation key, the leading index positions may order the mapped
 columns differently because every component is constrained by the generated
 relation lookup. An expression index does not prove this structural coverage.
-An exact junction pair can likewise use either source-target or target-source
-order, but it cannot include an additional unique-key component.
+An index part with a prefix length also does not represent the complete column
+and cannot prove relation lookup or uniqueness coverage. An exact junction
+pair can likewise use either source-target or target-source order, but it
+cannot include an additional unique-key component.
+Partial indexes do not prove unconditional lookup or uniqueness. Invisible
+unique indexes still prove uniqueness but do not prove a default-optimizer
+lookup, while FULLTEXT and SPATIAL indexes prove neither property.
 
 ## Type-check boundary
 

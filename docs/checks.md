@@ -20,12 +20,18 @@ diagnostics := make([]check.Diagnostic, 0)
 diagnostics = append(diagnostics, check.Model[User]()...)
 diagnostics = append(diagnostics, recentOrdersQuery.Diagnostics()...)
 diagnostics = append(diagnostics, check.Schema[User](catalog)...)
+diagnostics = append(diagnostics, recentClipsQuery.DiagnosticsWithSchema(catalog)...)
 
 err := json.NewEncoder(os.Stdout).Encode(diagnostics)
 ```
 
 The JSON input to `tidbgo check` is exactly one array of `check.Diagnostic`
 objects
+
+`DiagnosticsWithSchema` reuses the parsed snapshot to compare
+high-confidence ordered query access with physical index prefixes. It remains
+offline and includes a bind-free query fingerprint in emitted schema-aware
+evidence
 
 See the runnable
 [`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check) command
@@ -106,8 +112,9 @@ the recorded suppressions, and `Report.Summary()` returns the fixed counts
 
 ## Security and data boundary
 
-Current model and query checks do not include bind values, and schema checks
-operate only on the supplied snapshot. Diagnostic messages can still contain
+Current model and query checks do not include bind values, and schema-aware
+checks operate only on the supplied snapshot. Query fingerprints likewise
+exclude bind and pagination values. Diagnostic messages can still contain
 model names, schema identifiers, source paths, and parser errors
 
 Treat diagnostic JSON and reports as development artifacts and control their

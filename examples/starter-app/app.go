@@ -184,6 +184,12 @@ func CheckRecentClipsInGenreQuery(genreID int64) []check.Diagnostic {
 	return recentClipsInGenreQuery(genreID).Diagnostics()
 }
 
+// CheckRecentClipsInGenreQueryWithSchema also verifies that the parsed schema
+// contains the association index prefix used by relation-first TopN.
+func CheckRecentClipsInGenreQueryWithSchema(catalog *physicalschema.Catalog, genreID int64) []check.Diagnostic {
+	return recentClipsInGenreQuery(genreID).DiagnosticsWithSchema(catalog)
+}
+
 func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
 		Select("ID", "Title").

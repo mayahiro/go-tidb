@@ -133,6 +133,70 @@ func TestParseKeepsFunctionalIndexesOutOfUniqueKeyProof(t *testing.T) {
 	}
 }
 
+func TestParseKeepsPrefixIndexesOutOfSimpleColumnProof(t *testing.T) {
+	t.Parallel()
+
+	catalog, err := Parse("CREATE TABLE names (name VARCHAR(64), created_at DATETIME, UNIQUE KEY names_prefix_key (name(10)), KEY names_created_key (name, created_at DESC));")
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, _ := catalog.Table("names")
+	indexes := table.Indexes()
+	if len(indexes) != 2 {
+		t.Fatalf("indexes = %#v, want two", indexes)
+	}
+	if !indexes[0].HasExpression() || len(indexes[0].Columns()) != 0 {
+		t.Fatalf("prefix index = %#v, want non-simple index", indexes[0])
+	}
+	if indexes[1].HasExpression() || !reflect.DeepEqual(indexes[1].Columns(), []string{"name", "created_at"}) {
+		t.Fatalf("directed simple index = %#v", indexes[1])
+	}
+	if testTableHasUniqueKey(table, []string{"name"}) {
+		t.Fatal("prefix index unexpectedly proved full-column uniqueness")
+	}
+}
+
+func TestParseClassifiesIndexesForUnconditionalCoverage(t *testing.T) {
+	t.Parallel()
+
+	catalog, err := Parse(`CREATE TABLE index_capabilities (
+  id BIGINT,
+  tenant_id BIGINT,
+  status VARCHAR(32),
+  title TEXT,
+  location GEOMETRY,
+  UNIQUE KEY visible_unique (id),
+  UNIQUE KEY invisible_unique (tenant_id) /*!80000 INVISIBLE */,
+  UNIQUE KEY partial_unique (status) WHERE status = 'ready',
+  KEY partial_lookup (tenant_id, id) WHERE status = 'ready',
+  FULLTEXT KEY title_fulltext (title),
+  SPATIAL KEY location_spatial (location)
+);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, _ := catalog.Table("index_capabilities")
+	indexes := make(map[string]Index)
+	for _, index := range table.Indexes() {
+		indexes[index.Name()] = index
+	}
+
+	visible := indexes["visible_unique"]
+	if !visible.ProvidesUnconditionalUniqueness() || !visible.SupportsDefaultColumnLookup() {
+		t.Fatalf("visible index capabilities = %#v", visible)
+	}
+	invisible := indexes["invisible_unique"]
+	if !invisible.ProvidesUnconditionalUniqueness() || invisible.SupportsDefaultColumnLookup() {
+		t.Fatalf("invisible index capabilities = %#v", invisible)
+	}
+	for _, name := range []string{"partial_unique", "partial_lookup", "title_fulltext", "location_spatial"} {
+		index := indexes[name]
+		if index.ProvidesUnconditionalUniqueness() || index.SupportsDefaultColumnLookup() {
+			t.Fatalf("%s capabilities = %#v, want no unconditional coverage", name, index)
+		}
+	}
+}
+
 func TestCatalogReturnsDetachedIndexColumns(t *testing.T) {
 	t.Parallel()
 

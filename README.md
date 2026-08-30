@@ -186,6 +186,7 @@ query := orm.Query[Order]().
 
 sqlText, arguments, err := query.Build()
 diagnostics := query.Diagnostics()
+schemaDiagnostics := query.DiagnosticsWithSchema(catalog)
 ```
 
 `Build` does not access a database or execute custom `driver.Valuer`
@@ -197,6 +198,13 @@ reports valid OFFSET pagination, unordered explicit pagination,
 leading-wildcard predicates, and relation-filtered TopN shapes that cannot use
 the relation-first compiler as `QRY002` through `QRY005` without including bind
 values.
+
+`DiagnosticsWithSchema` adds `QRY006` when the supplied parsed snapshot cannot
+describe an analyzed access and `QRY007` when a positive-LIMIT ordered access
+has no matching default-usable direct-column index prefix. It remains offline.
+Emitted schema-aware diagnostics include a stable bind-free query fingerprint
+as evidence. Index presence does not predict the optimizer's selected plan;
+verify it with `Explain` or `ExplainAnalyze`.
 
 Execute the same query only when an existing executor is passed explicitly:
 
@@ -229,7 +237,9 @@ admins, err := orm.Query[User]().
 predicates in a positive conjunctive context. For a narrow, metadata-proven
 `has_many` + root-primary-key order + positive-limit shape, it instead applies
 the target filter and Limit before loading root rows. `QRY005` explains why an
-ordered, limited collection filter falls back to `EXISTS`. Pass target
+ordered, limited collection filter falls back to `EXISTS`, while `QRY007`
+reports a missing association index prefix when a schema snapshot is supplied.
+Pass target
 predicates to require a matching related row, or omit them for existence only.
 Relation and target field names are exported Go field names. `Build` validates
 and compiles them entirely offline. See the [scalar query

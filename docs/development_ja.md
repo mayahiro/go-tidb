@@ -66,6 +66,25 @@ go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
 
 `BenchmarkSchema` はparse済みcatalogとcached model metadataを再利用します
 
+## Query diagnostic client benchmark
+
+既存のbuilder-only checkと、parse済みcatalogを使うschema-aware index prefix checkを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnostics$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsWithSchema$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison$' -benchmem -count=5
+go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+```
+
+全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
+
+schema-aware benchmarkはQueryShape構築と物理index prefix照合を含みます
+
+fingerprintはevidenceが不要な場合に遅延され、独立したbenchmarkで計測します
+
+comparison benchmarkは同じbuilderを両diagnostic pathで使用します
+
 ## TiDB Cloud Starter integration test
 
 connected suiteはopt-inです

@@ -51,6 +51,20 @@ diagnostics := query.Diagnostics()
 
 diagnosticへpredicateまたはcursorのvalueを含めません
 
+parse済みの物理schema snapshotがある場合は、同じcheckと確度の高いindex prefix checkを1回で適用できます
+
+```go
+catalog, err := schema.Parse(schemaSQL)
+if err != nil {
+    return err
+}
+diagnostics := query.DiagnosticsWithSchema(catalog)
+```
+
+`DiagnosticsWithSchema` も完全offlineです
+
+`QRY006` または `QRY007` を出力する場合は、bind valueとpagination valueを含まないversion付きquery fingerprintをevidenceへ記録します
+
 | Code | Severity | 意味 |
 | --- | --- | --- |
 | `QRY001` | error | model metadataまたはSELECT builderが不正 |
@@ -58,8 +72,10 @@ diagnosticへpredicateまたはcursorのvalueを含めません
 | `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
 | `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
 | `QRY005` | warning | orderedかつlimitedなcollection `Has` が `EXISTS` fallbackを使用する |
+| `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
+| `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
-queryをcompileできないため、`QRY001` はsuppressibleではありません
+queryまたは要求されたschema-aware checkを完了できないため、`QRY001` と `QRY006` はsuppressibleではありません
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
 
@@ -71,7 +87,23 @@ applicationでstable cursorを保持できる場合は `SeekAfter` を優先し�
 
 `Contains` と `HasSuffix` は意図的にpatternを `%` で開始し、そのmatching behaviorはTiDBの[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like)に従います
 
-index、statistics、collation、optimizer behaviorはconnected concernであるため、static checkは特定のphysical planを断定しません
+schema-aware ruleは1個のindex候補を構造的に決定できる場合だけ適用します
+
+root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcompilerが生成したassociation accessを対象にします
+
+activeなdefault soft-delete scopeがある場合は、生成される `IS NULL` のcolumnもequality prefixへ含めます
+
+equality columnはleading prefix内で任意の順序を使用でき、その後にordered columnが続く必要があります
+
+expressionまたはprefix length付きindexはこのcoverageを証明しません
+
+equality filterがsimple unique key全体を制約する場合は最大1 rowだけをorderするため、追加のorder columnがなくてもruleを満たします
+
+partial、invisible、FULLTEXT、SPATIAL indexはこのruleでdefault利用可能なunconditional lookupを証明しません
+
+最初のruleは `Or`、`Not`、range filter、mixed order direction、fallback `EXISTS` accessを意図的に診断しません
+
+statistics、data distribution、collation、optimizer behaviorはconnected concernとして残るため、特定のphysical planを断定しません
 
 実際のaccess pathは `Explain` または `ExplainAnalyze` で確認します
 
@@ -80,6 +112,10 @@ index、statistics、collation、optimizer behaviorはconnected concernである
 terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
 
 Raw SQLはtyped query ASTの外にあるため解析しません
+
+`q1:` fingerprintはbind valueを除いたlogical shapeとcompiler shapeを識別します
+
+projection、predicate structure、order、preload、compiler rewriteが変わるとfingerprintも変わり、compiler decisionが変わらない範囲でbind valueまたは `Limit` と `Offset` の値だけが変わる場合は同じSQL placeholder shapeとして同じfingerprintを維持します
 
 `QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
 

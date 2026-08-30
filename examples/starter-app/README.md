@@ -23,6 +23,7 @@ It demonstrates the current struct-first foundation:
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
 - Offline query-shape diagnostics without exposing bind values
+- Offline query-to-index diagnostics with a stable bind-free fingerprint
 - Application-owned diagnostic JSON and deterministic `tidbgo check` reports
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
@@ -65,7 +66,9 @@ to the same builder. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
 compiler filters and limits `clip_genres` before loading root rows;
 `CheckRecentClipsInGenreQuery` reports an `EXISTS` fallback if that shape stops
-being eligible. `FirstRecentOrder`, `FindUserByEmail`,
+being eligible, and `CheckRecentClipsInGenreQueryWithSchema` verifies the
+association prefix `(genre_id, clip_id)` against a parsed snapshot.
+`FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
@@ -103,8 +106,9 @@ its TiDB-reported ServerRU immediately afterward.
 `CheckModels` explicitly lists the application-owned model types and returns
 their diagnostics without source generation, configuration, or a database
 connection.
-The [`cmd/check`](cmd/check) example combines the model and query diagnostics
-into one JSON array that can be piped directly to `tidbgo check`.
+The [`cmd/check`](cmd/check) example parses a self-contained association schema
+snapshot and combines model, query, and query-index diagnostics into one JSON
+array that can be piped directly to `tidbgo check`.
 `CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
 checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability,
 required database-only columns, relation targets, the pure junction, and

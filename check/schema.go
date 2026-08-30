@@ -479,7 +479,7 @@ func tableHasUniqueKey(table physicalschema.Table, columns []string) bool {
 	}
 	for _, index := range table.Indexes() {
 		indexColumns := index.Columns()
-		if !index.Unique() || index.HasExpression() || len(indexColumns) == 0 {
+		if !index.ProvidesUnconditionalUniqueness() || len(indexColumns) == 0 {
 			continue
 		}
 		provesUnique := true
@@ -509,7 +509,7 @@ func tableHasIndexPrefix(table physicalschema.Table, columns []string) bool {
 	}
 	for _, index := range table.Indexes() {
 		indexColumns := index.Columns()
-		if index.HasExpression() || len(indexColumns) < len(columns) {
+		if !index.SupportsDefaultColumnLookup() || len(indexColumns) < len(columns) {
 			continue
 		}
 		if equalIdentifierSets(indexColumns[:len(columns)], columns) {
@@ -523,14 +523,11 @@ func junctionIndexCoverage(table physicalschema.Table, pairColumns, sourceColumn
 	pairUnique := false
 	sourceIndexed := false
 	for _, index := range table.Indexes() {
-		if index.HasExpression() {
-			continue
-		}
 		indexColumns := index.Columns()
-		if index.Unique() && len(indexColumns) == len(pairColumns) && equalIdentifierSets(indexColumns, pairColumns) {
+		if index.ProvidesUnconditionalUniqueness() && len(indexColumns) == len(pairColumns) && equalIdentifierSets(indexColumns, pairColumns) {
 			pairUnique = true
 		}
-		if len(indexColumns) >= len(sourceColumns) && equalIdentifierSets(indexColumns[:len(sourceColumns)], sourceColumns) {
+		if index.SupportsDefaultColumnLookup() && len(indexColumns) >= len(sourceColumns) && equalIdentifierSets(indexColumns[:len(sourceColumns)], sourceColumns) {
 			sourceIndexed = true
 		}
 		if pairUnique && sourceIndexed {

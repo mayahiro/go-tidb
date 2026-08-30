@@ -8,6 +8,7 @@ import (
 
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
@@ -189,6 +190,36 @@ func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
 	}
 	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplicationChecksRelationFirstTopNIndexOffline(t *testing.T) {
+	t.Parallel()
+
+	matching, err := physicalschema.Parse(`CREATE TABLE clip_genres (
+  clip_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (clip_id, genre_id),
+  KEY clip_genres_genre_clip_key (genre_id, clip_id)
+);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics := CheckRecentClipsInGenreQueryWithSchema(matching, 7); len(diagnostics) != 0 {
+		t.Fatalf("matching diagnostics = %#v, want none", diagnostics)
+	}
+
+	missing, err := physicalschema.Parse(`CREATE TABLE clip_genres (
+  clip_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (clip_id, genre_id)
+);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := CheckRecentClipsInGenreQueryWithSchema(missing, 7)
+	if len(diagnostics) != 1 || diagnostics[0].Code != "QRY007" {
+		t.Fatalf("missing diagnostics = %#v, want QRY007", diagnostics)
 	}
 }
 

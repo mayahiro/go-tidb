@@ -4,7 +4,9 @@ import (
 	"strconv"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/querycheck"
 	"github.com/mayahiro/go-tidb/model"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 const (
@@ -13,6 +15,8 @@ const (
 	codeUnorderedPagination   = "QRY003"
 	codeLeadingWildcardFilter = "QRY004"
 	codeRelationTopNFallback  = "QRY005"
+	codeIndexCheckUnavailable = querycheck.CodeIndexCheckUnavailable
+	codeMissingIndexPrefix    = querycheck.CodeMissingIndexPrefix
 
 	paginationReference   = "https://docs.pingcap.com/developer/dev-guide-paginate-results/"
 	likeReference         = "https://docs.pingcap.com/tidb/stable/string-functions/#like"
@@ -28,25 +32,38 @@ const (
 // diagnostics are found. Terminal-specific behavior is outside this builder
 // check because the same SelectQuery can be passed to multiple terminals.
 func (q *SelectQuery[T]) Diagnostics() []check.Diagnostic {
+	return q.diagnostics(nil, false)
+}
+
+// DiagnosticsWithSchema applies Diagnostics and compares high-confidence
+// ordered LIMIT access shapes with indexes in catalog without accessing a
+// database or claiming which physical plan TiDB will choose.
+//
+// The catalog must come from schema.Parse and contain every table and column
+// used by an analyzable access. Bind values are excluded from diagnostics and
+// from the stable query fingerprint included when a schema diagnostic is
+// emitted.
+func (q *SelectQuery[T]) DiagnosticsWithSchema(catalog *physicalschema.Catalog) []check.Diagnostic {
+	return q.diagnostics(catalog, true)
+}
+
+func (q *SelectQuery[T]) diagnostics(catalog *physicalschema.Catalog, includeSchema bool) []check.Diagnostic {
 	diagnostics := make([]check.Diagnostic, 0)
 	compiled, err := q.compile()
 	if err != nil {
-		return append(diagnostics, check.Diagnostic{
-			Code:         codeInvalidQuery,
-			Severity:     check.SeverityError,
-			Title:        "Invalid SELECT query",
-			Message:      err.Error(),
-			Suggestion:   "Fix the model metadata or query structure before executing this builder",
-			Suppressible: false,
-		})
+		return appendInvalidQueryDiagnostic(diagnostics, err)
 	}
 
 	selection := &q.selection
 	modelName := compiled.statement.scanPlan.modelType.Name()
 	returnsRows := !selection.pagination.limitSet || selection.pagination.limit > 0
-	relationTopN := relationTopNAnalysis{}
-	if descriptor, describeErr := model.DescribeType(compiled.statement.scanPlan.modelType); describeErr == nil {
-		relationTopN, _ = analyzeRelationTopN(descriptor, selection)
+	descriptor, err := model.DescribeType(compiled.statement.scanPlan.modelType)
+	if err != nil {
+		return appendInvalidQueryDiagnostic(diagnostics, err)
+	}
+	relationTopN, err := analyzeRelationTopN(descriptor, selection)
+	if err != nil {
+		return appendInvalidQueryDiagnostic(diagnostics, err)
 	}
 	relationTopNFallback := returnsRows && relationTopN.candidate && !relationTopN.optimized
 	diagnosticCount := leadingWildcardDiagnosticCount(selection.predicates)
@@ -97,7 +114,26 @@ func (q *SelectQuery[T]) Diagnostics() []check.Diagnostic {
 			Reference:    relationTopNReference,
 		})
 	}
-	return appendLeadingWildcardDiagnostics(diagnostics, selection.predicates, modelName)
+	diagnostics = appendLeadingWildcardDiagnostics(diagnostics, selection.predicates, modelName)
+	if !includeSchema {
+		return diagnostics
+	}
+	shape, err := buildSelectQueryShape(descriptor, selection, compiled, relationTopN)
+	if err != nil {
+		return appendInvalidQueryDiagnostic(diagnostics, err)
+	}
+	return append(diagnostics, querycheck.IndexDiagnostics(shape, catalog)...)
+}
+
+func appendInvalidQueryDiagnostic(diagnostics []check.Diagnostic, err error) []check.Diagnostic {
+	return append(diagnostics, check.Diagnostic{
+		Code:         codeInvalidQuery,
+		Severity:     check.SeverityError,
+		Title:        "Invalid SELECT query",
+		Message:      err.Error(),
+		Suggestion:   "Fix the model metadata or query structure before executing this builder",
+		Suppressible: false,
+	})
 }
 
 func leadingWildcardDiagnosticCount(predicates []predicate) int {

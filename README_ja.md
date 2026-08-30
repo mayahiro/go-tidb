@@ -189,6 +189,7 @@ query := orm.Query[Order]().
 
 sqlText, arguments, err := query.Build()
 diagnostics := query.Diagnostics()
+schemaDiagnostics := query.DiagnosticsWithSchema(catalog)
 ```
 
 `Build`はDBへ接続せず、custom `driver.Valuer`も実行しません
@@ -198,6 +199,12 @@ valueはbind argumentとしてSQLから分離し、物理identifierにはvalidat
 `Diagnostics` もofflineで動作します
 
 build failureを `QRY001` へ変換し、有効なOFFSET pagination、明示的なpaginationのorder不足、leading wildcard predicate、relation-first compilerを使用できないRelation filter付きTopNをbind valueなしの `QRY002` から `QRY005` で報告します
+
+`DiagnosticsWithSchema` は渡したparse済みsnapshotが解析対象accessを表せない場合に `QRY006`、positive Limit付きordered accessに一致するdefaultで利用可能なdirect-column index prefixがない場合に `QRY007` を追加します
+
+このmethodもofflineで動作し、schema-aware diagnosticを出力する場合はbind valueを含まないstable query fingerprintをevidenceへ含めます
+
+indexの存在はoptimizerが選ぶplanを予測しないため、`Explain` または `ExplainAnalyze` で確認します
 
 既存executorを明示的に渡した場合だけ同じqueryを実行します
 
@@ -236,6 +243,8 @@ admins, err := orm.Query[User]().
 metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
 
 orderedかつlimitedなcollection filterが `EXISTS` fallbackになる理由は `QRY005` で確認できます
+
+schema snapshotを渡した場合はassociation index prefixの不足を `QRY007` で確認できます
 
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
