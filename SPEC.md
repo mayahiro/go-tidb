@@ -92,7 +92,8 @@ The following decisions apply throughout v0.1:
    apply flag.
 11. Statement RU reported by TiDB is named `ServerRU`. It is not represented
     as billed RU.
-12. `EXPLAIN ANALYZE` is allowed only for `SELECT` and remains opt-in.
+12. `EXPLAIN ANALYZE` is allowed only for `SELECT` and remains opt-in. Plan
+    diagnostics inspect only its returned rows and add no database statement.
 13. Raw SQL is an explicit escape hatch without typed relation hydration or
     static query-AST diagnostics. Returned columns may still use model-aware
     scanning.
@@ -148,7 +149,7 @@ The currently implemented surface provides:
 - SELECT-only execution-plan inspection using TiDB's default row-format
   `EXPLAIN` output
 - Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
-  runtime output
+  runtime output and conservative diagnostics over the returned plan
 - Same-session ServerRU reading for one completed DML statement through a pinned
   `*sql.Conn` or active `*sql.Tx`
 - Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
@@ -243,11 +244,18 @@ errors. `tidbgo analyze` streams that artifact without a database connection
 and reports aggregate execution counts, relation TopN fallbacks, and possible
 runtime N+1 query shapes.
 
+`ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
+without another database call. Suppressible `PLN001` through `PLN004` warnings
+cover pseudo or partial statistics, conservative estimated-to-actual row
+divergence, large `TableFullScan` output, and recognized positive disk usage.
+The checks do not parse timing or RU text and do not predict that a proposed
+index or rewrite will improve the plan.
+
 Planned catalogs cover:
 
 - General application-query index shape and optional foreign-key policy
 - Unsafe mutations, large offsets, unbounded queries, and preload limits
-- Connected plan regressions and unexpectedly large scans
+- Cross-run connected plan regressions
 - Cross-run query-count and duration regressions
 - SELECT server-RU regressions
 - Migration checksums, destructive changes, unsupported Starter SQL, schema
@@ -289,8 +297,8 @@ configuration.
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
   deletion, typed raw SQL, statement observation, and same-session ServerRU
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
-  SELECT-only `EXPLAIN ANALYZE`, observer-only structured runtime capture, and
-  offline runtime N+1 analysis
+  SELECT-only `EXPLAIN ANALYZE` with returned-plan diagnostics, observer-only
+  structured runtime capture, and offline runtime N+1 analysis
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,

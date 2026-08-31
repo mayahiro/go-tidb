@@ -158,6 +158,16 @@ go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem 
 
 local `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
 
+取得済みplanをdiagnosticへ変換するcostは別に計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
+```
+
+clean caseはdiagnosticなし、warning caseは不完全なstatistics、大規模full scan、disk usageのevidenceを生成します
+
+どちらもDB I/Oを行わずtimingとRU textをparseしません
+
 ## ServerRU client benchmark
 
 1個のServerRU valueを取得してdecodeするclient-side costを計測します

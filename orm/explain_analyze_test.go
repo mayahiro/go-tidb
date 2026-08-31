@@ -25,7 +25,7 @@ func TestSelectQueryExplainAnalyzeReturnsTiDBRuntimePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExplainAnalyze() error = %v", err)
 	}
-	want := []ExplainAnalyzeRow{
+	want := ExplainAnalyzePlan{
 		{ID: "IndexLookUp_10", EstRows: 1, ActRows: 1, Task: "root", ExecutionInfo: "time:1ms, loops:2, RU:0.5", Memory: "1 KB", Disk: "N/A"},
 		{ID: "IndexRangeScan_8(Build)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model, index:name(name)", ExecutionInfo: "time:500us, loops:1", OperatorInfo: "range:[Ada,Ada]", Memory: "N/A", Disk: "N/A"},
 		{ID: "TableRowIDScan_9(Probe)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model", ExecutionInfo: "time:400us, loops:1", OperatorInfo: "keep order:false", Memory: "N/A", Disk: "N/A"},
@@ -173,7 +173,7 @@ func BenchmarkSelectQueryExplainAnalyze(b *testing.B) {
 	})
 	query := Query[scanModel]().Select("ID", "Name").Where(Equal("Name", "Ada"))
 	ctx := context.Background()
-	var plan []ExplainAnalyzeRow
+	var plan ExplainAnalyzePlan
 	var err error
 
 	b.ReportAllocs()

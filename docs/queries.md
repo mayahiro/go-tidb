@@ -345,7 +345,9 @@ observation](observability.md#select-explain) for the fields, runtime boundary,
 and TiDB-specific caveats.
 
 `ExplainAnalyze` is the explicit opt-in terminal that executes the complete
-root SELECT and returns TiDB's runtime plan as `[]orm.ExplainAnalyzeRow`. It
+root SELECT and returns TiDB's runtime plan as `orm.ExplainAnalyzePlan`. Its
+`Diagnostics` method checks the returned rows for conservative runtime-plan
+warnings without another database statement. `ExplainAnalyze`
 does not add a protective `LIMIT`, because changing the query would change the
 measured plan. It consumes the executed SELECT's database resources and RU,
 and runtime-plan collection can add overhead. Typed mutations and

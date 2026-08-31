@@ -367,7 +367,9 @@ collection preload statementはparent keyを必要とするため含みません
 
 field、runtime boundary、TiDB固有の注意事項は[Statement observation](observability_ja.md#select-explain)を参照してください
 
-`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `[]orm.ExplainAnalyzeRow` として返すexplicit opt-in terminalです
+`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `orm.ExplainAnalyzePlan` として返すexplicit opt-in terminalです
+
+`Diagnostics` methodは追加のdatabase statementを実行せず、返されたrowから保守的なruntime plan warningを検査します
 
 queryを変更するとplanも変わるためprotective `LIMIT` を自動追加しません
 

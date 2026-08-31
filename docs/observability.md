@@ -242,7 +242,7 @@ runtimePlan, err := orm.Query[User]().
 
 The explicit method call is the opt-in. It executes the complete root SELECT
 without adding a protective limit, then returns a non-nil
-`[]orm.ExplainAnalyzeRow`. The result maps TiDB's nine default columns to
+`orm.ExplainAnalyzePlan`. The result maps TiDB's nine default columns to
 `ID`, `EstRows`, `ActRows`, `Task`, `AccessObject`, `ExecutionInfo`,
 `OperatorInfo`, `Memory`, and `Disk`. It returns the runtime plan rather than
 hydrating application models.
@@ -259,6 +259,41 @@ TiDB includes the RU consumed by this execution in the top-level
 `ExecutionInfo`. `go-tidb` preserves that server text without parsing its
 format. RU and timing can vary between runs because of caches and service
 conditions.
+
+Inspect high-confidence facts in the returned rows without database I/O:
+
+```go
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` emits at most one suppressible warning for each rule and attaches
+one evidence item per matching operator:
+
+| Code | Runtime-plan fact |
+| --- | --- |
+| `PLN001` | `OperatorInfo` reports `stats:pseudo` or `stats:partial` |
+| `PLN002` | Estimated and actual rows differ by at least 100 times and either side is at least 1,000 rows |
+| `PLN003` | A `TableFullScan` operator outputs at least 10,000 rows |
+| `PLN004` | The `Disk` column reports a positive value in a recognized TiDB byte unit |
+
+An operator with incomplete statistics is omitted from `PLN002`, because the
+known statistics condition is the more direct evidence. The fixed thresholds
+are intentionally conservative. A warning identifies a plan fact to inspect;
+it does not prove that an index or query rewrite is better. Timing, RU, loops,
+RPC details, memory, and other free-form execution text are not parsed.
+
+The diagnostic evidence includes operator identifiers, access objects, row
+counts, and recognized disk values. It does not copy full `OperatorInfo`, which
+can contain predicate ranges derived from bind values. Treat access-object and
+schema identifiers as development metadata. The result can be appended to an
+application-owned diagnostic array and passed to `tidbgo check` for the same
+reporting and suppression policy as offline checks.
+
+TiDB documents `estRows`, `actRows`, pseudo statistics, and execution-info
+fields in its [execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)
+and [EXPLAIN walkthrough](https://docs.pingcap.com/tidb/stable/explain-walkthrough/).
+Positive disk usage can indicate an intermediate operator spilled to disk; see
+TiDB's [disk-spill documentation](https://docs.pingcap.com/tidb/stable/configure-memory-usage/#disk-spill).
 
 An observed call emits `StatementExplainAnalyze` after the SELECT executes and
 all plan rows are scanned and closed. The built-in logger renders

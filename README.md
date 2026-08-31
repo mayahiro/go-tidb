@@ -27,7 +27,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Observer-only structured runtime capture and offline N+1 analysis
 - Operation-scoped debug reports for multi-statement ORM calls
 - SELECT-only TiDB execution-plan inspection through the typed query builder
-- Explicit SELECT execution with actual TiDB runtime-plan inspection
+- Explicit SELECT execution with actual TiDB runtime-plan inspection and
+  diagnostics over the returned rows
 - Explicit same-session ServerRU reading for one completed DML statement
 
 ## Supported scope
@@ -443,12 +444,19 @@ runtimePlan, err := orm.Query[User]().
     Select("ID", "Email").
     Where(orm.Equal("Email", email)).
     ExplainAnalyze(ctx, db)
+if err != nil {
+    return err
+}
+diagnostics := runtimePlan.Diagnostics()
 ```
 
 `ExplainAnalyze` returns actual rows, execution information, memory, and disk
-usage as `[]orm.ExplainAnalyzeRow`. It executes the complete root SELECT without
-adding a limit and consumes database resources and RU. Mutation, raw SQL, and
-collection preload statements remain outside this path. See the [runtime-plan
+usage as `orm.ExplainAnalyzePlan`. `Diagnostics` checks the returned rows for
+incomplete statistics, a conservative estimate-to-actual row divergence, a
+large table full scan, and positive disk usage without another database call.
+`ExplainAnalyze` executes the complete root SELECT without adding a limit and
+consumes database resources and RU. Mutation, raw SQL, and collection preload
+statements remain outside this path. See the [runtime-plan
 boundary](docs/observability.md#explain-analyze) before enabling it in an
 application.
 

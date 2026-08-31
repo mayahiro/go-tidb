@@ -1,15 +1,16 @@
-# Offline diagnostic reports
+# Diagnostic reports
 
 [日本語](checks_ja.md)
 
 `go-tidb` keeps diagnostic production separate from reporting
 
-Application code explicitly selects its model types, query builders, and SQL
-schema snapshots, while `check.Report` and `tidbgo check` apply one fixed result
-policy without a database connection
+Offline checks let application code explicitly select model types, query
+builders, and SQL schema snapshots, while `check.Report` and `tidbgo check`
+apply one fixed result policy without a database connection
 
-This boundary requires no generated registry, source scan, project YAML, or
-live-schema inspection
+This offline boundary requires no generated registry, source scan, project
+YAML, or live-schema inspection. Explicit connected runtime-plan collection is
+separate and remains opt-in
 
 ## Produce diagnostics
 
@@ -66,6 +67,31 @@ See the [query guide](queries.md#preload-relations) and [mutation
 guide](mutations.md#insert) for the exact bounds, and the [observation
 guide](observability.md#structured-runtime-capture) for automatic runtime
 collection.
+
+## Opt-in connected plan diagnostics
+
+An explicitly executed `ExplainAnalyze` plan can contribute diagnostics to the
+same report:
+
+```go
+runtimePlan, err := recentClipsQuery.ExplainAnalyze(ctx, db)
+if err != nil {
+    return err
+}
+diagnostics = append(diagnostics, runtimePlan.Diagnostics()...)
+```
+
+`ExplainAnalyze` executes the complete root SELECT and consumes database
+resources. `Diagnostics` itself is deterministic, performs no database I/O,
+and inspects only those already returned rows. It emits suppressible `PLN001`
+through `PLN004` warnings for incomplete statistics, conservative row-estimate
+divergence, a large table full scan, and positive recognized disk usage.
+
+This is manual connected analysis, not automatic runtime capture. Installing a
+`RuntimeCapture` does not run `EXPLAIN ANALYZE`, collect plan rows, or create
+these diagnostics. See the [EXPLAIN ANALYZE
+boundary](observability.md#explain-analyze) for thresholds, evidence, cost, and
+data-handling details.
 
 ## Report with the CLI
 

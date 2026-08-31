@@ -1,12 +1,14 @@
-# Offline diagnostic report
+# Diagnostic report
 
 [English](checks.md)
 
 `go-tidb` はdiagnosticの生成とreportを分離します
 
-application codeがmodel type、query builder、SQL schema snapshotを明示的に選択し、`check.Report` と `tidbgo check` がDB接続なしで1個の固定result policyを適用します
+offline checkではapplication codeがmodel type、query builder、SQL schema snapshotを明示的に選択し、`check.Report` と `tidbgo check` がDB接続なしで1個の固定result policyを適用します
 
-この境界にはgenerated registry、source scan、project YAML、live schema inspectionが不要です
+このoffline boundaryにはgenerated registry、source scan、project YAML、live schema inspectionが不要です
+
+明示的なconnected runtime plan収集は分離され、引き続きopt-inです
 
 ## Diagnosticの生成
 
@@ -56,6 +58,30 @@ offlineの値は `SelectQuery.Diagnostics` へ追加せず、`tidbgo check` も�
 複数statementは安全なbulk分割またはRelation loadingの意図した結果でもあるため、project固有のthresholdをdiagnosticにするかは専用testまたはcustom offline toolingが決定します
 
 正確な境界は[query guide](queries_ja.md#relation-preload)と[mutation guide](mutations_ja.md#insert)、自動runtime収集は[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
+
+## Opt-inのconnected plan diagnostic
+
+明示的に実行した `ExplainAnalyze` planのdiagnosticを同じreportへ追加できます
+
+```go
+runtimePlan, err := recentClipsQuery.ExplainAnalyze(ctx, db)
+if err != nil {
+    return err
+}
+diagnostics = append(diagnostics, runtimePlan.Diagnostics()...)
+```
+
+`ExplainAnalyze` はcompleteなroot SELECTを実行し、database resourceを消費します
+
+`Diagnostics` 自体は決定的でDB I/Oを行わず、既に返されたrowだけを検査します
+
+不完全なstatistics、保守的なrow estimateの差、大規模table full scan、認識可能な正数のdisk usageを `PLN001` から `PLN004` のsuppressible warningとして返します
+
+これは手動のconnected analysisであり、自動runtime captureではありません
+
+`RuntimeCapture` を設定しても `EXPLAIN ANALYZE` の実行、plan rowの収集、これらのdiagnostic生成は行いません
+
+threshold、evidence、cost、data handlingの詳細は[EXPLAIN ANALYZE boundary](observability_ja.md#explain-analyze)を参照してください
 
 ## CLIによるreport
 

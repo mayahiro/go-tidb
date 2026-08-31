@@ -26,7 +26,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - observer設定だけで使うstructured runtime captureとoffline N+1解析
 - multi-statement ORM callをまとめるoperation-scoped debug report
 - typed query builderによるSELECT限定のTiDB execution plan取得
-- 明示的なSELECT実行によるTiDB actual runtime plan取得
+- 明示的なSELECT実行によるTiDB actual runtime plan取得と返されたrowのdiagnostic
 - 完了した1 DML statementに対する明示的なsame-session ServerRU取得
 
 ## サポート範囲
@@ -468,9 +468,15 @@ runtimePlan, err := orm.Query[User]().
     Select("ID", "Email").
     Where(orm.Equal("Email", email)).
     ExplainAnalyze(ctx, db)
+if err != nil {
+    return err
+}
+diagnostics := runtimePlan.Diagnostics()
 ```
 
-`ExplainAnalyze` はactual row、execution information、memory、disk usageを `[]orm.ExplainAnalyzeRow` として返します
+`ExplainAnalyze` はactual row、execution information、memory、disk usageを `orm.ExplainAnalyzePlan` として返します
+
+`Diagnostics` は追加のDB callを行わず、返されたrowから不完全なstatistics、保守的なestimateとactual rowの差、大規模table full scan、disk usageを検査します
 
 limitを追加せずcompleteなroot SELECTを実行し、database resourceとRUを消費します
 

@@ -63,6 +63,12 @@ type ExplainAnalyzeRow struct {
 	Disk string
 }
 
+// ExplainAnalyzePlan is TiDB's completed default row-format runtime plan.
+//
+// Call Diagnostics to inspect the already returned rows without another
+// database statement.
+type ExplainAnalyzePlan []ExplainAnalyzeRow
+
 // Explain asks TiDB for the default row-format execution plan of this SELECT.
 //
 // Explain never accepts mutation or raw SQL because it is a terminal on
@@ -87,8 +93,9 @@ func (q *SelectQuery[T]) Explain(ctx context.Context, executor QueryExecutor) ([
 // raw SQL because it is a terminal on SelectQuery. The result includes actual
 // operator rows, execution details, memory, and disk usage. Inline to-one joins
 // execute as part of the root SELECT. Collection preload statements are not
-// executed or analyzed.
-func (q *SelectQuery[T]) ExplainAnalyze(ctx context.Context, executor QueryExecutor) ([]ExplainAnalyzeRow, error) {
+// executed or analyzed. Call Diagnostics on the returned ExplainAnalyzePlan to
+// inspect high-confidence runtime-plan facts without another database call.
+func (q *SelectQuery[T]) ExplainAnalyze(ctx context.Context, executor QueryExecutor) (ExplainAnalyzePlan, error) {
 	rows, err := q.queryExplainRows(ctx, executor, StatementExplainAnalyze, explainAnalyzePrefix)
 	if err != nil {
 		return nil, err
@@ -144,7 +151,7 @@ func validateExplainColumns(columns []string) error {
 	return validatePlanColumns("EXPLAIN", columns, explainColumnNames[:])
 }
 
-func collectExplainAnalyzeRows(rows queryResultRows) ([]ExplainAnalyzeRow, error) {
+func collectExplainAnalyzeRows(rows queryResultRows) (ExplainAnalyzePlan, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, fmt.Errorf("orm: read EXPLAIN ANALYZE columns: %w", err))
@@ -153,7 +160,7 @@ func collectExplainAnalyzeRows(rows queryResultRows) ([]ExplainAnalyzeRow, error
 		return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, err)
 	}
 
-	result := make([]ExplainAnalyzeRow, 0, 4)
+	result := make(ExplainAnalyzePlan, 0, 4)
 	for rows.Next() {
 		var row ExplainAnalyzeRow
 		if err := rows.Scan(

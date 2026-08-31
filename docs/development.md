@@ -161,6 +161,16 @@ go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem 
 This benchmark uses a local `database/sql` test driver. It measures neither
 the SELECT execution nor TiDB runtime cost and consumes no actual RU
 
+Measure the cost of diagnosing already returned plans separately:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
+```
+
+The clean case has no diagnostics, while the warning case emits incomplete
+statistics, large full-scan, and disk-use evidence. Neither case performs
+database I/O or parses timing and RU text
+
 ## ServerRU client benchmark
 
 Measure the client-side cost of reading and decoding one ServerRU value:

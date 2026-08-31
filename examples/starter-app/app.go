@@ -233,7 +233,7 @@ func ExplainUserByEmail(ctx context.Context, executor orm.QueryExecutor, email s
 
 // ExplainAnalyzeUserByEmail executes the typed lookup and returns TiDB's
 // runtime execution plan.
-func ExplainAnalyzeUserByEmail(ctx context.Context, executor orm.QueryExecutor, email string) ([]orm.ExplainAnalyzeRow, error) {
+func ExplainAnalyzeUserByEmail(ctx context.Context, executor orm.QueryExecutor, email string) (orm.ExplainAnalyzePlan, error) {
 	return orm.Query[User]().
 		Select("ID", "Email").
 		Where(orm.Equal("Email", email)).

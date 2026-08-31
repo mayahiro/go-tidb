@@ -263,7 +263,7 @@ runtimePlan, err := orm.Query[User]().
 
 明示的なmethod call自体がopt-inです
 
-protective limitを追加せずcompleteなroot SELECTを実行し、non-nilな `[]orm.ExplainAnalyzeRow` を返します
+protective limitを追加せずcompleteなroot SELECTを実行し、non-nilな `orm.ExplainAnalyzePlan` を返します
 
 TiDB default formatの9 columnを `ID`、`EstRows`、`ActRows`、`Task`、`AccessObject`、`ExecutionInfo`、`OperatorInfo`、`Memory`、`Disk` へ対応させます
 
@@ -284,6 +284,43 @@ TiDBは今回の実行で消費したRUをtop-level `ExecutionInfo` へ含めま
 `go-tidb` はserver textのformatをparseせず保持します
 
 cacheとservice conditionによってRUとtimingは実行ごとに変化し得ます
+
+返されたrowに含まれる確度の高い事実をDB I/Oなしで検査できます
+
+```go
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` はruleごとに最大1個のsuppressible warningを生成し、該当するoperatorごとにevidenceを1個追加します
+
+| Code | Runtime planの事実 |
+| --- | --- |
+| `PLN001` | `OperatorInfo` が `stats:pseudo` または `stats:partial` を報告する |
+| `PLN002` | estimateとactual rowが100倍以上異なり、いずれかが1,000 row以上である |
+| `PLN003` | `TableFullScan` operatorが10,000 row以上を出力する |
+| `PLN004` | `Disk` columnがTiDBの認識可能なbyte unitで正数を報告する |
+
+不完全なstatisticsを持つoperatorは原因を直接示す `PLN001` を優先し、同じoperatorを `PLN002` へ含めません
+
+固定thresholdは意図的に保守的です
+
+warningは確認すべきplan上の事実を示すものであり、index追加またはquery rewriteが常に改善になることを保証しません
+
+timing、RU、loop、RPC detail、memory、その他のfree-form execution textはparseしません
+
+diagnostic evidenceにはoperator identifier、access object、row count、認識したdisk valueを含みます
+
+bind value由来のpredicate rangeを含み得るため、完全な `OperatorInfo` はコピーしません
+
+access objectとschema identifierはdevelopment metadataとして扱ってください
+
+結果はapplicationが所有するdiagnostic arrayへ追加し、offline checkと同じreportおよびsuppression policyで `tidbgo check` へ渡せます
+
+TiDBの `estRows`、`actRows`、pseudo statistics、execution info fieldについては[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)と[EXPLAIN walkthrough](https://docs.pingcap.com/tidb/stable/explain-walkthrough/)を参照してください
+
+正数のdisk usageはintermediate operatorのdisk spillを示す場合があります
+
+TiDBの[disk-spill documentation](https://docs.pingcap.com/tidb/stable/configure-memory-usage/#disk-spill)を参照してください
 
 observerを設定した場合はSELECT実行と全plan rowのscanおよびclose後に `StatementExplainAnalyze` を生成します
 

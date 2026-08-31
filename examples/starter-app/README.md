@@ -45,7 +45,8 @@ It demonstrates the current struct-first foundation:
 - Operation-scoped debug reports that aggregate root and relation statements
   without additional database calls
 - SELECT-only TiDB execution-plan inspection through the typed query builder
-- Explicit SELECT execution with TiDB runtime-plan inspection
+- Explicit SELECT execution with TiDB runtime-plan inspection and diagnostics
+  over the returned rows without another database call
 - Explicit same-session ServerRU reading for one completed DML statement
 
 `User` intentionally omits a database-managed `created_at` column because an
@@ -111,7 +112,17 @@ context unchanged. Analyze the resulting JSON Lines file with
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and
 returns actual rows, execution information, memory, and disk usage for each
-operator.
+operator. Its returned `orm.ExplainAnalyzePlan` can be inspected directly:
+
+```go
+runtimePlan, err := ExplainAnalyzeUserByEmail(ctx, db, email)
+if err != nil {
+    return err
+}
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` does not execute another database statement.
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
 its TiDB-reported ServerRU immediately afterward.
 `CheckModels` explicitly lists the application-owned model types and returns
