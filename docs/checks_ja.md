@@ -174,6 +174,10 @@ tidbgo analyze runtime.jsonl
 
 artifact boundaryは[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
 
+`CollectServerRU` がsampleを生成した場合、runtime statisticsはtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、成功sample数、collection error数、ServerRU合計を分離します
+
+`RUN003` はcollection failureによって測定dataが不完全なことを示すためsuppressできません
+
 ## 許容したdiagnosticのsuppression
 
 suppressionは1個のexact diagnostic codeを指定し、空ではないreasonを必須とします

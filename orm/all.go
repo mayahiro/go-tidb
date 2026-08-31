@@ -136,6 +136,9 @@ func queryTextRowsOperation(ctx context.Context, executor QueryExecutor, operati
 
 func queryTextRowsOperationWithMetadata(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
 	observation := beginStatementObservationWithMetadata(ctx, operation, query, arguments, metadata)
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUQueryExecutor(ctx, executor)
+	}
 	rows, err := executor.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: query %s rows: %w", modelName, err)

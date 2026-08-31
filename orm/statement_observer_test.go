@@ -339,6 +339,26 @@ func TestStatementLoggerWritesExplicitArgumentValuesSeparatelyFromSQL(t *testing
 	}
 }
 
+func TestStatementLoggerWritesServerRUAndDiagnosticCost(t *testing.T) {
+	var output bytes.Buffer
+	logger := NewStatementLogger(&output)
+	logger(StatementEvent{
+		Operation: StatementSelect,
+		SQL:       "SELECT id FROM users",
+		Duration:  9 * time.Millisecond,
+		ServerRU: &ServerRUObservation{
+			Value:               4.34885578125,
+			Known:               true,
+			DiagnosticDuration:  3 * time.Millisecond,
+			AuxiliaryStatements: 1,
+		},
+	})
+
+	if got := output.String(); !strings.Contains(got, "SELECT   9ms diagnostic=3ms auxiliary=1 server_ru=4.34885578125 args=0") {
+		t.Fatalf("logger output = %q", got)
+	}
+}
+
 func TestStatementLoggerEscapesTerminalControlCharacters(t *testing.T) {
 	var output bytes.Buffer
 	logger := NewStatementLogger(&output)

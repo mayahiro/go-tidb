@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/queryshape"
@@ -41,6 +42,15 @@ type Batch struct {
 	KeyColumns int    `json:"key_columns,omitempty"`
 }
 
+// ServerRU records one high-cost automatic same-session diagnostic result.
+type ServerRU struct {
+	Value                float64 `json:"value,omitempty"`
+	Known                bool    `json:"known"`
+	DiagnosticDurationNS int64   `json:"diagnostic_duration_ns"`
+	AuxiliaryStatements  int     `json:"auxiliary_statements"`
+	Error                string  `json:"error,omitempty"`
+}
+
 // Record is one completed ORM statement in a runtime capture JSON Lines file.
 type Record struct {
 	Version           int               `json:"version"`
@@ -65,6 +75,7 @@ type Record struct {
 	MetadataError     string            `json:"metadata_error,omitempty"`
 	Batch             *Batch            `json:"batch,omitempty"`
 	Query             *queryshape.Query `json:"query,omitempty"`
+	ServerRU          *ServerRU         `json:"server_ru,omitempty"`
 }
 
 // StatementFingerprint returns a stable bind-free identity for one SQL
@@ -102,6 +113,26 @@ func (record Record) Validate() error {
 	}
 	if record.ArgumentCount < 0 {
 		return fmt.Errorf("runtime capture record has negative argument_count")
+	}
+	if record.ServerRU != nil {
+		if record.ServerRU.DiagnosticDurationNS < 0 {
+			return fmt.Errorf("runtime capture record has negative ServerRU diagnostic_duration_ns")
+		}
+		if record.ServerRU.AuxiliaryStatements < 0 || record.ServerRU.AuxiliaryStatements > 1 {
+			return fmt.Errorf("runtime capture record has invalid ServerRU auxiliary statement count")
+		}
+		if record.ServerRU.Known {
+			if record.ServerRU.AuxiliaryStatements != 1 || record.ServerRU.Value < 0 || math.IsNaN(record.ServerRU.Value) || math.IsInf(record.ServerRU.Value, 0) {
+				return fmt.Errorf("runtime capture record has invalid known ServerRU value")
+			}
+		} else {
+			if record.ServerRU.Value != 0 {
+				return fmt.Errorf("runtime capture record has an unknown nonzero ServerRU value")
+			}
+			if record.ServerRU.Error == "" {
+				return fmt.Errorf("runtime capture record has no ServerRU result or error")
+			}
+		}
 	}
 	if record.Batch != nil {
 		if record.Batch.Group == 0 || record.Batch.Index < 1 || record.Batch.Count < 1 || record.Batch.Index > record.Batch.Count {

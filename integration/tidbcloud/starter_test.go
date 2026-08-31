@@ -689,6 +689,18 @@ func testSelectExplainAnalyze(t *testing.T, ctx context.Context, database *sql.D
 
 func testServerRU(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
 	t.Helper()
+	var automaticEvent orm.StatementEvent
+	automaticContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+		automaticEvent = event
+	}, orm.CollectServerRU())
+	if _, err := orm.Query[starterOrder]().
+		Where(orm.Equal("ID", int64(11))).
+		Only(automaticContext, database); err != nil {
+		fatalDatabaseError(t, dsn, "execute automatic ServerRU database query", err)
+	}
+	if automaticEvent.ServerRU == nil || !automaticEvent.ServerRU.Known || automaticEvent.ServerRU.Value <= 0 || automaticEvent.ServerRU.AuxiliaryStatements != 1 || automaticEvent.ServerRU.Error != nil {
+		t.Fatalf("automatic ServerRU event = %#v, want one positive sample", automaticEvent)
+	}
 
 	connection, err := database.Conn(ctx)
 	if err != nil {

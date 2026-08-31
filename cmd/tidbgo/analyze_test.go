@@ -66,6 +66,33 @@ func TestApplicationAnalyzeWritesStructuredJSON(t *testing.T) {
 	}
 }
 
+func TestApplicationAnalyzeReportsServerRUCollectionFailureAndSeparatedCost(t *testing.T) {
+	t.Parallel()
+
+	record := runtimeCommandRecord(1, "q1:users")
+	record.ServerRU = &runtimecapture.ServerRU{
+		DiagnosticDurationNS: 2_000,
+		AuxiliaryStatements:  1,
+		Error:                "read ServerRU failed",
+	}
+	result := runApplicationWithInput(t, runtimeCaptureInput(t, record), "analyze")
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"WARNING[RUN003] Automatic ServerRU collection failed",
+		"auxiliary_statements=1",
+		"diagnostic_duration=2µs",
+		"server_ru_samples=0",
+		"server_ru_errors=1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
 func TestApplicationAnalyzeRecordsReasonedSuppression(t *testing.T) {
 	t.Parallel()
 

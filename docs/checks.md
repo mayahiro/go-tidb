@@ -189,6 +189,11 @@ tidbgo analyze runtime.jsonl
 
 The command performs no database access. See the [observation
 guide](observability.md#structured-runtime-capture) for the artifact boundary.
+When `CollectServerRU` produced samples, runtime statistics keep target and
+diagnostic durations, go-tidb and auxiliary statement counts, successful
+samples, collection errors, and summed ServerRU separate. `RUN003` reports a
+collection failure and is not suppressible because the measured data is
+incomplete.
 
 ## Suppress an accepted diagnostic
 

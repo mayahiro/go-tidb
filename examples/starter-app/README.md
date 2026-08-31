@@ -49,6 +49,7 @@ It demonstrates the current struct-first foundation:
 - Explicit SELECT execution with TiDB runtime-plan inspection and diagnostics
   over the returned rows without another database call
 - Explicit same-session ServerRU reading for one completed DML statement
+- Optional observer-scoped ServerRU collection without query-specific wrappers
 
 `User` intentionally omits a database-managed `created_at` column because an
 application model does not need to mirror every physical column.
@@ -115,6 +116,17 @@ capture := orm.NewRuntimeCapture(captureWriter)
 ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
+When the extra same-session round trip per recognized DML statement is
+intentional, enable ServerRU collection at the same boundary:
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+`*sql.DB` statements are temporarily pinned with their diagnostic query. The
+artifact keeps target and diagnostic cost separate, and a collection failure
+does not replace the application result.
+
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with
 `tidbgo analyze`.
@@ -134,7 +146,8 @@ diagnostics := runtimePlan.Diagnostics()
 
 `Diagnostics` does not execute another database statement.
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
-its TiDB-reported ServerRU immediately afterward.
+its TiDB-reported ServerRU immediately afterward when a single manual sample is
+more appropriate.
 `CheckModels` explicitly lists the application-owned model types and returns
 their diagnostics without source generation, configuration, or a database
 connection.

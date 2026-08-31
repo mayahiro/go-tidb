@@ -14,19 +14,25 @@ import (
 const (
 	codeIncompleteMetadata = "RUN001"
 	codePossibleNPlusOne   = "RUN002"
+	codeServerRUFailure    = "RUN003"
 	codeRelationTopN       = "QRY005"
 )
 
 // Statistics summarizes the captured execution set without claiming database
 // round trips outside go-tidb.
 type Statistics struct {
-	Captures       int   `json:"captures"`
-	Scopes         int   `json:"scopes"`
-	Statements     int   `json:"statements"`
-	Fingerprints   int   `json:"fingerprints"`
-	BatchGroups    int   `json:"batch_groups"`
-	SplitBatches   int   `json:"split_batches"`
-	TargetDuration int64 `json:"target_duration_ns"`
+	Captures            int     `json:"captures"`
+	Scopes              int     `json:"scopes"`
+	Statements          int     `json:"statements"`
+	AuxiliaryStatements int     `json:"auxiliary_statements"`
+	Fingerprints        int     `json:"fingerprints"`
+	BatchGroups         int     `json:"batch_groups"`
+	SplitBatches        int     `json:"split_batches"`
+	ServerRUSamples     int     `json:"server_ru_samples"`
+	ServerRUErrors      int     `json:"server_ru_errors"`
+	ServerRUTotal       float64 `json:"server_ru_total"`
+	TargetDuration      int64   `json:"target_duration_ns"`
+	DiagnosticDuration  int64   `json:"diagnostic_duration_ns"`
 }
 
 // Analysis contains deterministic runtime statistics and diagnostics.
@@ -70,6 +76,7 @@ type analyzer struct {
 	repeatedGroups []repeatedQueryGroup
 	metadataErrors map[string]struct{}
 	fallbacks      map[string]struct{}
+	serverRUErrors map[string]struct{}
 }
 
 func newAnalyzer() *analyzer {
@@ -93,6 +100,31 @@ func (analyzer *analyzer) add(record Record) {
 	analyzer.fingerprints[record.Fingerprint] = struct{}{}
 	analyzer.analysis.Statistics.Statements++
 	analyzer.analysis.Statistics.TargetDuration = addDurationSaturated(analyzer.analysis.Statistics.TargetDuration, record.DurationNS)
+	if record.ServerRU != nil {
+		analyzer.analysis.Statistics.AuxiliaryStatements += record.ServerRU.AuxiliaryStatements
+		analyzer.analysis.Statistics.DiagnosticDuration = addDurationSaturated(
+			analyzer.analysis.Statistics.DiagnosticDuration,
+			record.ServerRU.DiagnosticDurationNS,
+		)
+		if record.ServerRU.Known {
+			analyzer.analysis.Statistics.ServerRUSamples++
+			analyzer.analysis.Statistics.ServerRUTotal = addServerRUSaturated(
+				analyzer.analysis.Statistics.ServerRUTotal,
+				record.ServerRU.Value,
+			)
+		}
+		if record.ServerRU.Error != "" {
+			analyzer.analysis.Statistics.ServerRUErrors++
+			key := record.Fingerprint
+			if _, exists := analyzer.serverRUErrors[key]; !exists {
+				if analyzer.serverRUErrors == nil {
+					analyzer.serverRUErrors = make(map[string]struct{})
+				}
+				analyzer.serverRUErrors[key] = struct{}{}
+				analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, serverRUFailureDiagnostic(record))
+			}
+		}
+	}
 
 	if record.Batch != nil {
 		key := batchKey{capture: record.CaptureID, group: record.Batch.Group}
@@ -182,6 +214,13 @@ func addDurationSaturated(current, added int64) int64 {
 	return current + added
 }
 
+func addServerRUSaturated(current, added float64) float64 {
+	if current > math.MaxFloat64-added {
+		return math.MaxFloat64
+	}
+	return current + added
+}
+
 func nPlusOneCandidate(record Record) bool {
 	return record.Operation == "SELECT" &&
 		record.Source != SourcePreload
@@ -199,6 +238,22 @@ func incompleteMetadataDiagnostic(record Record) check.Diagnostic {
 		},
 		Suggestion:   "Report the metadata error with the model and query shape that produced it",
 		Suppressible: false,
+	}
+}
+
+func serverRUFailureDiagnostic(record Record) check.Diagnostic {
+	return check.Diagnostic{
+		Code:     codeServerRUFailure,
+		Severity: check.SeverityWarning,
+		Title:    "Automatic ServerRU collection failed",
+		Message:  "go-tidb completed a target statement without a usable same-session ServerRU sample",
+		Evidence: []check.Evidence{
+			{Message: "Query fingerprint: " + record.Fingerprint},
+			{Message: record.ServerRU.Error},
+		},
+		Suggestion:   "Verify TiDB support, context lifetime, and use of *sql.DB, *sql.Conn, or an active *sql.Tx executor",
+		Suppressible: false,
+		Reference:    "https://docs.pingcap.com/tidb/stable/system-variables/#tidb_last_query_info",
 	}
 }
 
@@ -255,7 +310,7 @@ func nonEmptyRuntimeValue(value string) string {
 // FormatStatistics renders one stable human-readable runtime summary line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d target_duration=%s",
+		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
 		statistics.Captures,
 		statistics.Scopes,
 		statistics.Statements,
@@ -263,5 +318,10 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.BatchGroups,
 		statistics.SplitBatches,
 		time.Duration(statistics.TargetDuration),
+		statistics.AuxiliaryStatements,
+		time.Duration(statistics.DiagnosticDuration),
+		statistics.ServerRUSamples,
+		statistics.ServerRUErrors,
+		strconv.FormatFloat(statistics.ServerRUTotal, 'g', -1, 64),
 	)
 }

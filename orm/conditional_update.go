@@ -112,6 +112,9 @@ func (q *UpdateWhereQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (
 		return 0, err
 	}
 	observation := beginTypedMutationStatementObservation(ctx, StatementUpdate, compiled.sql, compiled.arguments, compiled.modelName, "update_where")
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute conditional UPDATE for %s: %w", compiled.modelName, err)

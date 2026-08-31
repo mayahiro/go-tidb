@@ -27,7 +27,7 @@ func TestRuntimeCaptureRecordsTypedQueryWithoutBindValues(t *testing.T) {
 	parent := WithStatementObserver(context.Background(), func(event StatementEvent) {
 		parentEvent = event
 	}, IncludeStatementArguments())
-	ctx := WithRuntimeCapture(parent, capture)
+	ctx := WithRuntimeCapture(parent, capture, IncludeStatementArguments())
 
 	values, err := Query[scanModel]().
 		Select("ID", "Name").
@@ -60,6 +60,9 @@ func TestRuntimeCaptureRecordsTypedQueryWithoutBindValues(t *testing.T) {
 	}
 	if record.ArgumentCount != 2 || !record.RowsReturnedKnown || record.RowsReturned != 2 || record.Query == nil {
 		t.Fatalf("runtime result = %#v", record)
+	}
+	if record.ServerRU != nil {
+		t.Fatalf("runtime ServerRU = %#v, want nil without CollectServerRU", record.ServerRU)
 	}
 	if !record.Query.Limit.Set || record.Query.Limit.Value != 0 {
 		t.Fatalf("runtime limit = %#v, want presence without value", record.Query.Limit)

@@ -103,6 +103,9 @@ The following decisions apply throughout v0.1:
 15. Go-source lint is an independent opt-in command. It parses production
     source without loading or executing application packages and reports
     uncertainty instead of guessing across an unresolved data-flow boundary.
+16. Automatic ServerRU collection is an explicit high-cost observer option.
+    Target statements and diagnostic statements, and their durations, remain
+    separate. A diagnostic failure never replaces the target result.
 
 ### 3.1 Implemented surface
 
@@ -146,15 +149,20 @@ The currently implemented surface provides:
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
-  argument values excluded by default and available through an explicit option
+  argument values excluded by default, explicit bind-value capture, and
+  explicit same-session ServerRU collection
 - Operation-scoped debug reports that aggregate completed root, relation,
-  split-bulk, raw, and transaction statement events without database I/O
+  split-bulk, raw, and transaction statement events, with optional ServerRU
+  diagnostic cost kept separate from target cost
 - SELECT-only execution-plan inspection using TiDB's default row-format
   `EXPLAIN` output
 - Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
   runtime output and conservative diagnostics over the returned plan
 - Same-session ServerRU reading for one completed DML statement through a pinned
   `*sql.Conn` or active `*sql.Tx`
+- Observer-scoped ServerRU capture that temporarily pins `*sql.DB` per
+  recognized DML statement and records one auxiliary query without replacing
+  target results on diagnostic failure
 - Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
   snapshots, including SHOW CREATE TABLE executable comments
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
@@ -257,7 +265,11 @@ typed query or statement fingerprints, model-row SELECT compiler decisions,
 actual preload and bulk batch positions, statement duration, row counts, and
 errors. `tidbgo analyze` streams that artifact without a database connection
 and reports aggregate execution counts, relation TopN fallbacks, and possible
-runtime N+1 query shapes.
+runtime N+1 query shapes. `CollectServerRU` optionally adds one same-session
+diagnostic query for each recognized DML statement. The artifact and analyzer
+separate target duration, diagnostic duration, go-tidb statement count,
+auxiliary statement count, successful samples, collection errors, and summed
+ServerRU.
 
 `ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
 without another database call. Suppressible `PLN001` through `PLN004` warnings

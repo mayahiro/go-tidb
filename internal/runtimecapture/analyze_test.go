@@ -98,6 +98,34 @@ func TestAnalyzeSaturatesAccumulatedDuration(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAggregatesServerRUCostAndReportsFailures(t *testing.T) {
+	first := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:first")
+	first.ServerRU = &ServerRU{Known: true, Value: 1.25, DiagnosticDurationNS: 100, AuxiliaryStatements: 1}
+	second := runtimeAnalysisRecord(2, SourceTypedSelect, "q1:second")
+	second.ServerRU = &ServerRU{Known: true, Value: 2.5, DiagnosticDurationNS: 200, AuxiliaryStatements: 1}
+	third := runtimeAnalysisRecord(3, SourceTypedSelect, "q1:third")
+	third.Operation = "UPDATE"
+	third.ServerRU = &ServerRU{DiagnosticDurationNS: 50, AuxiliaryStatements: 1, Error: "read failed"}
+	fourth := third
+	fourth.Sequence = 4
+	fourth.ServerRU = &ServerRU{DiagnosticDurationNS: 50, AuxiliaryStatements: 1, Error: "later read failed"}
+
+	analysis := Analyze([]Record{first, second, third, fourth})
+	statistics := analysis.Statistics
+	if statistics.Statements != 4 || statistics.AuxiliaryStatements != 4 || statistics.ServerRUSamples != 2 || statistics.ServerRUErrors != 2 || statistics.ServerRUTotal != 3.75 || statistics.DiagnosticDuration != 400 {
+		t.Fatalf("statistics = %#v", statistics)
+	}
+	if got, want := diagnosticCodes(analysis), []string{codeServerRUFailure}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	formatted := FormatStatistics(statistics)
+	for _, want := range []string{"statements=4", "auxiliary_statements=4", "diagnostic_duration=400ns", "server_ru_samples=2", "server_ru_errors=2", "server_ru_total=3.75"} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("FormatStatistics() = %q, want substring %q", formatted, want)
+		}
+	}
+}
+
 func runtimeAnalysisRecord(sequence uint64, source Source, fingerprint string) Record {
 	return Record{
 		Version:       Version,

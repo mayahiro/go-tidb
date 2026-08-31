@@ -28,7 +28,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - multi-statement ORM callをまとめるoperation-scoped debug report
 - typed query builderによるSELECT限定のTiDB execution plan取得
 - 明示的なSELECT実行によるTiDB actual runtime plan取得と返されたrowのdiagnostic
-- 完了した1 DML statementに対する明示的なsame-session ServerRU取得
+- 明示的またはobserver scope単位のsame-session ServerRU diagnostic
 
 ## サポート範囲
 
@@ -441,11 +441,15 @@ DB接続なしでoffline解析できます
 tidbgo analyze runtime.jsonl
 ```
 
-runtime captureは `EXPLAIN`、ServerRU read、その他のdatabase I/Oを追加しません
+runtime captureはdefaultで `EXPLAIN` またはその他のdatabase I/Oを追加しません
+
+recognized DML statementごとのsame-session diagnostic round tripを1回追加できる場合だけ `WithRuntimeCapture` へ `orm.CollectServerRU()` を渡します
+
+artifactと `tidbgo analyze` はtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、sample数、error数、ServerRU合計を分離します
 
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 
-scope、writer error、retention、任意の1 operation向け `Debug` の詳細は[Statement observation guide](docs/observability_ja.md)を参照してください
+scope、cost、writer error、retention、任意の1 operation向け `Debug` の詳細は[Statement observation guide](docs/observability_ja.md)を参照してください
 
 ## TiDB diagnostics
 
@@ -492,6 +496,21 @@ mutation、raw SQL、collection preload statementは対象外です
 applicationで有効化する前に[runtime plan boundary](docs/observability_ja.md#explain-analyze)を確認してください
 
 完了した1 DML statementについて、同じpinned sessionからTiDBのServerRUを取得できます
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+observer scope単位の形式ではqueryごとのwrapperは不要です
+
+`*sql.DB` ではgo-tidbがrecognized DML statementとdiagnostic queryを同じconnectionへ一時的にpinします
+
+caller-supplied `*sql.Conn` とactiveな `*sql.Tx` executorも利用できます
+
+collection failureは別に記録し、target resultを置き換えません
+
+1回だけ手動で読む場合はcaller-pinned sessionを使います
 
 ```go
 connection, err := db.Conn(ctx)

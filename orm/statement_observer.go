@@ -70,6 +70,10 @@ type StatementEvent struct {
 	RowsAffectedKnown bool
 	// Error is the execution or result-processing error, if any.
 	Error error
+	// ServerRU contains the opt-in same-session ServerRU diagnostic for this
+	// statement. It is nil when collection was not requested or the operation
+	// is not a recognized DML statement.
+	ServerRU *ServerRUObservation
 }
 
 // StatementObserver receives completed statement events synchronously.
@@ -79,11 +83,23 @@ type StatementObserver func(StatementEvent)
 
 type statementObserverContextKey struct{}
 
+type statementObserverContextOptions uint8
+
+const (
+	statementObserverIncludeArguments statementObserverContextOptions = 1 << iota
+	statementObserverCollectServerRU
+	statementRuntimeCollectServerRU
+)
+
 type statementObserverContextValue struct {
-	observer         StatementObserver
-	includeArguments bool
-	runtimeCapture   *RuntimeCapture
-	runtimeScope     *statementRuntimeScope
+	observer       StatementObserver
+	options        statementObserverContextOptions
+	runtimeCapture *RuntimeCapture
+	runtimeScope   *statementRuntimeScope
+}
+
+func (value statementObserverContextValue) hasOption(option statementObserverContextOptions) bool {
+	return value.options&option != 0
 }
 
 type statementRuntimeScope struct {
@@ -116,7 +132,7 @@ type StatementObserverOption interface {
 type includeStatementArgumentsOption struct{}
 
 func (includeStatementArgumentsOption) applyStatementObserver(value *statementObserverContextValue) {
-	value.includeArguments = true
+	value.options |= statementObserverIncludeArguments
 }
 
 // IncludeStatementArguments includes a snapshot of original Go bind values in
@@ -126,6 +142,24 @@ func (includeStatementArgumentsOption) applyStatementObserver(value *statementOb
 // from SQL and are not driver-converted or interpolated.
 func IncludeStatementArguments() StatementObserverOption {
 	return includeStatementArgumentsOption{}
+}
+
+type collectServerRUOption struct{}
+
+func (collectServerRUOption) applyStatementObserver(value *statementObserverContextValue) {
+	value.options |= statementObserverCollectServerRU
+}
+
+// CollectServerRU enables high-cost same-session ServerRU collection for
+// recognized DML statements.
+//
+// Each measured statement using a supported executor adds one SELECT
+// @@tidb_last_query_info round trip. A *sql.DB executor is pinned internally
+// for the target statement and its diagnostic query. The target result is
+// never replaced by a collection failure. The option can configure
+// WithStatementObserver, WithRuntimeCapture, or Debug.
+func CollectServerRU() StatementObserverOption {
+	return collectServerRUOption{}
 }
 
 // WithStatementObserver returns a context that observes ORM statements.
@@ -139,6 +173,7 @@ func WithStatementObserver(ctx context.Context, observer StatementObserver, opti
 	if parent := statementObserverContext(ctx); parent != nil {
 		value.runtimeCapture = parent.runtimeCapture
 		value.runtimeScope = parent.runtimeScope
+		value.options |= parent.options & statementRuntimeCollectServerRU
 	}
 	for _, option := range options {
 		if option != nil {
@@ -149,9 +184,10 @@ func WithStatementObserver(ctx context.Context, observer StatementObserver, opti
 }
 
 type statementObservation struct {
-	observer StatementObserver
-	event    StatementEvent
-	runtime  *statementRuntimeEvent
+	observer          StatementObserver
+	event             StatementEvent
+	runtime           *statementRuntimeEvent
+	serverRUCollector *statementServerRUCollector
 }
 
 func beginStatementObservation(ctx context.Context, operation StatementOperation, statement string, arguments []any) *statementObservation {
@@ -208,8 +244,11 @@ func beginStatementObservationForContext(value *statementObserverContextValue, o
 			StartedAt:     time.Now(),
 		},
 	}
-	if value.includeArguments {
+	if value.options&statementObserverIncludeArguments != 0 {
 		result.event.Arguments = append([]any(nil), arguments...)
+	}
+	if statementServerRUCollectionEnabled(value) && serverRUStatementOperation(operation) {
+		result.event.ServerRU = &ServerRUObservation{}
 	}
 	return result
 }
@@ -240,6 +279,7 @@ func (observation *statementObservation) finishOutcome(affected int64, affectedK
 	observation.event.RowsAffected = affected
 	observation.event.RowsAffectedKnown = affectedKnown
 	observation.event.Error = err
+	observation.collectServerRU()
 	observer := observation.observer
 	observation.observer = nil
 	runtimeEvent := observation.runtime
@@ -362,6 +402,16 @@ func (logger *statementLogger) observe(event StatementEvent) {
 	}
 	line.WriteByte(' ')
 	line.WriteString(event.Duration.String())
+	if event.ServerRU != nil {
+		line.WriteString(" diagnostic=")
+		line.WriteString(event.ServerRU.DiagnosticDuration.String())
+		line.WriteString(" auxiliary=")
+		line.WriteString(strconv.Itoa(event.ServerRU.AuxiliaryStatements))
+		if event.ServerRU.Known {
+			line.WriteString(" server_ru=")
+			line.WriteString(strconv.FormatFloat(event.ServerRU.Value, 'g', -1, 64))
+		}
+	}
 	line.WriteString(" args=")
 	line.WriteString(strconv.Itoa(event.ArgumentCount))
 	if formattedArguments != nil {
@@ -382,6 +432,16 @@ func (logger *statementLogger) observe(event StatementEvent) {
 			line.WriteString("\x1b[31m")
 		}
 		writeStatementLogText(&line, event.Error.Error())
+		if logger.color {
+			line.WriteString("\x1b[0m")
+		}
+	}
+	if event.ServerRU != nil && event.ServerRU.Error != nil {
+		line.WriteString(" server_ru_error=")
+		if logger.color {
+			line.WriteString("\x1b[31m")
+		}
+		writeStatementLogText(&line, event.ServerRU.Error.Error())
 		if logger.color {
 			line.WriteString("\x1b[0m")
 		}

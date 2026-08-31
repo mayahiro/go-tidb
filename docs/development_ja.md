@@ -189,7 +189,13 @@ clean caseはdiagnosticなし、warning caseは不完全なstatistics、大規�
 go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
 ```
 
-local `database/sql` test driverを使い、`database/sql` row pathとJSON decodeを含みます
+automatic connection pinning、1 target `RawExec`、auxiliary query、decode、通常observerまたはruntime capture deliveryを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRawExecWith(ServerRUCollection|RuntimeCaptureAndServerRU)$' -benchmem -count=5
+```
+
+local `database/sql` test driverを使い、該当するclient pathを含みます
 
 MySQL driver、network round trip、TiDB execution、actual RU consumptionは含みません
 

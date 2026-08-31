@@ -73,7 +73,7 @@ func TestDebugReturnsNonNilEmptyReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Debug() error = %v", err)
 	}
-	if report.Statements == nil || len(report.Statements) != 0 || report.StartedAt.IsZero() || report.Duration < 0 || report.StatementDuration != 0 {
+	if report.Statements == nil || len(report.Statements) != 0 || report.StartedAt.IsZero() || report.Duration < 0 || report.StatementDuration != 0 || report.ServerRU != nil {
 		t.Fatalf("Debug() report = %#v, want a non-nil empty report", report)
 	}
 }

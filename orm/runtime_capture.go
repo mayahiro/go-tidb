@@ -48,10 +48,13 @@ func NewRuntimeCapture(writer io.Writer) *RuntimeCapture {
 //
 // Call it once at a request, job, or test-operation boundary and pass the
 // derived context through existing ORM terminals. It preserves an inherited
-// StatementObserver and never enables bind argument capture. A later
-// WithStatementObserver call also preserves the capture. Installing another
-// RuntimeCapture on the derived context replaces the inherited capture.
-func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture) context.Context {
+// StatementObserver and never enables bind argument capture;
+// IncludeStatementArguments has no effect here. CollectServerRU can explicitly
+// add one same-session diagnostic query for each recognized DML statement. A
+// later WithStatementObserver call also preserves the capture. Installing
+// another RuntimeCapture on the derived context replaces the inherited capture
+// and its options.
+func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ...StatementObserverOption) context.Context {
 	if capture == nil {
 		return ctx
 	}
@@ -61,6 +64,16 @@ func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture) context.Co
 	}
 	value.runtimeCapture = capture
 	value.runtimeScope = &statementRuntimeScope{id: capture.nextScope.Add(1)}
+	value.options &^= statementRuntimeCollectServerRU
+	runtimeConfiguration := statementObserverContextValue{}
+	for _, option := range options {
+		if option != nil {
+			option.applyStatementObserver(&runtimeConfiguration)
+		}
+	}
+	if runtimeConfiguration.hasOption(statementObserverCollectServerRU) {
+		value.options |= statementRuntimeCollectServerRU
+	}
 	return context.WithValue(ctx, statementObserverContextKey{}, value)
 }
 
@@ -113,6 +126,17 @@ func (capture *RuntimeCapture) observe(event StatementEvent, runtimeEvent *state
 		MetadataError:     metadata.metadataError,
 		Batch:             metadata.batch,
 		Query:             metadata.query,
+	}
+	if event.ServerRU != nil {
+		record.ServerRU = &runtimecapture.ServerRU{
+			Value:                event.ServerRU.Value,
+			Known:                event.ServerRU.Known,
+			DiagnosticDurationNS: event.ServerRU.DiagnosticDuration.Nanoseconds(),
+			AuxiliaryStatements:  event.ServerRU.AuxiliaryStatements,
+		}
+		if event.ServerRU.Error != nil {
+			record.ServerRU.Error = event.ServerRU.Error.Error()
+		}
 	}
 	if event.Error != nil {
 		record.Error = event.Error.Error()

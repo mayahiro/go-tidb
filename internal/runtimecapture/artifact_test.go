@@ -1,6 +1,7 @@
 package runtimecapture
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -46,5 +47,45 @@ func TestStatementFingerprintIsStableAndOperationSensitive(t *testing.T) {
 	}
 	if first == StatementFingerprint("EXPLAIN", "SELECT * FROM users WHERE id = ?") {
 		t.Fatal("StatementFingerprint() ignored operation")
+	}
+}
+
+func TestRecordValidatesServerRUObservation(t *testing.T) {
+	valid := Record{
+		Version:       Version,
+		CaptureID:     "capture",
+		ScopeID:       1,
+		Sequence:      1,
+		Operation:     "SELECT",
+		Fingerprint:   "s1:test",
+		ServerRU:      &ServerRU{Known: true, Value: 1.25, DiagnosticDurationNS: 10, AuxiliaryStatements: 1},
+		ArgumentCount: 0,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Record.Validate() error = %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		serverRU ServerRU
+		want     string
+	}{
+		{name: "negative duration", serverRU: ServerRU{DiagnosticDurationNS: -1}, want: "negative ServerRU diagnostic_duration_ns"},
+		{name: "too many statements", serverRU: ServerRU{AuxiliaryStatements: 2}, want: "invalid ServerRU auxiliary statement count"},
+		{name: "known without query", serverRU: ServerRU{Known: true, Value: 1}, want: "invalid known ServerRU value"},
+		{name: "negative value", serverRU: ServerRU{Known: true, Value: -1, AuxiliaryStatements: 1}, want: "invalid known ServerRU value"},
+		{name: "not a number", serverRU: ServerRU{Known: true, Value: math.NaN(), AuxiliaryStatements: 1}, want: "invalid known ServerRU value"},
+		{name: "infinite value", serverRU: ServerRU{Known: true, Value: math.Inf(1), AuxiliaryStatements: 1}, want: "invalid known ServerRU value"},
+		{name: "unknown value", serverRU: ServerRU{Value: 1, AuxiliaryStatements: 1}, want: "unknown nonzero ServerRU value"},
+		{name: "missing result", serverRU: ServerRU{AuxiliaryStatements: 1}, want: "no ServerRU result or error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := valid
+			record.ServerRU = &test.serverRU
+			if err := record.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Record.Validate() error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }

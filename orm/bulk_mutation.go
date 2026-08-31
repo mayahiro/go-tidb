@@ -140,7 +140,11 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 		}
 		observation := beginStatementObservation(ctx, statementOperation, compiled.sql, compiled.arguments)
 		plan.attachRuntimeCapture(observation, &statementGroup, statementOperation, statementIndex, statementCount, start, end)
-		result, execErr := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
+		statementExecutor := executor
+		if observation != nil && observation.event.ServerRU != nil {
+			statementExecutor = observation.prepareServerRUExecExecutor(ctx, executor)
+		}
+		result, execErr := statementExecutor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 		if execErr != nil {
 			observation.finish(0, false, execErr)
 			return totalAffected, plan.batchError(statementIndex, statementCount, start, end, "execute", execErr)

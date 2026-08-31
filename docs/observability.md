@@ -33,6 +33,8 @@ The logger includes:
 - Database-reported affected rows when available
 - SQL template
 - Error when the operation fails
+- Opt-in ServerRU value, diagnostic duration, auxiliary statement count, and
+  collection error
 
 By default it does not receive or log bind argument values. The SQL template
 can still contain application literals when raw SQL is constructed that way,
@@ -78,6 +80,10 @@ by default and contains a shallow slice snapshot only when
 only after `sql.Result.RowsAffected` succeeds. A SELECT or EXPLAIN duration
 covers `QueryContext`, row scanning, iteration, and row closing. Terminal errors
 such as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
+`ServerRU` is nil unless `CollectServerRU` requested a diagnostic for a
+recognized DML operation. When present, it keeps the target result separate
+from the value, diagnostic duration, auxiliary statement count, and collection
+error.
 
 Observers run synchronously after the duration is captured. Custom observers
 should return quickly, be concurrency-safe when contexts are shared, and not
@@ -114,14 +120,26 @@ for any goroutines that use `debugContext`; events completed after it returns
 are outside the report. A callback error is returned unchanged with the report
 of statements that already completed.
 
-`Debug` only collects existing events. It adds no database calls, `EXPLAIN`,
-ServerRU reads, or implicit transaction. An observer already present on `ctx`
+`Debug` only collects existing events by default. It adds no database calls,
+`EXPLAIN`, or implicit transaction. An observer already present on `ctx`
 continues to receive the events. Bind arguments are excluded from the report by
 default and can be enabled independently with `IncludeStatementArguments`:
 
 ```go
 report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
 ```
+
+Pass `CollectServerRU` only when the callback should add a same-session
+diagnostic query after each recognized DML statement:
+
+```go
+report, err := orm.Debug(ctx, operation, orm.CollectServerRU())
+```
+
+`report.StatementDuration` remains the target-statement total.
+`report.ServerRU` is non-nil when collection was requested and separately
+reports diagnostic duration, auxiliary statement count, successful sample
+count, collection-error count, and the summed ServerRU value.
 
 Argument values can contain secrets, personal data, or large payloads. The
 report stores SQL templates and errors even in the default mode, so apply the
@@ -161,10 +179,28 @@ application-side statement count wrappers are unnecessary.
 
 Capture is opt-in. When it is disabled, query-shape construction and artifact
 encoding do not run. Ordinary statement observers do not enable this extra
-metadata path. Capture itself performs no database I/O and does not read
-ServerRU or run `EXPLAIN`. It records only statements executed through go-tidb
-with the derived context; direct `database/sql` and other ORM calls remain
-outside its coverage.
+metadata path. Capture performs no additional database I/O by default and
+never runs `EXPLAIN`. It records only statements executed through go-tidb with
+the derived context; direct `database/sql` and other ORM calls remain outside
+its coverage.
+
+Runtime artifacts never contain bind values. Passing
+`IncludeStatementArguments` to `WithRuntimeCapture` has no effect; use it only
+with `WithStatementObserver` or `Debug` when that sensitive data is explicitly
+required.
+
+Enable high-cost ServerRU collection at the same scope boundary when the extra
+round trip per recognized DML statement is intentional:
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+The resulting record keeps target duration separate from ServerRU diagnostic
+duration and auxiliary statement count. `tidbgo analyze` reports go-tidb
+statement and auxiliary statement counts separately, together with successful
+sample count, collection-error count, and summed ServerRU. A collection failure
+produces `RUN003` but never replaces the target statement result.
 
 Analyze a completed artifact without a database connection:
 
@@ -302,6 +338,32 @@ values remain opt-in. See TiDB's [EXPLAIN ANALYZE statement
 reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
 
 ## ServerRU
+
+`CollectServerRU` automatically samples recognized SELECT, INSERT, UPSERT,
+UPDATE, and DELETE operations when passed to `WithStatementObserver`,
+`WithRuntimeCapture`, or `Debug`. It does not sample `EXPLAIN`, transaction
+lifecycle events, or unclassified `EXEC` raw SQL.
+
+For `*sql.DB`, go-tidb temporarily pins one connection before the target call,
+executes the target and diagnostic on that connection, then returns it to the
+pool. A caller-supplied `*sql.Conn` or active `*sql.Tx` is used directly. Other
+executor implementations still execute the target but report a collection
+error without an auxiliary query. The caller retains ownership of a supplied
+connection or transaction. Do not interleave another statement on it while a
+measured ORM call is in progress.
+
+Each eligible statement adds one `SELECT @@tidb_last_query_info` round trip
+after target completion. SELECT rows are scanned and closed first. The
+auxiliary query does not emit another `StatementEvent` or runtime record;
+instead its count, duration, value, and error are attached to the target event.
+Connection-pool wait and release time introduced by automatic `*sql.DB`
+pinning are included in diagnostic duration, not target duration. The
+operation's return value and error remain those of the target even when
+collection fails. Summed ServerRU contains only the values TiDB reports for
+target statements; it does not measure the diagnostic query's own resource
+use.
+
+Use `LastServerRU` for a single explicit read instead of automatic collection.
 
 `LastServerRU` reads the `ru_consumption` reported by TiDB for the last DML
 statement recorded on the same session:

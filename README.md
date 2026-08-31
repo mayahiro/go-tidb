@@ -30,7 +30,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit SELECT execution with actual TiDB runtime-plan inspection and
   diagnostics over the returned rows
-- Explicit same-session ServerRU reading for one completed DML statement
+- Explicit or observer-scoped same-session ServerRU diagnostics
 
 ## Supported scope
 
@@ -420,10 +420,15 @@ without a database connection:
 tidbgo analyze runtime.jsonl
 ```
 
-Runtime capture does not add `EXPLAIN`, ServerRU reads, or other database I/O.
-It excludes bind values, but SQL templates and errors can still contain
+Runtime capture does not add `EXPLAIN` or other database I/O by default. Add
+`orm.CollectServerRU()` to `WithRuntimeCapture` only when one extra
+same-session diagnostic round trip per recognized DML statement is acceptable.
+The artifact and `tidbgo analyze` keep target and diagnostic durations, go-tidb
+and auxiliary statement counts, samples, errors, and summed ServerRU separate.
+Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
-for scope, writer-error, retention, and optional one-operation `Debug` details.
+for scope, cost, writer-error, retention, and optional one-operation `Debug`
+details.
 
 ## TiDB diagnostics
 
@@ -469,6 +474,19 @@ application.
 
 Read TiDB's ServerRU for one completed DML statement from the same pinned
 session:
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+This observer-scoped form requires no query-specific wrapper. For `*sql.DB`,
+go-tidb temporarily pins each recognized DML statement and its diagnostic query
+to one connection. It also accepts caller-supplied `*sql.Conn` and active
+`*sql.Tx` executors. Collection failures are recorded separately and never
+replace target results.
+
+For one manual read, use a caller-pinned session:
 
 ```go
 connection, err := db.Conn(ctx)

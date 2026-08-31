@@ -34,6 +34,7 @@ loggerは次を出力します
 - 取得できた場合のdatabase-reported affected rows
 - SQL template
 - operation失敗時のerror
+- opt-inのServerRU value、diagnostic duration、auxiliary statement count、collection error
 
 defaultではbind argument valueを受け取らず、logにも出力しません
 
@@ -83,6 +84,10 @@ SELECTまたはEXPLAINのdurationには `QueryContext`、row scan、iteration、
 
 `sql.ErrNoRows` と `orm.ErrMultipleRows` のようなterminal errorもeventへ含めます
 
+`ServerRU` は `CollectServerRU` がrecognized DML operationのdiagnosticを要求した場合だけnon-nilになります
+
+target resultとServerRU value、diagnostic duration、auxiliary statement count、collection errorを分離して保持します
+
 durationを確定した後にobserverを同期実行します
 
 custom observerは短時間でreturnし、contextを共有する場合はconcurrency-safeにし、panicしないようにしてください
@@ -120,7 +125,7 @@ callbackは `debugContext` を使うgoroutineの完了を待つ必要があり�
 
 callback errorは変更せず、完了済みstatementのreportとともに返します
 
-`Debug` は既存eventだけを収集し、database call、`EXPLAIN`、ServerRU read、implicit transactionを追加しません
+`Debug` はdefaultでは既存eventだけを収集し、database call、`EXPLAIN`、implicit transactionを追加しません
 
 `ctx` に既存observerがある場合は同じeventを引き続き受け取ります
 
@@ -129,6 +134,16 @@ reportのbind argumentはdefaultで除外し、必要な場合だけ独立して
 ```go
 report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
 ```
+
+recognized DML statementごとにsame-session diagnostic queryを追加する場合だけ `CollectServerRU` を渡します
+
+```go
+report, err := orm.Debug(ctx, operation, orm.CollectServerRU())
+```
+
+`report.StatementDuration` はtarget statementの合計のままです
+
+collectionを要求した場合は `report.ServerRU` がnon-nilとなり、diagnostic duration、auxiliary statement count、成功sample数、collection error数、ServerRU合計を分離して返します
 
 argument valueにはsecret、personal data、大きなpayloadが含まれ得ます
 
@@ -173,7 +188,23 @@ captureはopt-inです
 
 無効時はquery shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
 
-capture自体はdatabase I/O、ServerRU read、`EXPLAIN` を追加しません
+captureはdefaultで追加database I/Oを行わず、`EXPLAIN` を実行しません
+
+runtime artifactはbind valueを保持しません
+
+`WithRuntimeCapture` へ `IncludeStatementArguments` を渡しても効果はなく、このsensitive dataが明示的に必要な場合だけ `WithStatementObserver` または `Debug` で使います
+
+recognized DML statementごとの追加round tripを意図して受け入れる場合は同じscope boundaryで高costなServerRU収集を有効にします
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+recordはtarget durationとServerRU diagnostic durationおよびauxiliary statement countを分離します
+
+`tidbgo analyze` はgo-tidb statement数、auxiliary statement数、成功sample数、collection error数、ServerRU合計を別々にreportします
+
+collection failureは `RUN003` を生成しますがtarget statement resultを置き換えません
 
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
 
@@ -329,6 +360,34 @@ built-in loggerは対応するinteractive terminalで `EXPLAIN ANALYZE` をbrigh
 TiDBの[EXPLAIN ANALYZE statement reference](https://docs.pingcap.com/ja/tidb/stable/sql-statement-explain-analyze/)を参照してください
 
 ## ServerRU
+
+`CollectServerRU` は `WithStatementObserver`、`WithRuntimeCapture`、`Debug` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
+
+`EXPLAIN`、transaction lifecycle event、分類できないraw `EXEC` はsampleしません
+
+`*sql.DB` ではgo-tidbがtarget callの前に1 connectionを一時的にpinし、そのconnection上でtargetとdiagnosticを実行してからpoolへ返します
+
+caller-supplied `*sql.Conn` またはactiveな `*sql.Tx` は直接使います
+
+渡されたconnectionまたはtransactionのownershipはcallerが維持します
+
+その他のexecutor implementationではtargetを通常どおり実行し、auxiliary queryを行わずcollection errorをreportします
+
+測定中のORM callと並行してcaller-supplied connectionまたはtransactionへ別statementを挟まないでください
+
+eligible statementごとにtarget完了後の `SELECT @@tidb_last_query_info` 1 round tripを追加します
+
+SELECT rowは先にscanしてcloseします
+
+auxiliary queryは別の `StatementEvent` またはruntime recordを生成せず、count、duration、value、errorをtarget eventへ保持します
+
+automaticな `*sql.DB` pinningで追加されたconnection pool waitとrelease timeはtarget durationではなくdiagnostic durationへ含めます
+
+collectionが失敗してもoperationのreturn valueとerrorはtargetのものを維持します
+
+ServerRU合計はTiDBがtarget statementについて返したvalueだけを含み、diagnostic query自体のresource useは測定しません
+
+automatic collectionではなく1回だけ明示的に読む場合は `LastServerRU` を使います
 
 `LastServerRU` は同じsessionに記録された最後のDML statementについて、TiDBが報告する `ru_consumption` を取得します
 

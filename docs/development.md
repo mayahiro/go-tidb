@@ -193,9 +193,16 @@ Measure the client-side cost of reading and decoding one ServerRU value:
 go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
 ```
 
-This benchmark uses a local `database/sql` test driver. It includes the
-`database/sql` row path and JSON decoding but excludes the MySQL driver,
-network round trip, TiDB execution, and actual RU consumption
+Measure automatic connection pinning, one target `RawExec`, the auxiliary
+query, decoding, and either ordinary observer or runtime-capture delivery:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRawExecWith(ServerRUCollection|RuntimeCaptureAndServerRU)$' -benchmem -count=5
+```
+
+These benchmarks use a local `database/sql` test driver. They include the
+relevant client paths but exclude the MySQL driver, network round trip, TiDB
+execution, and actual RU consumption
 
 ## Driver transport benchmark
 

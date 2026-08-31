@@ -23,9 +23,11 @@
 // execution events, and NewStatementLogger provides automatic terminal colors
 // with bind values excluded unless explicitly enabled. RuntimeCapture records
 // actual typed queries, preloads, and bulk splits after it is installed at an
-// operation boundary, without per-query registration. Debug
-// groups every statement completed by one application operation without adding
-// database I/O. Explain inspects the TiDB execution plan of a typed SELECT
+// operation boundary, without per-query registration. CollectServerRU is an
+// explicit high-cost observer option that pins pooled statements as needed and
+// keeps diagnostic cost separate from target cost. Debug groups every statement
+// completed by one application operation without adding database I/O by
+// default. Explain inspects the TiDB execution plan of a typed SELECT
 // without executing it, and ExplainAnalyze explicitly executes that SELECT to
 // collect runtime plan data. ExplainAnalyzePlan.Diagnostics checks the returned
 // plan without another database statement. LastServerRU reads TiDB's ServerRU
