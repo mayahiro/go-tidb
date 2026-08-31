@@ -47,7 +47,7 @@ func (q *UpsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err != nil {
 		return 0, err
 	}
-	observation := beginStatementObservation(ctx, StatementUpsert, compiled.sql, compiled.arguments)
+	observation := beginTypedMutationStatementObservation(ctx, StatementUpsert, compiled.sql, compiled.arguments, compiled.modelName, "upsert")
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute UPSERT for %s: %w", compiled.modelName, err)

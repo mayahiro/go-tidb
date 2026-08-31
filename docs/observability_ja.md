@@ -89,7 +89,7 @@ custom observerは短時間でreturnし、contextを共有する場合はconcurr
 
 `NewStatementLogger` はwriteを直列化し、writer errorがdatabase resultを置き換えないよう無視します
 
-`WithStatementObserver` へnilを渡すと継承したobserverを無効化します
+`WithStatementObserver` へnilを渡すと継承した通常observerを無効化しますが、`RuntimeCapture` は無効化しません
 
 ## Operation debug report
 
@@ -133,6 +133,81 @@ report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
 argument valueにはsecret、personal data、大きなpayloadが含まれ得ます
 
 default modeでもSQL templateとerrorを保持するため、statement logと同じ出力先とretention controlを適用してください
+
+## Structured runtime capture
+
+application codeでqueryごとの登録を行わず実行statementを解析する場合は1個の `RuntimeCapture` を再利用します
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+
+// request、job、test operationの境界ごとに1回だけ設定します
+ctx = orm.WithRuntimeCapture(ctx, capture)
+```
+
+既存ORM terminalにはderived contextをそのまま渡します
+
+query、repository、`Debug` callback、`StatementCount`、`EstimateAllStatements`、artifact変換のwrapperは不要です
+
+captureはconcurrentなscope間で再利用でき、`WithRuntimeCapture` の呼び出しごとにoffline N+1解析用の異なるscopeを割り当てます
+
+継承した通常の `StatementObserver` も維持します
+
+通常observerとcaptureはどちらの順序でも設定できます
+
+derived contextへ別のcaptureを設定した場合は継承したcaptureを置き換えます
+
+captureは完了statementごとに1個のJSON objectを書き込みます
+
+recordにはformat version、captureとscopeのidentity、bind valueを含まないfingerprint、SQL template、operation、terminal、判明しているmodelまたはRelation identity、start time、対象statement duration、returnedまたはaffected row count、error、自動bulkまたはpreload batch位置を含めます
+
+model rowを返す `All`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+
+`Count` と `Exists` はmodel row projection shapeを表明せず、bind valueを含まない安定したstatement fingerprintを記録します
+
+Raw SQLはopaqueとして記録します
+
+collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
+
+captureはopt-inです
+
+無効時はquery shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
+
+capture自体はdatabase I/O、ServerRU read、`EXPLAIN` を追加しません
+
+derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
+
+完了したartifactはDB接続なしで解析できます
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+```
+
+CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析します
+
+正確なaggregate statisticsに必要な異なるcapture、scope、fingerprint、batch identityは保持します
+
+analyzerはcapture件数とduration、compiler TopN fallback、同一scope内でpreload以外のSELECT fingerprintが繰り返された場合のN+1候補をreportします
+
+反復は証拠であり確定ではなく、retryまたは意図した反復lookupはapplication reviewが必要な場合があります
+
+失敗したSELECT attemptもstatementを消費するため対象に含めます
+
+suppressionはexact codeと空ではないreasonを記録します
+
+preload batch splitはN+1 ruleから除外します
+
+bind valueはruntime artifactへ書き込みません
+
+Raw SQLへ直接記述したliteralはSQL templateに残り、database errorにもvalueが含まれる場合があります
+
+artifactをsensitiveなdevelopment dataとして扱い、file permission、destination、retentionを管理してください
+
+writerの所有とcloseはcallerが担当します
+
+encodeまたはwriter errorはdatabase resultを置き換えず、artifactの完全性が必要な場合は `capture.Err()` を確認します
 
 ## SELECT EXPLAIN
 

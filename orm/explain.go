@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -104,13 +105,15 @@ func (q *SelectQuery[T]) queryExplainRows(ctx context.Context, executor QueryExe
 		return nil, err
 	}
 	statement := prefix + compiled.statement.sql
-	return queryTextRowsOperation(
+	metadata := runtimePlanMetadata(runtimeSelectMetadata(ctx, &q.selection, compiled, strings.ToLower(string(operation))))
+	return queryTextRowsOperationWithMetadata(
 		ctx,
 		executor,
 		operation,
 		string(operation),
 		statement,
 		compiled.arguments,
+		metadata,
 	)
 }
 

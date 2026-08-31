@@ -293,24 +293,6 @@ func ListUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]Use
 	return usersWithOrdersQuery().All(ctx, executor)
 }
 
-// EstimateUsersWithOrdersStatements bounds the root and collection SELECTs
-// used by ListUsersWithOrders without accessing a database.
-func EstimateUsersWithOrdersStatements() (orm.StatementCountEstimate, error) {
-	return usersWithOrdersQuery().EstimateAllStatements()
-}
-
-// DebugUsersWithOrders returns users and one report containing the root and
-// relation statements executed by the operation.
-func DebugUsersWithOrders(ctx context.Context, executor orm.QueryExecutor) ([]User, orm.DebugReport, error) {
-	var users []User
-	report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-		var queryErr error
-		users, queryErr = usersWithOrdersQuery().All(debugContext, executor)
-		return queryErr
-	})
-	return users, report, err
-}
-
 // LoadUserWithOrderCount uses explicit SQL for an aggregate while retaining
 // model-aware result scanning.
 func LoadUserWithOrderCount(ctx context.Context, executor orm.QueryExecutor, userID int64) (User, error) {
@@ -338,12 +320,6 @@ func InsertOrders(ctx context.Context, executor orm.ExecExecutor, values []*Orde
 	return orm.InsertMany(values).Exec(ctx, executor)
 }
 
-// InsertOrdersStatementCount returns the exact planned automatic batch count
-// without building SQL or accessing a database.
-func InsertOrdersStatementCount(values []*Order) (int, error) {
-	return orm.InsertMany(values).StatementCount()
-}
-
 // UpsertUser inserts a user or updates its writable fields when a database
 // unique key conflicts.
 func UpsertUser(ctx context.Context, executor orm.ExecExecutor, value *User) (int64, error) {
@@ -354,12 +330,6 @@ func UpsertUser(ctx context.Context, executor orm.ExecExecutor, value *User) (in
 // statements.
 func UpsertUsers(ctx context.Context, executor orm.ExecExecutor, values []*User) (int64, error) {
 	return orm.UpsertMany(values).Exec(ctx, executor)
-}
-
-// UpsertUsersStatementCount returns the exact planned automatic batch count
-// after validating the bulk UPSERT offline.
-func UpsertUsersStatementCount(values []*User) (int, error) {
-	return orm.UpsertMany(values).StatementCount()
 }
 
 // SaveUser updates every writable User field using the model primary key.

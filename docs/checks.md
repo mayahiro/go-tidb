@@ -37,7 +37,7 @@ See the runnable
 [`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check) command
 for an explicit model and query registration example
 
-## Predict statement counts
+## Optional offline statement-count tooling
 
 Statement counts are factual planning data rather than warnings by default:
 
@@ -52,12 +52,20 @@ when the builder and relation cardinality prove one. These methods are offline
 and do not inspect element values, execute custom `driver.Valuer` methods, or
 access a database.
 
-The values are not appended to `SelectQuery.Diagnostics` and are not consumed
-directly by `tidbgo check`. Multiple statements can be an intentional result of
-safe bulk splitting or relation loading, so the application-owned check command
-decides whether a project-specific threshold should become a diagnostic.
+Do not mirror every production operation with a statement-count wrapper.
+Normal application code should execute the builder directly. Structured
+runtime capture records the actual statements, automatic bulk splits, and
+preload batches after one observer is installed at the request or job boundary.
+
+The offline values are not appended to `SelectQuery.Diagnostics` and are not
+consumed directly by `tidbgo check`. Multiple statements can be an intentional
+result of safe bulk splitting or relation loading, so dedicated tests or custom
+offline tooling decide whether a project-specific threshold should become a
+diagnostic.
 See the [query guide](queries.md#preload-relations) and [mutation
-guide](mutations.md#insert) for the exact bounds.
+guide](mutations.md#insert) for the exact bounds, and the [observation
+guide](observability.md#structured-runtime-capture) for automatic runtime
+collection.
 
 ## Report with the CLI
 
@@ -95,6 +103,16 @@ The fixed exit policy is:
 | `5` | The command cannot read input, write output, or complete an internal operation |
 
 Warnings and info do not change a successful status
+
+Runtime capture artifacts use a separate command because they contain
+execution records rather than a prebuilt diagnostic array:
+
+```sh
+tidbgo analyze runtime.jsonl
+```
+
+The command performs no database access. See the [observation
+guide](observability.md#structured-runtime-capture) for the artifact boundary.
 
 ## Suppress an accepted diagnostic
 

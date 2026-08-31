@@ -23,6 +23,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
 - terminalの自動色付きcontext-scoped statement observation
+- observer設定だけで使うstructured runtime captureとoffline N+1解析
 - multi-statement ORM callをまとめるoperation-scoped debug report
 - typed query builderによるSELECT限定のTiDB execution plan取得
 - 明示的なSELECT実行によるTiDB actual runtime plan取得
@@ -335,7 +336,9 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 
 `Exec` はTiDBの65535 placeholder上限で自動分割し、`Build` は1個の実行可能statementを表す契約を維持します
 
-`StatementCount` はdatabase I/Oなしで正確な予定分割数を返します
+`StatementCount` はtestとoffline capacity tooling向けに残しますが、通常のapplication operationへ並行するdiagnostic wrapperは不要です
+
+runtime captureが実際の分割を自動的に記録します
 
 全batchをatomicにする場合は直接作成した `*sql.Tx` または `Transaction` callbackから受け取った `*sql.Tx` を使います
 
@@ -412,24 +415,30 @@ lifecycleの対象、custom observer、logの安全境界は[Statement observati
 
 bind argument valueが必要な場合だけ `IncludeStatementArguments` で明示的に有効化できます
 
-追加database callなしで1 ORM operationのroot statementとRelation statementをまとめて取得できます
+structured analysisには1個のcaptureを再利用し、requestまたはjob境界だけで設定します
 
 ```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
-`report.Statements` は完了event、`report.StatementDuration` はその累積duration、`report.Duration` はcallback全体のdurationを保持します
+既存ORM callには登録、wrapper、diagnostic callを追加しません
 
-bind valueは `Debug` へ `IncludeStatementArguments` を渡した場合だけ含めます
+JSON Lines artifactは実際に通過したroot query、collection preload、bulk splitをbind valueなしのfingerprint、duration、row countとともに記録します
 
-wrapper自体は `EXPLAIN`、ServerRU read、その他のdatabase I/Oを行いません
+model rowを返すSELECTとplan recordにはcompiler decisionも含めます
+
+DB接続なしでoffline解析できます
+
+```sh
+tidbgo analyze runtime.jsonl
+```
+
+runtime captureは `EXPLAIN`、ServerRU read、その他のdatabase I/Oを追加しません
+
+bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
+
+scope、writer error、retention、任意の1 operation向け `Debug` の詳細は[Statement observation guide](docs/observability_ja.md)を参照してください
 
 ## TiDB diagnostics
 
@@ -519,6 +528,17 @@ application側のcheck commandがmodel type、query builder、schema snapshotを
 
 詳細は[Offline diagnostic report guide](docs/checks_ja.md)を参照してください
 
+application queryの登録とDB接続なしでstructured runtime artifactを解析できます
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+```
+
+このcommandはcaptured statementを集約し、observer scopeごとのcompiler fallbackとN+1 SELECT候補をreportします
+
+詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
+
 version情報は次のcommandで出力します
 
 ```sh
@@ -537,6 +557,7 @@ command helpは `tidbgo --help` で表示できます
 - model由来identifierはSQLへ書き込む前にvalidationする
 - built-in statement loggerはdefaultでargument valueを除外する
 - debug reportはdefaultでargument valueを除外するがSQL templateとerrorは保持する
+- runtime captureはbind valueを除外するがSQL templateとerrorを保持するためartifactの出力先とretentionを保護する
 - `IncludeStatementArguments` はcredential、token、personal dataを公開し得るため管理されたdebug時だけ有効化する
 - Raw SQLはtrusted application codeでありtyped builderの構造validationとmutation safety validationを受けない
 

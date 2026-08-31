@@ -9,7 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/mayahiro/go-tidb/internal/queryshape"
+	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 )
 
 // StatementOperation identifies the logical kind of an executed statement.
@@ -78,6 +82,30 @@ type statementObserverContextKey struct{}
 type statementObserverContextValue struct {
 	observer         StatementObserver
 	includeArguments bool
+	runtimeCapture   *RuntimeCapture
+	runtimeScope     *statementRuntimeScope
+}
+
+type statementRuntimeScope struct {
+	id       uint64
+	sequence atomic.Uint64
+}
+
+type statementRuntimeEvent struct {
+	capture  *RuntimeCapture
+	scopeID  uint64
+	sequence uint64
+	metadata statementRuntimeMetadata
+}
+
+type statementRuntimeMetadata struct {
+	source        runtimecapture.Source
+	terminal      string
+	model         string
+	relation      string
+	metadataError string
+	batch         *runtimecapture.Batch
+	query         *queryshape.Query
 }
 
 // StatementObserverOption configures statement observation for one context.
@@ -104,13 +132,17 @@ func IncludeStatementArguments() StatementObserverOption {
 //
 // The observer is called once after each attempted SELECT, EXPLAIN, mutation,
 // begin, commit, or rollback. Argument values are omitted unless
-// IncludeStatementArguments is passed. Passing nil disables an observer
-// inherited from ctx.
+// IncludeStatementArguments is passed. Passing nil disables an ordinary
+// observer inherited from ctx without disabling RuntimeCapture.
 func WithStatementObserver(ctx context.Context, observer StatementObserver, options ...StatementObserverOption) context.Context {
-	value := statementObserverContextValue{observer: observer}
+	value := &statementObserverContextValue{observer: observer}
+	if parent := statementObserverContext(ctx); parent != nil {
+		value.runtimeCapture = parent.runtimeCapture
+		value.runtimeScope = parent.runtimeScope
+	}
 	for _, option := range options {
 		if option != nil {
-			option.applyStatementObserver(&value)
+			option.applyStatementObserver(value)
 		}
 	}
 	return context.WithValue(ctx, statementObserverContextKey{}, value)
@@ -119,15 +151,56 @@ func WithStatementObserver(ctx context.Context, observer StatementObserver, opti
 type statementObservation struct {
 	observer StatementObserver
 	event    StatementEvent
+	runtime  *statementRuntimeEvent
 }
 
 func beginStatementObservation(ctx context.Context, operation StatementOperation, statement string, arguments []any) *statementObservation {
-	value, _ := ctx.Value(statementObserverContextKey{}).(statementObserverContextValue)
-	if value.observer == nil {
+	return beginStatementObservationWithMetadata(ctx, operation, statement, arguments, statementRuntimeMetadata{})
+}
+
+func beginStatementObservationWithMetadata(ctx context.Context, operation StatementOperation, statement string, arguments []any, metadata statementRuntimeMetadata) *statementObservation {
+	return beginStatementObservationForContext(statementObserverContext(ctx), operation, statement, arguments, metadata)
+}
+
+func beginTypedMutationStatementObservation(ctx context.Context, operation StatementOperation, statement string, arguments []any, modelName, terminal string) *statementObservation {
+	value := statementObserverContext(ctx)
+	if value == nil || value.observer == nil && value.runtimeCapture == nil {
 		return nil
+	}
+	metadata := statementRuntimeMetadata{}
+	if value.runtimeCapture != nil {
+		metadata = runtimeTypedMutationMetadata(modelName, terminal)
+	}
+	return beginStatementObservationForContext(value, operation, statement, arguments, metadata)
+}
+
+func beginRelationMutationStatementObservation(ctx context.Context, operation StatementOperation, statement string, arguments []any, path, terminal string) *statementObservation {
+	observation := beginTypedMutationStatementObservation(ctx, operation, statement, arguments, "", terminal)
+	if observation == nil || observation.runtime == nil {
+		return observation
+	}
+	modelName, _, _ := strings.Cut(path, ".")
+	observation.runtime.metadata.model = modelName
+	observation.runtime.metadata.relation = path
+	return observation
+}
+
+func beginStatementObservationForContext(value *statementObserverContextValue, operation StatementOperation, statement string, arguments []any, metadata statementRuntimeMetadata) *statementObservation {
+	if value == nil || value.observer == nil && value.runtimeCapture == nil {
+		return nil
+	}
+	var runtimeEvent *statementRuntimeEvent
+	if value.runtimeCapture != nil && value.runtimeScope != nil {
+		runtimeEvent = &statementRuntimeEvent{
+			capture:  value.runtimeCapture,
+			scopeID:  value.runtimeScope.id,
+			sequence: value.runtimeScope.sequence.Add(1),
+			metadata: metadata,
+		}
 	}
 	result := &statementObservation{
 		observer: value.observer,
+		runtime:  runtimeEvent,
 		event: StatementEvent{
 			Operation:     operation,
 			SQL:           statement,
@@ -141,8 +214,26 @@ func beginStatementObservation(ctx context.Context, operation StatementOperation
 	return result
 }
 
+func runtimeCaptureMetadataEnabled(ctx context.Context) bool {
+	value := statementObserverContext(ctx)
+	return value != nil && value.runtimeCapture != nil
+}
+
+func statementObserverContext(ctx context.Context) *statementObserverContextValue {
+	value, _ := ctx.Value(statementObserverContextKey{}).(*statementObserverContextValue)
+	return value
+}
+
 func (observation *statementObservation) finish(affected int64, affectedKnown bool, err error) {
-	if observation == nil || observation.observer == nil {
+	observation.finishOutcome(affected, affectedKnown, 0, false, err)
+}
+
+func (observation *statementObservation) finishQuery(returned int64, err error) {
+	observation.finishOutcome(0, false, returned, true, err)
+}
+
+func (observation *statementObservation) finishOutcome(affected int64, affectedKnown bool, returned int64, returnedKnown bool, err error) {
+	if observation == nil {
 		return
 	}
 	observation.event.Duration = time.Since(observation.event.StartedAt)
@@ -151,7 +242,14 @@ func (observation *statementObservation) finish(affected int64, affectedKnown bo
 	observation.event.Error = err
 	observer := observation.observer
 	observation.observer = nil
-	observer(observation.event)
+	runtimeEvent := observation.runtime
+	observation.runtime = nil
+	if runtimeEvent != nil {
+		runtimeEvent.capture.observe(observation.event, runtimeEvent, returned, returnedKnown)
+	}
+	if observer != nil {
+		observer(observation.event)
+	}
 }
 
 func finishMutationStatementObservation(observation *statementObservation, result sql.Result, operation, modelName string) (int64, error) {
@@ -167,6 +265,25 @@ type observedQueryRows struct {
 
 func (rows *observedQueryRows) finishStatementObservation(err error) {
 	rows.observation.finish(0, false, err)
+	rows.observation = nil
+}
+
+type capturedQueryRows struct {
+	*sql.Rows
+	observation  *statementObservation
+	rowsReturned int64
+}
+
+func (rows *capturedQueryRows) Next() bool {
+	next := rows.Rows.Next()
+	if next {
+		rows.rowsReturned++
+	}
+	return next
+}
+
+func (rows *capturedQueryRows) finishStatementObservation(err error) {
+	rows.observation.finishQuery(rows.rowsReturned, err)
 	rows.observation = nil
 }
 

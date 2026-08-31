@@ -67,7 +67,8 @@ func (q *SelectQuery[T]) All(ctx context.Context, executor QueryExecutor) ([]T, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := queryRows(ctx, executor, compiled)
+	metadata := runtimeSelectMetadata(ctx, &q.selection, compiled, "all")
+	rows, err := queryRows(ctx, executor, compiled, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -110,22 +111,31 @@ func validateQueryExecution(ctx context.Context, executor QueryExecutor) error {
 	return nil
 }
 
-func queryRows(ctx context.Context, executor QueryExecutor, compiled compiledSelect) (queryResultRows, error) {
-	return queryTextRows(
+func queryRows(ctx context.Context, executor QueryExecutor, compiled compiledSelect, metadata statementRuntimeMetadata) (queryResultRows, error) {
+	return queryTextRowsWithMetadata(
 		ctx,
 		executor,
 		compiled.statement.scanPlan.modelType.Name(),
 		compiled.statement.sql,
 		compiled.arguments,
+		metadata,
 	)
 }
 
 func queryTextRows(ctx context.Context, executor QueryExecutor, modelName, query string, arguments []any) (queryResultRows, error) {
-	return queryTextRowsOperation(ctx, executor, StatementSelect, modelName, query, arguments)
+	return queryTextRowsWithMetadata(ctx, executor, modelName, query, arguments, statementRuntimeMetadata{})
+}
+
+func queryTextRowsWithMetadata(ctx context.Context, executor QueryExecutor, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
+	return queryTextRowsOperationWithMetadata(ctx, executor, StatementSelect, modelName, query, arguments, metadata)
 }
 
 func queryTextRowsOperation(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any) (queryResultRows, error) {
-	observation := beginStatementObservation(ctx, operation, query, arguments)
+	return queryTextRowsOperationWithMetadata(ctx, executor, operation, modelName, query, arguments, statementRuntimeMetadata{})
+}
+
+func queryTextRowsOperationWithMetadata(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
+	observation := beginStatementObservationWithMetadata(ctx, operation, query, arguments, metadata)
 	rows, err := executor.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: query %s rows: %w", modelName, err)
@@ -138,6 +148,9 @@ func queryTextRowsOperation(ctx context.Context, executor QueryExecutor, operati
 		return nil, err
 	}
 	if observation != nil {
+		if observation.runtime != nil {
+			return &capturedQueryRows{Rows: rows, observation: observation}, nil
+		}
 		return &observedQueryRows{Rows: rows, observation: observation}, nil
 	}
 	return rows, nil

@@ -61,6 +61,7 @@ func TestApplicationHelp(t *testing.T) {
 		stdout := string(result.Stdout())
 		for _, want := range []string{
 			"Usage:\n  tidbgo [OPTIONS] <COMMAND>",
+			"analyze",
 			"check",
 			"Additional commands:\n  version",
 			"Options:",

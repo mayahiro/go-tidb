@@ -44,6 +44,7 @@ func application(toolVersion string) *cli.Command {
 				Entry("version", "Print the tidbgo version"),
 		).
 		Subcommand(checkCommand()).
+		Subcommand(analyzeCommand()).
 		Subcommand(
 			cli.NewCommand(versionActionCommand).
 				ID("version-command").

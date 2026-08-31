@@ -24,6 +24,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
+- Observer-only structured runtime capture and offline N+1 analysis
 - Operation-scoped debug reports for multi-statement ORM calls
 - SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit SELECT execution with actual TiDB runtime-plan inspection
@@ -327,7 +328,9 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 `InsertMany(values)` and `UpsertMany(values)` accept either `[]Model` or
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
 limit, while `Build` continues to represent one executable statement.
-`StatementCount` returns the exact planned split count without database I/O.
+`StatementCount` remains available for tests and offline capacity tooling, but
+normal application operations do not need a parallel diagnostic wrapper.
+Runtime capture records the actual split automatically.
 Pass a `*sql.Tx`, created directly or supplied to a `Transaction` callback,
 when every batch must be atomic. `Transaction` uses default `database/sql`
 options and does not retry its callback. Every typed mutation supports offline
@@ -391,25 +394,28 @@ text. See the [statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
 
-Capture the root and relation statements from one ORM operation without adding
-database calls:
+For structured analysis, create one reusable capture and install it only at a
+request or job boundary:
 
 ```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
-`report.Statements` contains completed events and `report.StatementDuration`
-contains their cumulative duration. `report.Duration` measures the complete
-callback. Bind values remain excluded unless `IncludeStatementArguments` is
-passed to `Debug`. The wrapper performs no `EXPLAIN`, ServerRU read, or other
-database I/O.
+Existing ORM calls require no registration, wrapper, or diagnostic call. The
+JSON Lines artifact records actual root queries, collection preloads, and bulk
+splits with bind-free fingerprints, duration, and row counts. Model-row SELECT
+and plan records also include compiler decisions. Analyze the artifact offline
+without a database connection:
+
+```sh
+tidbgo analyze runtime.jsonl
+```
+
+Runtime capture does not add `EXPLAIN`, ServerRU reads, or other database I/O.
+It excludes bind values, but SQL templates and errors can still contain
+application data. See the [statement observation guide](docs/observability.md)
+for scope, writer-error, retention, and optional one-operation `Debug` details.
 
 ## TiDB diagnostics
 
@@ -494,6 +500,18 @@ and schema snapshots. `tidbgo check` performs no source scan, code generation,
 configuration discovery, or database access. See the [offline diagnostic
 report guide](docs/checks.md)
 
+Analyze a structured runtime artifact without registering application queries
+or connecting to a database:
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+```
+
+The command aggregates captured statements and reports compiler fallbacks and
+possible N+1 SELECTs within each observer scope. See the [statement observation
+guide](docs/observability.md#structured-runtime-capture)
+
 Print version information with:
 
 ```sh
@@ -513,6 +531,8 @@ build time.
 - The built-in statement logger excludes argument values by default
 - Debug reports exclude argument values by default but retain SQL templates and
   errors
+- Runtime capture excludes bind values but retains SQL templates and errors;
+  protect the artifact destination and retention
 - Enabling `IncludeStatementArguments` can expose credentials, tokens, or
   personal data and must be limited to controlled debugging
 - Raw SQL is trusted application code and receives none of the typed builder's

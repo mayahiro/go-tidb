@@ -30,7 +30,7 @@ err := json.NewEncoder(os.Stdout).Encode(diagnostics)
 
 modelとqueryを明示的に登録する実行例は[`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check)を参照してください
 
-## Statement数の予測
+## 任意のoffline statement count tooling
 
 statement数はdefaultではwarningではなく事実を表すplanning dataとして返します
 
@@ -45,11 +45,17 @@ bulk insertとbulk upsertは成功する実行pathの正確な件数を返しま
 
 これらのmethodはofflineで動作し、element valueの参照、custom `driver.Valuer` methodの実行、DB接続を行いません
 
-この値は `SelectQuery.Diagnostics` へ追加せず、`tidbgo check` も直接読み取りません
+production operationごとにstatement count wrapperを並行して実装しません
 
-複数statementは安全なbulk分割またはRelation loadingの意図した結果でもあるため、project固有のthresholdをdiagnosticにするかはapplication-owned check commandが決定します
+通常のapplication codeはbuilderを直接実行します
 
-正確な境界は[query guide](queries_ja.md#relation-preload)と[mutation guide](mutations_ja.md#insert)を参照してください
+requestまたはjob境界へobserverを1回設定するとstructured runtime captureが実際のstatement、自動bulk split、preload batchを記録します
+
+offlineの値は `SelectQuery.Diagnostics` へ追加せず、`tidbgo check` も直接読み取りません
+
+複数statementは安全なbulk分割またはRelation loadingの意図した結果でもあるため、project固有のthresholdをdiagnosticにするかは専用testまたはcustom offline toolingが決定します
+
+正確な境界は[query guide](queries_ja.md#relation-preload)と[mutation guide](mutations_ja.md#insert)、自動runtime収集は[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
 
 ## CLIによるreport
 
@@ -85,6 +91,16 @@ exit policyは固定です
 | `5` | inputのread、outputのwrite、内部operationを完了できない |
 
 warningとinfoは成功statusを変更しません
+
+runtime capture artifactは作成済みdiagnostic arrayではなくexecution recordを含むため別commandで扱います
+
+```sh
+tidbgo analyze runtime.jsonl
+```
+
+このcommandはDBへ接続しません
+
+artifact boundaryは[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
 
 ## 許容したdiagnosticのsuppression
 

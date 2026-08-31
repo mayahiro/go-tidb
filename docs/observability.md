@@ -83,7 +83,8 @@ Observers run synchronously after the duration is captured. Custom observers
 should return quickly, be concurrency-safe when contexts are shared, and not
 panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
-`WithStatementObserver` disables an inherited observer.
+`WithStatementObserver` disables an inherited ordinary observer without
+disabling `RuntimeCapture`.
 
 ## Operation debug reports
 
@@ -125,6 +126,72 @@ report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
 Argument values can contain secrets, personal data, or large payloads. The
 report stores SQL templates and errors even in the default mode, so apply the
 same output and retention controls as statement logging.
+
+## Structured runtime capture
+
+Use one reusable `RuntimeCapture` when executed statements should be analyzed
+without registering each query in application code:
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+
+// Install once at each request, job, or test-operation boundary.
+ctx = orm.WithRuntimeCapture(ctx, capture)
+```
+
+Continue passing the derived context to existing ORM terminals. No query,
+repository, `Debug` callback, `StatementCount`, `EstimateAllStatements`, or
+artifact-conversion wrapper is required. Reuse the capture across concurrent
+scopes; `WithRuntimeCapture` assigns each call a distinct scope used by offline
+N+1 analysis. It also preserves an inherited ordinary `StatementObserver`.
+The ordinary observer and capture can be installed in either order. Installing
+another capture on the derived context replaces the inherited capture.
+
+The capture writes one JSON object per completed statement. Records contain a
+format version, capture and scope identities, bind-free fingerprint, SQL
+template, operation, terminal, model or Relation identity when known, start
+time, target-statement duration, returned or affected row count, error, and
+automatic bulk or preload batch position. Model-row `All`, `First`, and `Only`
+records and typed plan records also carry the bind-free query shape and
+compiler rewrite or fallback decision. `Count` and `Exists` retain a stable
+bind-free statement fingerprint without claiming the model-row projection
+shape. Raw SQL is marked as opaque. Collection preloads and automatically split
+bulk mutations are recorded from the actual execution path, so
+application-side statement count wrappers are unnecessary.
+
+Capture is opt-in. When it is disabled, query-shape construction and artifact
+encoding do not run. Ordinary statement observers do not enable this extra
+metadata path. Capture itself performs no database I/O and does not read
+ServerRU or run `EXPLAIN`. It records only statements executed through go-tidb
+with the derived context; direct `database/sql` and other ORM calls remain
+outside its coverage.
+
+Analyze a completed artifact without a database connection:
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+```
+
+The CLI streams statement records instead of retaining the complete artifact
+in memory. Exact aggregate statistics still retain the distinct capture,
+scope, fingerprint, and batch identities needed by the report.
+
+The analyzer reports captured counts and durations, compiler TopN fallbacks,
+and repeated non-preload SELECT fingerprints within one scope as possible N+1
+queries. Repetition is evidence rather than proof; retries and intentionally
+repeated lookups require application review. Failed SELECT attempts are
+included because they still consume statements. Every suppression names an
+exact code and records a non-empty reason. Preload batch splits are excluded
+from the N+1 rule.
+
+Bind values are never written to the runtime artifact. SQL templates can still
+contain literals supplied through raw SQL, and database errors can contain
+values. Treat the artifact as sensitive development data and choose its file
+permissions, destination, and retention accordingly. The caller owns and
+closes the writer. Encoding and writer failures never replace database results;
+inspect `capture.Err()` when artifact completeness matters.
 
 ## SELECT EXPLAIN
 

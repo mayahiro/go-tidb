@@ -502,7 +502,7 @@ key batchのsplitがなければ `Preload("Orders").Preload("Roles")` はparent�
 
 `Preload("Orders.User")` はparentと、Userをinline joinしたOrders SELECTの2 statementを実行します
 
-この `All` builderのstatement数範囲をoffline checkで使う場合は `EstimateAllStatements` を呼び出します
+専用testまたはoffline toolがこの `All` builderのstatement数範囲を必要とする場合だけ `EstimateAllStatements` を呼び出します
 
 ```go
 query := orm.Query[User]().
@@ -523,6 +523,10 @@ empty result、NULL key、duplicate keyによって実際の件数は少なく�
 1個のcollectionは上限のないtarget数を持ち得るため、その先にnested collectionがある場合はparent row上限が0と確定していない限り最大値をunknownとします
 
 上限のないconstrained root collectionも同じ理由でunknownです
+
+production repositoryへ並行するestimate wrapperは不要です
+
+requestまたはjob境界へobserverを1回設定するとruntime captureが実際のrootとpreload statementを自動的に記録します
 
 この予測はI/Oとcustom `driver.Valuer` 実行を行わず、logging、diagnostic、EXPLAIN、ServerRU queryを含めません
 

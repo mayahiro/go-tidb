@@ -468,8 +468,8 @@ statements: the parent, the Orders SELECT, and the Roles SELECT.
 `Preload("Orders.User")` executes two: the parent and an Orders SELECT with User
 joined inline.
 
-Use `EstimateAllStatements` when an offline check needs statement-count bounds
-for this exact `All` builder:
+Use `EstimateAllStatements` only when a dedicated test or offline tool needs
+statement-count bounds for this exact `All` builder:
 
 ```go
 query := orm.Query[User]().
@@ -491,6 +491,10 @@ root collection is unknown for the same reason. The estimate performs no I/O,
 calls no custom `driver.Valuer`, and excludes logging, diagnostics, EXPLAIN,
 and ServerRU queries. It models `All` only; `First` and `Only` replace the
 builder limit and are not covered by this method.
+
+Production repositories do not need a parallel estimate wrapper. Runtime
+capture records the actual root and preload statements automatically after one
+observer is installed at the request or job boundary.
 
 A keyed pure many-to-many SELECT reads the junction source key first as
 internal bookkeeping, then every mapped scalar target field:

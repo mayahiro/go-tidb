@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-08-31
+- Last updated: 2026-09-01
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -160,7 +160,8 @@ The currently implemented surface provides:
   collection-relation index prefixes
 - Shared diagnostic data types, immutable active and suppressed reports, and
   exact-code suppression with a required recorded reason
-- The `tidbgo version` command and `tidbgo check` text or JSON report command
+- The `tidbgo version` command, `tidbgo check` text or JSON report command, and
+  offline `tidbgo analyze` runtime-capture command
 
 ## 4. Planned runtime surface
 
@@ -232,12 +233,22 @@ explicit file. It emits deterministic text by default or the complete report
 with `--json`, returns status `1` for active errors, and performs no check
 discovery or database access.
 
+`RuntimeCapture` is an opt-in reusable observer configured once at a request,
+job, or test-operation boundary. It records only go-tidb statements using the
+derived context and requires no query-specific registration or diagnostic
+wrapper. Its versioned JSON Lines artifact excludes bind values and records
+typed query or statement fingerprints, model-row SELECT compiler decisions,
+actual preload and bulk batch positions, statement duration, row counts, and
+errors. `tidbgo analyze` streams that artifact without a database connection
+and reports aggregate execution counts, relation TopN fallbacks, and possible
+runtime N+1 query shapes.
+
 Planned catalogs cover:
 
 - General application-query index shape and optional foreign-key policy
 - Unsafe mutations, large offsets, unbounded queries, and preload limits
 - Connected plan regressions and unexpectedly large scans
-- Probable N+1 behavior and query-count regressions
+- Cross-run query-count and duration regressions
 - SELECT server-RU regressions
 - Migration checksums, destructive changes, unsupported Starter SQL, schema
   drift, and migration locking
@@ -259,13 +270,15 @@ configuration.
 
 ## 8. Security requirements
 
-- DSNs, passwords, tokens, bind values, and personal data are excluded from
-  default logs and persisted reports.
+- DSNs, passwords, tokens, and bind values are excluded from default logs and
+  persisted reports. Raw SQL templates and database errors can still contain
+  application data and require explicit retention controls.
 - Full SQL text is not logged by default.
 - TLS is required by default for database connections.
 - Identifier values are validated before SQL construction.
 - User-provided reasons are not inserted into generated SQL comments.
-- Runtime telemetry is opt-in and is not sent by the core packages.
+- Runtime telemetry is opt-in, written only to the caller-owned writer, and is
+  not sent by the core packages.
 - Migration repair operations require an explicit action and reason.
 
 ## 9. Delivery order
@@ -276,7 +289,8 @@ configuration.
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
   deletion, typed raw SQL, statement observation, and same-session ServerRU
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
-  SELECT-only `EXPLAIN ANALYZE`
+  SELECT-only `EXPLAIN ANALYZE`, observer-only structured runtime capture, and
+  offline runtime N+1 analysis
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,

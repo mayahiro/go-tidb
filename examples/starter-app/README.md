@@ -75,7 +75,6 @@ association prefix `(genre_id, clip_id)` against a parsed snapshot.
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
 SELECT and joining each User into that statement.
-`EstimateUsersWithOrdersStatements` bounds that operation offline.
 `ListUsersWithRoles` demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
@@ -84,8 +83,7 @@ the matching roles. `ListVideos` uses the default active-row scope,
 `ListWatchLaterVideos` uses `PreloadWithDeleted` for one relation path.
 `InsertUser`, `InsertOrders`, `UpsertUser`, `UpsertUsers`,
 `SaveUser`, `UpdateUserEmail`, `DeleteUser`, and `DeleteOrdersForUser` show the
-ordinary mutation surface. `InsertOrdersStatementCount` and
-`UpsertUsersStatementCount` return their exact planned split counts offline.
+ordinary mutation surface without parallel diagnostic wrappers.
 `DeleteVideo` and `RestoreVideo` demonstrate a
 server-timestamped soft delete and explicit restore. `ClaimJobLease` and
 `FailJobLease` demonstrate a
@@ -98,9 +96,17 @@ pure-junction relation mutations.
 `orm.Raw[User]`.
 `WithQueryLog` enables the built-in statement logger for selected operations
 without replacing the application-owned executor.
-`DebugUsersWithOrders` returns the users together with one `orm.DebugReport`
-containing the root SELECT and collection preload SELECT. The report omits bind
-values and performs no additional database calls.
+Structured runtime capture is configured directly at a request or job boundary
+instead of adding a companion function for every repository operation:
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture)
+```
+
+The existing functions in this example continue to receive the derived
+context unchanged. Analyze the resulting JSON Lines file with
+`tidbgo analyze`.
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

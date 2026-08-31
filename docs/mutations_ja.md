@@ -40,7 +40,7 @@ empty sliceはno-opです
 
 1個の `sql.Result` から全generated valueを取得できないため、`InsertMany` は個別のgenerated IDを反映しません
 
-SQLをbuildまたはconnectionをopenせず、正確な予定分割数を確認できます
+専用testとoffline capacity toolingではSQLをbuildまたはconnectionをopenせず、正確な予定分割数を確認できます
 
 ```go
 statementCount, err := orm.InsertMany(orders).StatementCount()
@@ -55,6 +55,10 @@ value validationは `Build` と `Exec` が引き続き担当します
 empty sliceは0を返します
 
 この件数は成功する実行pathの予定値であり、invalid value、executor、driver conversion、databaseのerrorが発生した場合は全statementを試行する前に `Exec` が停止することがあります
+
+production codeへ対応するstatement count wrapperは不要です
+
+requestまたはjob境界へobserverを1回設定するとruntime captureが各attempted batchのgroup、位置、row数、予定総数を自動的に記録します
 
 `Exec` は1statementがTiDBの65535 placeholder上限を超える場合だけ決定的に分割します
 
@@ -95,7 +99,9 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 
 `UpsertMany` は `InsertMany` と同じplaceholder上限による自動分割、affected countの集約、empty sliceのno-op、transaction境界を持ちます
 
-`UpsertMany.StatementCount` は正確な予定UPSERT数を返し、selected update fieldもofflineで検証します
+`UpsertMany.StatementCount` は専用testとtooling向けに正確な予定UPSERT数を返し、selected update fieldもofflineで検証します
+
+application upsert operationに必須のcompanionではありません
 
 `Upsert` と `UpsertMany` はgenerated `AUTO_RANDOM` fieldを変更しません
 

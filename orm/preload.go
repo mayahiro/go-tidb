@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 	"github.com/mayahiro/go-tidb/model"
 )
 
@@ -440,15 +441,23 @@ func preloadProjectionContains(projection []string, name string) bool {
 
 func executePreloads(ctx context.Context, executor QueryExecutor, plans []*preloadPlan, value reflect.Value) error {
 	parents := preloadParentSet{value: value}
+	captureRuntime := runtimeCaptureMetadataEnabled(ctx)
 	for _, plan := range plans {
-		if err := executePreloadPlan(ctx, executor, plan, parents); err != nil {
+		if err := executePreloadPlan(ctx, executor, plan, "", captureRuntime, parents); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func executePreloadPlan(ctx context.Context, executor QueryExecutor, plan *preloadPlan, parents preloadParentSet) error {
+func executePreloadPlan(ctx context.Context, executor QueryExecutor, plan *preloadPlan, parentPath string, captureRuntime bool, parents preloadParentSet) error {
+	relationPath := ""
+	if captureRuntime {
+		relationPath = plan.relationName
+		if parentPath != "" {
+			relationPath = parentPath + "." + relationPath
+		}
+	}
 	if !plan.inline {
 		keys, parentIndexes, err := preparePreloadParents(plan, parents, !plan.loadAllSources)
 		if err != nil {
@@ -456,7 +465,12 @@ func executePreloadPlan(ctx context.Context, executor QueryExecutor, plan *prelo
 		}
 		if plan.loadAllSources && len(parentIndexes) != 0 {
 			query := compilePreloadAll(plan)
-			rows, queryErr := queryTextRows(ctx, executor, plan.targetType.Name(), query, nil)
+			metadata := statementRuntimeMetadata{}
+			if captureRuntime {
+				batch := runtimePreloadBatch(relationPath, 1, 1, len(parentIndexes), len(parentIndexes), len(plan.sourceKey), true)
+				metadata = runtimePreloadMetadata(plan, relationPath, batch)
+			}
+			rows, queryErr := queryTextRowsWithMetadata(ctx, executor, plan.targetType.Name(), query, nil, metadata)
 			if queryErr != nil {
 				return fmt.Errorf("orm: preload %s.%s: %w", plan.sourceName, plan.relationName, queryErr)
 			}
@@ -464,10 +478,20 @@ func executePreloadPlan(ctx context.Context, executor QueryExecutor, plan *prelo
 				return fmt.Errorf("orm: preload %s.%s: %w", plan.sourceName, plan.relationName, hydrateErr)
 			}
 		} else {
-			for start := 0; start < len(keys); start += plan.batchSize {
+			batchCount := 0
+			if captureRuntime && len(keys) != 0 {
+				batchCount = bulkStatementCount(len(keys), plan.batchSize)
+			}
+			statementGroup := nextRuntimeStatementGroupWhen(captureRuntime)
+			for batchIndex, start := 0, 0; start < len(keys); batchIndex, start = batchIndex+1, start+plan.batchSize {
 				end := min(start+plan.batchSize, len(keys))
 				query, arguments := compilePreloadBatch(plan, keys[start:end])
-				rows, queryErr := queryTextRows(ctx, executor, plan.targetType.Name(), query, arguments)
+				metadata := statementRuntimeMetadata{}
+				if captureRuntime {
+					batch := runtimePreloadBatchWithGroup(statementGroup, relationPath, batchIndex+1, batchCount, end-start, len(keys), len(plan.sourceKey), false)
+					metadata = runtimePreloadMetadata(plan, relationPath, batch)
+				}
+				rows, queryErr := queryTextRowsWithMetadata(ctx, executor, plan.targetType.Name(), query, arguments, metadata)
 				if queryErr != nil {
 					return fmt.Errorf("orm: preload %s.%s: %w", plan.sourceName, plan.relationName, queryErr)
 				}
@@ -488,11 +512,26 @@ func executePreloadPlan(ctx context.Context, executor QueryExecutor, plan *prelo
 		return nil
 	}
 	for _, child := range plan.children {
-		if err := executePreloadPlan(ctx, executor, child, targets); err != nil {
+		if err := executePreloadPlan(ctx, executor, child, relationPath, captureRuntime, targets); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func runtimePreloadBatch(relation string, index, count, rows, totalRows, keyColumns int, loadAll bool) *runtimecapture.Batch {
+	return runtimePreloadBatchWithGroup(nextRuntimeStatementGroupWhen(true), relation, index, count, rows, totalRows, keyColumns, loadAll)
+}
+
+func runtimePreloadBatchWithGroup(group uint64, relation string, index, count, rows, totalRows, keyColumns int, loadAll bool) *runtimecapture.Batch {
+	batch := runtimeBatchMetadata(group, index, count, rows, totalRows)
+	if batch == nil {
+		return nil
+	}
+	batch.Relation = relation
+	batch.LoadAll = loadAll
+	batch.KeyColumns = keyColumns
+	return batch
 }
 
 func preparePreloadParents(plan *preloadPlan, parents preloadParentSet, includeArguments bool) ([]preloadKey, map[preloadLookupKey]preloadParentIndexes, error) {

@@ -49,12 +49,17 @@ func Debug(ctx context.Context, callback func(context.Context) error, options ..
 		}
 	}
 
-	parent, _ := ctx.Value(statementObserverContextKey{}).(statementObserverContextValue)
+	parent := statementObserverContextValue{}
+	if inherited := statementObserverContext(ctx); inherited != nil {
+		parent = *inherited
+	}
 	collector := newDebugReportCollector()
-	debugContext := context.WithValue(ctx, statementObserverContextKey{}, statementObserverContextValue{
+	debugContext := context.WithValue(ctx, statementObserverContextKey{}, &statementObserverContextValue{
 		observer: debugStatementObserver(parent, collector, reportConfiguration.includeArguments),
 		includeArguments: reportConfiguration.includeArguments ||
 			(parent.observer != nil && parent.includeArguments),
+		runtimeCapture: parent.runtimeCapture,
+		runtimeScope:   parent.runtimeScope,
 	})
 
 	startedAt := time.Now()
