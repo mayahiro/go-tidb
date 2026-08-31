@@ -6,7 +6,9 @@
 
 offline checkではapplication codeがmodel type、query builder、SQL schema snapshotを明示的に選択し、`check.Report` と `tidbgo check` がDB接続なしで1個の固定result policyを適用します
 
-このoffline boundaryにはgenerated registry、source scan、project YAML、live schema inspectionが不要です
+この明示的なcheck boundaryにはgenerated registry、project YAML、live schema inspectionが不要です
+
+独立したopt-inの `tidbgo lint` はpackageをloadせずGo sourceをscanします
 
 明示的なconnected runtime plan収集は分離され、引き続きopt-inです
 
@@ -31,6 +33,50 @@ err := json.NewEncoder(os.Stdout).Encode(diagnostics)
 完全offlineで動作し、出力するschema-aware evidenceにはbind valueを含まないquery fingerprintを記録します
 
 modelとqueryを明示的に登録する実行例は[`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check)を参照してください
+
+## Go source projection解析
+
+queryを個別登録せずcurrent directoryを再帰的にscanします
+
+```sh
+tidbgo lint
+```
+
+対象を狭める場合は1個のproduction Go fileまたはdirectoryを指定します
+
+```sh
+tidbgo lint ./internal/repository
+tidbgo lint ./internal/repository --json
+```
+
+`tidbgo lint` はapplication packageのloadまたは実行、code generation、schema fileのread、DB接続を行わずsourceをparseします
+
+directory scanは現在のGo build contextに従い、test file、generated file、`vendor`、`testdata`、hidden directoryを除外します
+
+現在の `SRC001` ruleはdefault projectionを使用する `All`、`First`、`Only` terminalを認識します
+
+modelのmapped scalar fieldと同じfunction内にあるresultの全利用を証明できる場合だけ `Select` を提案します
+
+`*orm.SelectQuery[T]` を返すsame-packageのtop-level query helperとlocal mutable builderは保守的に追跡し、computed、ignored、Relation fieldはdefault projection比較に含めません
+
+別functionへ渡す、returnする、aliasを作る、model methodまたはRelationを利用する、`Preload` でloadするresultは不確実とし、projection warningを出しません
+
+解決できないmodel shapeと条件付きで変更されるbuilderも不確実として扱い、安全でないprojectionを機械的な修正として提示しないようにします
+
+textとJSONの全reportに次のcoverage countを含めます
+
+- `files`: parseしたnon-generated production file数
+- `model_types`: 解析対象として解決できたquery result model type数
+- `result_queries`: 認識した `All`、`First`、`Only` terminal数
+- `explicit_projections`: `Select` を使用していると認識したresult query数
+- `analyzed`: completeなlocal利用を証明できたdefault projection result数
+- `uncertain`: 意図的に推測しなかったrecognized result数
+
+`SRC001` はsuppressible warningでありsuccess exit statusを変更しません
+
+`--suppress 'SRC001=reason'` は `tidbgo check` と同じreason付きpolicyを使います
+
+不正なsourceまたは対象production Go fileがないinputはstatus `2`、読み取れないpathとoutput failureはstatus `5` を返します
 
 ## 任意のoffline statement count tooling
 
@@ -169,6 +215,10 @@ if report.HasErrors() {
 query fingerprintもbind valueとpagination valueを除外します
 
 diagnostic messageにはmodel名、schema identifier、source path、parser errorが含まれる場合があります
+
+`SRC001` はsource literalとbind valueをdiagnosticへ含めません
+
+diagnostic messageにはfield名も含まれ、Go parser errorは不正なtoken textをquoteする場合があります
 
 diagnostic JSONとreportはdevelopment artifactとして扱い、出力先と保存期間を管理してください
 

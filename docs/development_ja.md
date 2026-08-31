@@ -27,6 +27,7 @@ checkoutから現在のcommandを直接実行します
 ```sh
 go run ./cmd/tidbgo version
 go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
+go run ./cmd/tidbgo lint ./examples/starter-app
 ```
 
 release artifactをbuildする場合はGo linkerでversionを設定します
@@ -50,6 +51,18 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 `integration` moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependencyを所有し、local module replacementで現在のroot checkoutを使用します
 
 root moduleとその利用者へtest dependencyは伝播しません
+
+## Source projection解析benchmark
+
+100個のlocal result queryを含む1 fileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
+
+```sh
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+```
+
+offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
+
+temporary fixture作成はtimer開始前に完了します
 
 ## Schema compatibility client benchmark
 

@@ -63,6 +63,7 @@ func TestApplicationHelp(t *testing.T) {
 			"Usage:\n  tidbgo [OPTIONS] <COMMAND>",
 			"analyze",
 			"check",
+			"lint",
 			"Additional commands:\n  version",
 			"Options:",
 			"-V, --version",

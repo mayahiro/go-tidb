@@ -25,6 +25,7 @@ It demonstrates the current struct-first foundation:
 - Offline query-shape diagnostics without exposing bind values
 - Offline query-to-index diagnostics with a stable bind-free fingerprint
 - Application-owned diagnostic JSON and deterministic `tidbgo check` reports
+- Offline source projection analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
@@ -62,6 +63,15 @@ Run the example test from the repository root:
 ```sh
 go test ./examples/starter-app
 ```
+
+Scan the example's production Go source without a database connection:
+
+```sh
+go run ./cmd/tidbgo lint ./examples/starter-app
+```
+
+The report includes recognized query and uncertainty counts even when no
+projection warning is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection, and `CheckRecentOrdersQuery` applies static query-shape diagnostics

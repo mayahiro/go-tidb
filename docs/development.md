@@ -28,6 +28,7 @@ Run the current command directly from the checkout:
 ```sh
 go run ./cmd/tidbgo version
 go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
+go run ./cmd/tidbgo lint ./examples/starter-app
 ```
 
 Set a release version through the Go linker when building a release artifact:
@@ -54,6 +55,19 @@ The `integration` module owns the
 [`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependency and
 uses the current root checkout through a local module replacement. The root
 module and its users do not inherit that test dependency
+
+## Source projection analysis benchmark
+
+Measure recursive collection, Go parsing, model indexing, query-flow analysis,
+and diagnostic construction for one file containing 100 local result queries:
+
+```sh
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+```
+
+The benchmark is offline and does not load packages, run application code,
+open a database connection, or consume RU. Temporary fixture creation occurs
+before timing
 
 ## Schema compatibility client benchmarks
 

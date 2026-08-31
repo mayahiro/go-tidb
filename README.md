@@ -15,6 +15,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction
 - Reasoned diagnostic suppression and deterministic text or JSON CLI reports
+- Offline Go-source projection analysis with explicit coverage statistics
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -53,6 +54,12 @@ connection.
 
 ```sh
 go get github.com/mayahiro/go-tidb
+```
+
+Install the `tidbgo` command separately when CLI checks are needed:
+
+```sh
+go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
 ```
 
 `go-tidb` does not include or select a database driver. Register the driver
@@ -519,6 +526,22 @@ tidbgo analyze runtime.jsonl --json
 The command aggregates captured statements and reports compiler fallbacks and
 possible N+1 SELECTs within each observer scope. See the [statement observation
 guide](docs/observability.md#structured-runtime-capture)
+
+Analyze production Go source for default projections that can be proven wider
+than their local result use:
+
+```sh
+tidbgo lint
+tidbgo lint ./internal/repository --json
+```
+
+The optional path defaults to the current directory. The command does not
+execute application code, load packages, connect to a database, or modify
+source. `SRC001` is emitted only when every use of an `All`, `First`, or `Only`
+result is understood within the same function. Returned, passed, aliased,
+preloaded, or otherwise uncertain flows are counted as `uncertain` and are not
+guessed. Every report includes coverage statistics. See the [offline
+diagnostic report guide](docs/checks.md#go-source-projection-analysis)
 
 Print version information with:
 

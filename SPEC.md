@@ -100,6 +100,9 @@ The following decisions apply throughout v0.1:
 14. Offline checks are selected explicitly by application code. Diagnostic
     reporting performs no source scan, generated registration, configuration
     discovery, or database access.
+15. Go-source lint is an independent opt-in command. It parses production
+    source without loading or executing application packages and reports
+    uncertainty instead of guessing across an unresolved data-flow boundary.
 
 ### 3.1 Implemented surface
 
@@ -161,8 +164,9 @@ The currently implemented surface provides:
   collection-relation index prefixes
 - Shared diagnostic data types, immutable active and suppressed reports, and
   exact-code suppression with a required recorded reason
-- The `tidbgo version` command, `tidbgo check` text or JSON report command, and
-  offline `tidbgo analyze` runtime-capture command
+- The `tidbgo version` command, `tidbgo check` text or JSON report command,
+  offline `tidbgo analyze` runtime-capture command, and offline `tidbgo lint`
+  Go-source command
 
 ## 4. Planned runtime surface
 
@@ -234,6 +238,17 @@ explicit file. It emits deterministic text by default or the complete report
 with `--json`, returns status `1` for active errors, and performs no check
 discovery or database access.
 
+`tidbgo lint` scans one production Go file or a directory recursively and
+defaults to the current directory. It follows the current build context and
+excludes tests, generated files, vendor, testdata, and hidden directories. The
+current suppressible `SRC001` warning recommends a narrower `Select` only when
+all uses of a default-projection `All`, `First`, or `Only` result are proven
+within the same function. Escaped, aliased, preloaded, method-dependent, and
+otherwise unresolved flows produce no projection warning. Text and JSON output
+always include recognized, explicitly projected, analyzed, and uncertain
+coverage counts. The command executes no application code and performs no
+database access.
+
 `RuntimeCapture` is an opt-in reusable observer configured once at a request,
 job, or test-operation boundary. It records only go-tidb statements using the
 derived context and requires no query-specific registration or diagnostic
@@ -302,10 +317,10 @@ configuration.
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,
-  and deterministic collection-relation index-prefix checks
-- Planned next: source and terminal-aware static analysis, schema snapshot
-  generation and normalization, versioned migration tooling, historical reads,
-  and release hardening
+  deterministic collection-relation index-prefix checks, and conservative
+  same-function Go-source projection analysis
+- Planned next: schema snapshot generation and normalization, versioned
+  migration tooling, historical reads, and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value
 

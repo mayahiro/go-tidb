@@ -8,8 +8,9 @@ Offline checks let application code explicitly select model types, query
 builders, and SQL schema snapshots, while `check.Report` and `tidbgo check`
 apply one fixed result policy without a database connection
 
-This offline boundary requires no generated registry, source scan, project
-YAML, or live-schema inspection. Explicit connected runtime-plan collection is
+This explicit-check boundary requires no generated registry, project YAML, or
+live-schema inspection. A separate opt-in `tidbgo lint` command scans Go source
+without loading packages. Explicit connected runtime-plan collection is also
 separate and remains opt-in
 
 ## Produce diagnostics
@@ -37,6 +38,55 @@ evidence
 See the runnable
 [`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check) command
 for an explicit model and query registration example
+
+## Go-source projection analysis
+
+Scan the current directory recursively without registering each query:
+
+```sh
+tidbgo lint
+```
+
+Pass one production Go file or another directory when a narrower scope is
+useful:
+
+```sh
+tidbgo lint ./internal/repository
+tidbgo lint ./internal/repository --json
+```
+
+`tidbgo lint` parses source without loading or executing application packages,
+running code generation, reading schema files, or connecting to a database. A
+directory scan follows the current Go build context and excludes test files,
+generated files, `vendor`, `testdata`, and hidden directories
+
+The current `SRC001` rule recognizes default projections ending in `All`,
+`First`, or `Only`. It recommends `Select` only when the model's mapped scalar
+fields and every use of that result can be proven within the same function.
+Direct same-package top-level query helper functions returning
+`*orm.SelectQuery[T]` and local mutable builders are followed conservatively.
+Computed, ignored, and relation fields are not part of the default projection
+comparison
+
+A result passed to another function, returned, aliased, used through a model
+method or relation, or loaded with `Preload` is uncertain and produces no
+projection warning. Unresolved model shapes and conditionally changed builders
+are likewise uncertain. This avoids presenting an unsafe projection as a
+mechanical fix
+
+Every text or JSON report includes these coverage counts:
+
+- `files`: parsed non-generated production files
+- `model_types`: query result model types resolved for analysis
+- `result_queries`: recognized `All`, `First`, and `Only` terminals
+- `explicit_projections`: recognized result queries already using `Select`
+- `analyzed`: default-projection results whose complete local use was proven
+- `uncertain`: recognized results that were deliberately not guessed
+
+`SRC001` is a suppressible warning, so it does not change the successful exit
+status. `--suppress 'SRC001=reason'` uses the same reason-carrying policy as
+`tidbgo check`. Invalid source or an input with no matching production Go files
+returns status `2`; unreadable paths and output failures return status `5`
 
 ## Optional offline statement-count tooling
 
@@ -180,8 +230,10 @@ the recorded suppressions, and `Report.Summary()` returns the fixed counts
 
 Current model and query checks do not include bind values, and schema-aware
 checks operate only on the supplied snapshot. Query fingerprints likewise
-exclude bind and pagination values. Diagnostic messages can still contain
-model names, schema identifiers, source paths, and parser errors
+exclude bind and pagination values. `SRC001` does not include source literals
+or bind values. Diagnostic messages can still contain model names, field
+names, schema identifiers, source paths, and Go parser errors; a parser error
+can quote invalid token text
 
 Treat diagnostic JSON and reports as development artifacts and control their
 destination and retention. The text renderer escapes control characters before

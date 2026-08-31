@@ -14,6 +14,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
 - reason付きdiagnostic suppressionと決定的なtextまたはJSON CLI report
+- 明示的なcoverage statisticsを持つoffline Go source projection解析
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -49,6 +50,12 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 ```sh
 go get github.com/mayahiro/go-tidb
+```
+
+CLI checkを使用する場合は `tidbgo` commandを別にinstallします
+
+```sh
+go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
 ```
 
 `go-tidb` はdatabase driverを同梱または選択しません
@@ -544,6 +551,23 @@ tidbgo analyze runtime.jsonl --json
 このcommandはcaptured statementを集約し、observer scopeごとのcompiler fallbackとN+1 SELECT候補をreportします
 
 詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
+
+default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
+
+```sh
+tidbgo lint
+tidbgo lint ./internal/repository --json
+```
+
+pathを省略するとcurrent directoryを使用します
+
+application codeの実行、package load、DB接続、source変更は行いません
+
+`All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
+
+return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず `uncertain` として数え、全reportへcoverage statisticsを含めます
+
+詳細は[Offline diagnostic report guide](docs/checks_ja.md#go-source-projection解析)を参照してください
 
 version情報は次のcommandで出力します
 
