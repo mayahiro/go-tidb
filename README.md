@@ -19,6 +19,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
 - Single and automatically split bulk insert and upsert
+- Offline statement-count planning for bulk writes and `All` preloads
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
@@ -279,6 +280,12 @@ when multiple statements must share one transaction snapshot, or use the
 `PreloadWithDeleted` includes logically deleted targets for only the requested
 relation path. Arbitrary relation-specific predicates remain unavailable.
 
+`EstimateAllStatements` validates the same builder offline and returns the
+minimum statement count plus a maximum when the query shape proves one. It
+includes the root SELECT and collection preloads but no diagnostic or ServerRU
+queries. Inline joins add no statements. The maximum remains unknown when an
+unbounded keyed collection or nested collection cardinality cannot be proven.
+
 ## Mutations and raw SQL
 
 The common write path uses model values and primary-key metadata directly:
@@ -319,12 +326,13 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 
 `InsertMany(values)` and `UpsertMany(values)` accept either `[]Model` or
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
-limit, while `Build` continues to represent one executable statement. Pass a
-`*sql.Tx`, created directly or supplied to a `Transaction` callback, when every
-batch must be atomic. `Transaction` uses default `database/sql` options and does
-not retry its callback. Every typed mutation supports offline `Build`. An empty
-predicate list cannot produce a typed DELETE. `*sql.DB`, `*sql.Conn`, and
-`*sql.Tx` implement the mutation executor boundary.
+limit, while `Build` continues to represent one executable statement.
+`StatementCount` returns the exact planned split count without database I/O.
+Pass a `*sql.Tx`, created directly or supplied to a `Transaction` callback,
+when every batch must be atomic. `Transaction` uses default `database/sql`
+options and does not retry its callback. Every typed mutation supports offline
+`Build`. An empty predicate list cannot produce a typed DELETE. `*sql.DB`,
+`*sql.Conn`, and `*sql.Tx` implement the mutation executor boundary.
 
 Pure many-to-many relation mutations use the exported relation field name and
 key values without generated code. `AddRelation` emits one multi-row junction

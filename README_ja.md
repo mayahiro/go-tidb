@@ -18,6 +18,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
 - single insert、upsert、自動分割するbulk insertとbulk upsert
+- bulk writeと `All` preloadのoffline statement数予測
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
@@ -286,6 +287,12 @@ collection配下のto-oneはcollection statementへinline joinするため、`Pr
 
 任意のRelation固有predicateには現在未対応です
 
+`EstimateAllStatements` は同じbuilderをofflineで検証し、statement数の最小値とquery shapeから証明できる場合の最大値を返します
+
+root SELECTとcollection preloadを対象とし、diagnostic queryとServerRU queryは含めません
+
+inline joinはstatementを追加せず、上限のないkeyed collectionまたはnested collectionのcardinalityを証明できない場合は最大値をunknownとします
+
 ## Mutationとraw SQL
 
 通常のwrite pathはmodel valueとprimary key metadataを直接使います
@@ -327,6 +334,8 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 `InsertMany(values)` と `UpsertMany(values)` は `[]Model` と `[]*Model` のどちらも受け取ります
 
 `Exec` はTiDBの65535 placeholder上限で自動分割し、`Build` は1個の実行可能statementを表す契約を維持します
+
+`StatementCount` はdatabase I/Oなしで正確な予定分割数を返します
 
 全batchをatomicにする場合は直接作成した `*sql.Tx` または `Transaction` callbackから受け取った `*sql.Tx` を使います
 

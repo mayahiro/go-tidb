@@ -354,6 +354,10 @@ func TestApplicationBuildsBulkInsertAndTypedRawQueryOffline(t *testing.T) {
 		{UserID: 7, Total: Decimal{text: "10.50"}},
 		{UserID: 7, Total: Decimal{text: "20.25"}},
 	}
+	statementCount, err := InsertOrdersStatementCount(orders)
+	if err != nil || statementCount != 1 {
+		t.Fatalf("InsertOrdersStatementCount() = %d, %v, want 1, nil", statementCount, err)
+	}
 	sqlText, arguments, err := orm.InsertMany(orders).Build()
 	if err != nil {
 		t.Fatalf("InsertMany().Build() error = %v", err)
@@ -366,6 +370,10 @@ func TestApplicationBuildsBulkInsertAndTypedRawQueryOffline(t *testing.T) {
 	users := []*User{
 		{Email: "ada@example.test"},
 		{Email: "grace@example.test"},
+	}
+	statementCount, err = UpsertUsersStatementCount(users)
+	if err != nil || statementCount != 1 {
+		t.Fatalf("UpsertUsersStatementCount() = %d, %v, want 1, nil", statementCount, err)
 	}
 	sqlText, arguments, err = orm.UpsertMany(users).Build()
 	if err != nil {
@@ -390,6 +398,15 @@ func TestApplicationBuildsBulkInsertAndTypedRawQueryOffline(t *testing.T) {
 
 func TestApplicationBuildsDirectPreloadParentQueryOffline(t *testing.T) {
 	t.Parallel()
+
+	estimate, err := EstimateUsersWithOrdersStatements()
+	if err != nil {
+		t.Fatalf("EstimateUsersWithOrdersStatements() error = %v", err)
+	}
+	wantEstimate := orm.StatementCountEstimate{Minimum: 1, Maximum: 2, MaximumKnown: true}
+	if !reflect.DeepEqual(estimate, wantEstimate) {
+		t.Fatalf("EstimateUsersWithOrdersStatements() = %#v, want %#v", estimate, wantEstimate)
+	}
 
 	sqlText, arguments, err := usersWithOrdersQuery().Build()
 	if err != nil {

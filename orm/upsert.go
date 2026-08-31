@@ -111,6 +111,21 @@ func UpsertMany[T any](values []T, fields ...string) *UpsertManyQuery[T] {
 	return &UpsertManyQuery[T]{values: values, fields: append([]string(nil), fields...)}
 }
 
+// StatementCount returns the exact number of UPSERT statements planned for a
+// successful Exec after applying TiDB's placeholder limit.
+//
+// It validates model metadata and selected update fields without inspecting
+// element values, executing custom driver.Valuer implementations, or accessing
+// a database. Build and Exec retain value validation. An empty slice returns
+// zero.
+func (q *UpsertManyQuery[T]) StatementCount() (int, error) {
+	plan, err := q.prepare()
+	if err != nil {
+		return 0, err
+	}
+	return plan.statementCount()
+}
+
 // Build compiles one bulk UPSERT statement and returns SQL plus bind
 // arguments. It reports an error when execution requires multiple statements.
 // An empty slice is a no-op represented by empty SQL and no arguments.

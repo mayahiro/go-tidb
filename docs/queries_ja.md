@@ -502,6 +502,32 @@ key batchのsplitがなければ `Preload("Orders").Preload("Roles")` はparent�
 
 `Preload("Orders.User")` はparentと、Userをinline joinしたOrders SELECTの2 statementを実行します
 
+この `All` builderのstatement数範囲をoffline checkで使う場合は `EstimateAllStatements` を呼び出します
+
+```go
+query := orm.Query[User]().
+    Preload("Orders").
+    Limit(10_000)
+
+estimate, err := query.EstimateAllStatements()
+```
+
+`estimate.Minimum` はroot SELECTを含み、有効な実行を開始した場合は1です
+
+`estimate.Maximum` は `MaximumKnown` がtrueの場合だけ意味を持ち、`estimate.Exact()` は両方の境界が等しいかを返します
+
+positive root `Limit` はdirect keyed preload batch数の上限となり、無制限のroot collectionはcomplete source statementを最大1個追加します
+
+empty result、NULL key、duplicate keyによって実際の件数は少なくなる場合があります
+
+1個のcollectionは上限のないtarget数を持ち得るため、その先にnested collectionがある場合はparent row上限が0と確定していない限り最大値をunknownとします
+
+上限のないconstrained root collectionも同じ理由でunknownです
+
+この予測はI/Oとcustom `driver.Valuer` 実行を行わず、logging、diagnostic、EXPLAIN、ServerRU queryを含めません
+
+`All` だけを対象とし、builderのLimitを置き換える `First` と `Only` は対象外です
+
 key batchを使うpure many-to-many SELECTは内部bookkeeping用のjunction source keyを先に選択し、その後にmapped target scalar fieldを全て選択します
 
 ```sql
@@ -549,7 +575,7 @@ inline to-one Relationだけを含むpreloadは1 statementで実行するため�
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`EstimateAllStatements`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
 
 `IDs` は延期しています
 

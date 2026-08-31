@@ -124,6 +124,20 @@ func InsertMany[T any](values []T) *InsertManyQuery[T] {
 	return &InsertManyQuery[T]{values: values}
 }
 
+// StatementCount returns the exact number of INSERT statements planned for a
+// successful Exec after applying TiDB's placeholder limit.
+//
+// It validates model metadata without inspecting element values, executing
+// custom driver.Valuer implementations, or accessing a database. Build and
+// Exec retain value validation. An empty slice returns zero.
+func (q *InsertManyQuery[T]) StatementCount() (int, error) {
+	plan, err := q.prepare()
+	if err != nil {
+		return 0, err
+	}
+	return plan.statementCount()
+}
+
 // Build compiles one multi-row INSERT and returns SQL plus bind arguments. It
 // reports an error when execution requires multiple statements.
 // An empty slice is a no-op represented by empty SQL and no arguments.

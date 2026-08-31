@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-08-30
+- Last updated: 2026-08-31
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -134,6 +134,9 @@ The currently implemented surface provides:
   single-row `Insert`, full or selected-field primary-key update,
   predicate-bounded assignment and same-column increment, primary-key or
   predicate delete, and affected-row results
+- Exact offline statement counts for automatically split bulk insert and
+  upsert, plus static minimum and provable-maximum statement bounds for `All`
+  with collection preloads
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL

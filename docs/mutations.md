@@ -36,6 +36,22 @@ reported with its zero-based row index before execution. An empty slice is a
 no-op. `InsertMany` does not populate individual generated IDs because one
 `sql.Result` does not expose every generated value.
 
+Inspect the exact planned split count without building SQL or opening a
+connection:
+
+```go
+statementCount, err := orm.InsertMany(orders).StatementCount()
+```
+
+`StatementCount` applies model-metadata validation, selected-field validation
+for `UpsertMany`, and the same placeholder calculation as execution. It does
+not inspect element values or call custom `driver.Valuer` methods, so its cost
+does not grow with a pointer slice merely to find nil elements. `Build` and
+`Exec` retain value validation. An empty slice returns zero. The count
+describes the successful execution path; an invalid value, executor, driver
+conversion, or database error can stop `Exec` before every planned statement
+is attempted.
+
 `Exec` deterministically splits values only when one statement would exceed
 TiDB's 65,535-placeholder limit. The maximum rows in each statement is
 `floor(65535 / max(1, insertedFieldCount))`; the virtual field count of one
@@ -72,6 +88,9 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 
 `UpsertMany` has the same automatic placeholder-bound batching, affected-count
 aggregation, empty-slice behavior, and transaction boundary as `InsertMany`.
+Its `StatementCount` method returns the exact planned UPSERT count and validates
+the selected update fields offline.
+
 Neither `Upsert` nor `UpsertMany` changes generated `AUTO_RANDOM` fields. A
 single `sql.Result` cannot reliably distinguish an insert from a conflict on a
 different unique key. Use `Insert` when the generated ID must be assigned to

@@ -468,6 +468,30 @@ statements: the parent, the Orders SELECT, and the Roles SELECT.
 `Preload("Orders.User")` executes two: the parent and an Orders SELECT with User
 joined inline.
 
+Use `EstimateAllStatements` when an offline check needs statement-count bounds
+for this exact `All` builder:
+
+```go
+query := orm.Query[User]().
+    Preload("Orders").
+    Limit(10_000)
+
+estimate, err := query.EstimateAllStatements()
+```
+
+`estimate.Minimum` includes the root SELECT and is one once a valid execution
+starts. `estimate.Maximum` is meaningful when `MaximumKnown` is true, and
+`estimate.Exact()` reports whether the two bounds are equal. A positive root
+`Limit` bounds direct keyed preload batches. An unrestricted root collection
+adds at most one complete-source statement. Empty results, NULL keys, and
+duplicate keys can reduce the actual count. A collection can contain an
+unbounded number of targets, so a further nested collection makes the maximum
+unknown unless the parent row bound is already zero. An unbounded constrained
+root collection is unknown for the same reason. The estimate performs no I/O,
+calls no custom `driver.Valuer`, and excludes logging, diagnostics, EXPLAIN,
+and ServerRU queries. It models `All` only; `First` and `Only` replace the
+builder limit and are not covered by this method.
+
 A keyed pure many-to-many SELECT reads the junction source key first as
 internal bookkeeping, then every mapped scalar target field:
 
@@ -511,8 +535,9 @@ executes as one statement and does not need a cross-statement snapshot.
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, `Explain`, `ExplainAnalyze`, direct and pure many-to-many relation
-predicates, and nested direct or pure many-to-many preloads with target
-projection, collection ordering, and per-path soft-delete scope.
+`Count`, `EstimateAllStatements`, `Explain`, `ExplainAnalyze`, direct and pure
+many-to-many relation predicates, and nested direct or pure many-to-many
+preloads with target projection, collection ordering, and per-path soft-delete
+scope.
 `IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and
 other SQL outside the scalar builder surface.

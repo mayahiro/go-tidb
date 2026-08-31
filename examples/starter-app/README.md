@@ -35,6 +35,8 @@ It demonstrates the current struct-first foundation:
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
+- Offline exact bulk statement counts and bounded `All` preload statement
+  estimates
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
@@ -72,8 +74,9 @@ association prefix `(genre_id, clip_id)` against a parsed snapshot.
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
-SELECT and joining each User into that statement. `ListUsersWithRoles`
-demonstrates a pure
+SELECT and joining each User into that statement.
+`EstimateUsersWithOrdersStatements` bounds that operation offline.
+`ListUsersWithRoles` demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
@@ -81,7 +84,9 @@ the matching roles. `ListVideos` uses the default active-row scope,
 `ListWatchLaterVideos` uses `PreloadWithDeleted` for one relation path.
 `InsertUser`, `InsertOrders`, `UpsertUser`, `UpsertUsers`,
 `SaveUser`, `UpdateUserEmail`, `DeleteUser`, and `DeleteOrdersForUser` show the
-ordinary mutation surface. `DeleteVideo` and `RestoreVideo` demonstrate a
+ordinary mutation surface. `InsertOrdersStatementCount` and
+`UpsertUsersStatementCount` return their exact planned split counts offline.
+`DeleteVideo` and `RestoreVideo` demonstrate a
 server-timestamped soft delete and explicit restore. `ClaimJobLease` and
 `FailJobLease` demonstrate a
 predicate-bounded update, NULL assignments, and atomic increment without raw

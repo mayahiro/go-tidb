@@ -37,6 +37,28 @@ See the runnable
 [`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check) command
 for an explicit model and query registration example
 
+## Predict statement counts
+
+Statement counts are factual planning data rather than warnings by default:
+
+```go
+bulkCount, err := orm.InsertMany(orders).StatementCount()
+allEstimate, err := usersWithOrdersQuery().EstimateAllStatements()
+```
+
+Bulk insert and upsert counts are exact for their successful execution path.
+An `All` estimate always contains a minimum and marks its maximum known only
+when the builder and relation cardinality prove one. These methods are offline
+and do not inspect element values, execute custom `driver.Valuer` methods, or
+access a database.
+
+The values are not appended to `SelectQuery.Diagnostics` and are not consumed
+directly by `tidbgo check`. Multiple statements can be an intentional result of
+safe bulk splitting or relation loading, so the application-owned check command
+decides whether a project-specific threshold should become a diagnostic.
+See the [query guide](queries.md#preload-relations) and [mutation
+guide](mutations.md#insert) for the exact bounds.
+
 ## Report with the CLI
 
 Read the array from standard input:

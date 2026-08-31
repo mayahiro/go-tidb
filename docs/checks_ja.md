@@ -30,6 +30,27 @@ err := json.NewEncoder(os.Stdout).Encode(diagnostics)
 
 modelとqueryを明示的に登録する実行例は[`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check)を参照してください
 
+## Statement数の予測
+
+statement数はdefaultではwarningではなく事実を表すplanning dataとして返します
+
+```go
+bulkCount, err := orm.InsertMany(orders).StatementCount()
+allEstimate, err := usersWithOrdersQuery().EstimateAllStatements()
+```
+
+bulk insertとbulk upsertは成功する実行pathの正確な件数を返します
+
+`All` estimateは常に最小値を返し、builderおよびRelation cardinalityから証明できる場合だけ最大値をknownとして返します
+
+これらのmethodはofflineで動作し、element valueの参照、custom `driver.Valuer` methodの実行、DB接続を行いません
+
+この値は `SelectQuery.Diagnostics` へ追加せず、`tidbgo check` も直接読み取りません
+
+複数statementは安全なbulk分割またはRelation loadingの意図した結果でもあるため、project固有のthresholdをdiagnosticにするかはapplication-owned check commandが決定します
+
+正確な境界は[query guide](queries_ja.md#relation-preload)と[mutation guide](mutations_ja.md#insert)を参照してください
+
 ## CLIによるreport
 
 standard inputからarrayを読み取ります

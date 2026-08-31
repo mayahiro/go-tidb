@@ -40,6 +40,22 @@ empty sliceはno-opです
 
 1個の `sql.Result` から全generated valueを取得できないため、`InsertMany` は個別のgenerated IDを反映しません
 
+SQLをbuildまたはconnectionをopenせず、正確な予定分割数を確認できます
+
+```go
+statementCount, err := orm.InsertMany(orders).StatementCount()
+```
+
+`StatementCount` はmodel metadata validation、`UpsertMany` のselected field validation、実行時と同じplaceholder計算を行います
+
+element valueの参照とcustom `driver.Valuer` methodの呼び出しは行わないため、nil要素を探す目的でpointer sliceの長さに比例するcostを追加しません
+
+value validationは `Build` と `Exec` が引き続き担当します
+
+empty sliceは0を返します
+
+この件数は成功する実行pathの予定値であり、invalid value、executor、driver conversion、databaseのerrorが発生した場合は全statementを試行する前に `Exec` が停止することがあります
+
 `Exec` は1statementがTiDBの65535 placeholder上限を超える場合だけ決定的に分割します
 
 各statementの最大row数は `floor(65535 / max(1, insert対象field数))` です
@@ -78,6 +94,8 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 ```
 
 `UpsertMany` は `InsertMany` と同じplaceholder上限による自動分割、affected countの集約、empty sliceのno-op、transaction境界を持ちます
+
+`UpsertMany.StatementCount` は正確な予定UPSERT数を返し、selected update fieldもofflineで検証します
 
 `Upsert` と `UpsertMany` はgenerated `AUTO_RANDOM` fieldを変更しません
 

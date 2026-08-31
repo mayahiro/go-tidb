@@ -6,13 +6,16 @@
 // relation existence conditions without implicit loading. Diagnostics checks
 // a typed builder offline, while DiagnosticsWithSchema also compares clear
 // ordered LIMIT accesses with a parsed physical index snapshot.
+// EstimateAllStatements bounds the root and collection statements for an All
+// terminal without database access.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and pure many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
 // collections loaded once and constrained collections loaded in bounded
 // parameter batches. Insert, automatically bounded InsertMany, Upsert,
 // UpsertMany, Update, UpdateWhere, Delete, and DeleteWhere provide typed model
-// writes. Set and Increment provide safe conditional-update assignments.
+// writes. Bulk StatementCount methods expose the exact automatic split count
+// offline. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many
 // junction writes. Transaction groups application-defined work using a
 // concrete *sql.Tx without retrying it. Raw provides model-aware result
