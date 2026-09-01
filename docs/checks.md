@@ -198,11 +198,15 @@ adds `QRY006` and `QRY007`; no application-side query registry is required.
 Statistics report how many captured statements carried query shapes and how
 many were checked against the snapshot. Statements without a complete shape
 remain outside these query-pattern and schema rules.
-When `CollectServerRU` produced samples, runtime statistics keep target and
+When `CollectServerRU` was attempted, runtime statistics keep target and
 diagnostic durations, go-tidb and auxiliary statement counts, successful
 samples, collection errors, and summed ServerRU separate. `RUN003` reports a
-collection failure and is not suppressible because the measured data is
-incomplete.
+collection or temporary connection-release failure and is not suppressible
+because capture integrity requires review. The text and JSON reports also
+include deterministic per-fingerprint count, sample, error, total, mean,
+minimum, and maximum statistics. Individual
+RU samples are not retained, and these descriptive values do not apply a
+regression threshold.
 
 ## Suppress an accepted diagnostic
 

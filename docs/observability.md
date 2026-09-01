@@ -204,6 +204,17 @@ statement and auxiliary statement counts separately, together with successful
 sample count, collection-error count, and summed ServerRU. A collection failure
 produces `RUN003` but never replaces the target statement result.
 
+For each fingerprint with at least one collection attempt, text output adds a
+`server_ru_fingerprint` line and JSON output adds an entry to
+`server_ru_by_fingerprint`. `count` is the number of all captured target
+statements with that fingerprint, including unsampled statements. `samples`
+counts usable values and `errors` counts collection or connection-release
+errors; one statement can contribute to both. `total`, `mean`, `min`, and `max`
+use only successful samples and are zero when no sample succeeded. Entries are
+sorted by fingerprint. Analysis retains one constant-size accumulator per
+distinct fingerprint and never retains the individual RU samples. These values
+are descriptive statistics, not a regression threshold or a billing-RU value.
+
 Analyze a completed artifact without a database connection:
 
 ```sh
@@ -215,7 +226,8 @@ tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 
 The CLI streams statement records instead of retaining the complete artifact
 in memory. Exact aggregate statistics still retain the distinct capture,
-scope, fingerprint, and batch identities needed by the report.
+scope, fingerprint, and batch identities needed by the report. Memory therefore
+grows with distinct identities rather than statement or RU sample count.
 
 The analyzer applies `QRY002` through `QRY005` once per distinct captured
 query diagnostic and reports repeated non-preload SELECT fingerprints within

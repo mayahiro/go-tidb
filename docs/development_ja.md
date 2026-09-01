@@ -90,6 +90,7 @@ go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison
 go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
 ```
 
 全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
@@ -103,6 +104,8 @@ comparison benchmarkは同じbuilderを両diagnostic pathで使用します
 neutral query check benchmarkはbuilder compileを含みません
 
 runtime benchmarkはJSON decodeとDB accessなしで100個のcaptured typed query recordを解析します
+
+ServerRU benchmarkは1 fingerprintの1 sampleと10,000 sampleを比較し、保持bytesとallocation数がsample数へ依存しないことを確認します
 
 ## TiDB Cloud Starter integration test
 

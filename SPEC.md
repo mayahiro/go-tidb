@@ -276,7 +276,10 @@ schema-checked statements. `CollectServerRU` optionally adds one same-session
 diagnostic query for each recognized DML statement. The artifact and analyzer
 separate target duration, diagnostic duration, go-tidb statement count,
 auxiliary statement count, successful samples, collection errors, and summed
-ServerRU.
+ServerRU. The analyzer emits deterministic per-fingerprint ServerRU aggregates
+with captured statement count, successful sample count, error count, total,
+mean, minimum, and maximum. It retains one constant-size accumulator per
+observed fingerprint rather than individual samples.
 
 `ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
 without another database call. Suppressible `PLN001` through `PLN004` warnings

@@ -208,6 +208,18 @@ recordはtarget durationとServerRU diagnostic durationおよびauxiliary statem
 
 collection failureは `RUN003` を生成しますがtarget statement resultを置き換えません
 
+collection試行が1回以上あるfingerprintごとにtext出力へ `server_ru_fingerprint` line、JSON出力へ `server_ru_by_fingerprint` entryを追加します
+
+`count` はsampleされていないstatementも含む、そのfingerprintの全captured target statement数です
+
+`samples` は利用可能なvalue数、`errors` はcollectionまたはconnection releaseのerror数であり、1 statementが両方へ加算される場合があります
+
+`total`、`mean`、`min`、`max` は成功sampleだけを使い、成功sampleがない場合は0です
+
+entryはfingerprint順で、解析中はdistinct fingerprintごとに固定sizeのaccumulatorだけを保持し、個別RU sampleを保持しません
+
+これらは記述統計であり、regression thresholdまたはbilling RUではありません
+
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
 
 完了したartifactはDB接続なしで解析できます
@@ -222,6 +234,8 @@ tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析します
 
 正確なaggregate statisticsに必要な異なるcapture、scope、fingerprint、batch identityは保持します
+
+そのためmemoryはstatement数またはRU sample数ではなくdistinct identity数に応じて増加します
 
 analyzerは異なるcaptured query diagnosticごとに `QRY002` から `QRY005` を1回適用し、同一scope内でpreload以外のSELECT fingerprintが繰り返された場合のN+1候補をreportします
 

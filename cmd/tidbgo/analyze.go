@@ -76,9 +76,9 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 
 	jsonOutput, _ := invocation.Flag(analyzeJSONID)
 	if jsonOutput {
-		err = writeRuntimeAnalysisJSON(context.Stdout(), analysis.Statistics, report)
+		err = writeRuntimeAnalysisJSON(context.Stdout(), analysis, report)
 	} else {
-		err = writeRuntimeAnalysisText(context.Stdout(), analysis.Statistics, report)
+		err = writeRuntimeAnalysisText(context.Stdout(), analysis, report)
 	}
 	if err != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "write runtime analysis: "+err.Error())
@@ -142,24 +142,26 @@ func openAnalyzeInput(context *cli.Context, invocation *cli.Invocation) (io.Read
 }
 
 type runtimeAnalysisJSON struct {
-	Statistics  runtimecapture.Statistics    `json:"statistics"`
-	Diagnostics []check.Diagnostic           `json:"diagnostics"`
-	Suppressed  []check.SuppressedDiagnostic `json:"suppressed"`
-	Summary     check.Summary                `json:"summary"`
+	Statistics            runtimecapture.Statistics            `json:"statistics"`
+	ServerRUByFingerprint []runtimecapture.FingerprintServerRU `json:"server_ru_by_fingerprint"`
+	Diagnostics           []check.Diagnostic                   `json:"diagnostics"`
+	Suppressed            []check.SuppressedDiagnostic         `json:"suppressed"`
+	Summary               check.Summary                        `json:"summary"`
 }
 
-func writeRuntimeAnalysisJSON(writer io.Writer, statistics runtimecapture.Statistics, report check.Report) error {
+func writeRuntimeAnalysisJSON(writer io.Writer, analysis runtimecapture.Analysis, report check.Report) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(runtimeAnalysisJSON{
-		Statistics:  statistics,
-		Diagnostics: report.Diagnostics(),
-		Suppressed:  report.Suppressed(),
-		Summary:     report.Summary(),
+		Statistics:            analysis.Statistics,
+		ServerRUByFingerprint: analysis.ServerRUByFingerprint,
+		Diagnostics:           report.Diagnostics(),
+		Suppressed:            report.Suppressed(),
+		Summary:               report.Summary(),
 	})
 }
 
-func writeRuntimeAnalysisText(writer io.Writer, statistics runtimecapture.Statistics, report check.Report) error {
+func writeRuntimeAnalysisText(writer io.Writer, analysis runtimecapture.Analysis, report check.Report) error {
 	for _, diagnostic := range report.Diagnostics() {
 		if err := writeTextDiagnostic(writer, stringUpper(diagnostic.Severity), diagnostic, ""); err != nil {
 			return err
@@ -171,7 +173,12 @@ func writeRuntimeAnalysisText(writer io.Writer, statistics runtimecapture.Statis
 			return err
 		}
 	}
-	if _, err := fmt.Fprintln(writer, runtimecapture.FormatStatistics(statistics)); err != nil {
+	for _, statistics := range analysis.ServerRUByFingerprint {
+		if _, err := fmt.Fprintln(writer, runtimecapture.FormatFingerprintServerRU(statistics)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(writer, runtimecapture.FormatStatistics(analysis.Statistics)); err != nil {
 		return err
 	}
 	summary := report.Summary()

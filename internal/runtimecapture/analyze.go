@@ -1,9 +1,11 @@
 package runtimecapture
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -38,10 +40,28 @@ type Statistics struct {
 	DiagnosticDuration      int64   `json:"diagnostic_duration_ns"`
 }
 
-// Analysis contains deterministic runtime statistics and diagnostics.
+// FingerprintServerRU contains constant-space ServerRU statistics for one
+// bind-free statement or query fingerprint. Count includes unsampled captured
+// statements. Samples and Errors can overlap when a usable value precedes a
+// connection-release error. Total, Mean, Minimum, and Maximum use successful
+// samples only and remain zero when no sample succeeded.
+type FingerprintServerRU struct {
+	Fingerprint string  `json:"fingerprint"`
+	Count       int     `json:"count"`
+	Samples     int     `json:"samples"`
+	Errors      int     `json:"errors"`
+	Total       float64 `json:"total"`
+	Mean        float64 `json:"mean"`
+	Minimum     float64 `json:"min"`
+	Maximum     float64 `json:"max"`
+}
+
+// Analysis contains deterministic runtime statistics, fingerprint-sorted
+// ServerRU aggregates, and diagnostics.
 type Analysis struct {
-	Statistics  Statistics         `json:"statistics"`
-	Diagnostics []check.Diagnostic `json:"diagnostics"`
+	Statistics            Statistics            `json:"statistics"`
+	ServerRUByFingerprint []FingerprintServerRU `json:"server_ru_by_fingerprint"`
+	Diagnostics           []check.Diagnostic    `json:"diagnostics"`
 }
 
 // AnalysisOption configures offline runtime analysis.
@@ -94,12 +114,52 @@ type queryPatternKey struct {
 	compilerReason string
 }
 
+type fingerprintServerRUAccumulator struct {
+	samples int
+	errors  int
+	total   float64
+	mean    float64
+	minimum float64
+	maximum float64
+}
+
+func (accumulator *fingerprintServerRUAccumulator) add(serverRU ServerRU) {
+	if serverRU.Known {
+		accumulator.samples++
+		accumulator.total = addServerRUSaturated(accumulator.total, serverRU.Value)
+		accumulator.mean += (serverRU.Value - accumulator.mean) / float64(accumulator.samples)
+		if accumulator.samples == 1 || serverRU.Value < accumulator.minimum {
+			accumulator.minimum = serverRU.Value
+		}
+		if accumulator.samples == 1 || serverRU.Value > accumulator.maximum {
+			accumulator.maximum = serverRU.Value
+		}
+	}
+	if serverRU.Error != "" {
+		accumulator.errors++
+	}
+}
+
+func (accumulator fingerprintServerRUAccumulator) statistics(fingerprint string, count int) FingerprintServerRU {
+	return FingerprintServerRU{
+		Fingerprint: fingerprint,
+		Count:       count,
+		Samples:     accumulator.samples,
+		Errors:      accumulator.errors,
+		Total:       accumulator.total,
+		Mean:        accumulator.mean,
+		Minimum:     accumulator.minimum,
+		Maximum:     accumulator.maximum,
+	}
+}
+
 type analyzer struct {
 	configuration    analysisConfiguration
 	analysis         Analysis
 	captures         map[string]struct{}
 	scopes           map[scopeKey]struct{}
-	fingerprints     map[string]struct{}
+	fingerprints     map[string]int
+	serverRU         map[string]fingerprintServerRUAccumulator
 	batches          map[batchKey]int
 	repeated         map[repeatedQueryKey]int
 	repeatedGroups   []repeatedQueryGroup
@@ -107,15 +167,17 @@ type analyzer struct {
 	queryDiagnostics map[string]struct{}
 	queryPatterns    map[queryPatternKey]struct{}
 	schemaPatterns   map[queryPatternKey]struct{}
-	serverRUErrors   map[string]struct{}
 }
 
 func newAnalyzer(options ...AnalysisOption) *analyzer {
 	result := &analyzer{
-		analysis:         Analysis{Diagnostics: make([]check.Diagnostic, 0)},
+		analysis: Analysis{
+			ServerRUByFingerprint: make([]FingerprintServerRU, 0),
+			Diagnostics:           make([]check.Diagnostic, 0),
+		},
 		captures:         make(map[string]struct{}),
 		scopes:           make(map[scopeKey]struct{}),
-		fingerprints:     make(map[string]struct{}),
+		fingerprints:     make(map[string]int),
 		batches:          make(map[batchKey]int),
 		repeated:         make(map[repeatedQueryKey]int),
 		repeatedGroups:   make([]repeatedQueryGroup, 0),
@@ -136,10 +198,16 @@ func (analyzer *analyzer) add(record Record) {
 	analyzer.captures[record.CaptureID] = struct{}{}
 	scope := scopeKey{capture: record.CaptureID, scope: record.ScopeID}
 	analyzer.scopes[scope] = struct{}{}
-	analyzer.fingerprints[record.Fingerprint] = struct{}{}
+	analyzer.fingerprints[record.Fingerprint]++
 	analyzer.analysis.Statistics.Statements++
 	analyzer.analysis.Statistics.TargetDuration = addDurationSaturated(analyzer.analysis.Statistics.TargetDuration, record.DurationNS)
 	if record.ServerRU != nil {
+		if analyzer.serverRU == nil {
+			analyzer.serverRU = make(map[string]fingerprintServerRUAccumulator)
+		}
+		fingerprintStatistics := analyzer.serverRU[record.Fingerprint]
+		firstFailure := record.ServerRU.Error != "" && fingerprintStatistics.errors == 0
+		fingerprintStatistics.add(*record.ServerRU)
 		analyzer.analysis.Statistics.AuxiliaryStatements += record.ServerRU.AuxiliaryStatements
 		analyzer.analysis.Statistics.DiagnosticDuration = addDurationSaturated(
 			analyzer.analysis.Statistics.DiagnosticDuration,
@@ -154,15 +222,11 @@ func (analyzer *analyzer) add(record Record) {
 		}
 		if record.ServerRU.Error != "" {
 			analyzer.analysis.Statistics.ServerRUErrors++
-			key := record.Fingerprint
-			if _, exists := analyzer.serverRUErrors[key]; !exists {
-				if analyzer.serverRUErrors == nil {
-					analyzer.serverRUErrors = make(map[string]struct{})
-				}
-				analyzer.serverRUErrors[key] = struct{}{}
+			if firstFailure {
 				analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, serverRUFailureDiagnostic(record))
 			}
 		}
+		analyzer.serverRU[record.Fingerprint] = fingerprintStatistics
 	}
 
 	if record.Batch != nil {
@@ -239,6 +303,15 @@ func (analyzer *analyzer) finish() Analysis {
 	analyzer.analysis.Statistics.Captures = len(analyzer.captures)
 	analyzer.analysis.Statistics.Scopes = len(analyzer.scopes)
 	analyzer.analysis.Statistics.Fingerprints = len(analyzer.fingerprints)
+	for fingerprint, accumulator := range analyzer.serverRU {
+		analyzer.analysis.ServerRUByFingerprint = append(
+			analyzer.analysis.ServerRUByFingerprint,
+			accumulator.statistics(fingerprint, analyzer.fingerprints[fingerprint]),
+		)
+	}
+	slices.SortFunc(analyzer.analysis.ServerRUByFingerprint, func(first, second FingerprintServerRU) int {
+		return cmp.Compare(first.Fingerprint, second.Fingerprint)
+	})
 	analyzer.analysis.Statistics.BatchGroups = len(analyzer.batches)
 	for _, count := range analyzer.batches {
 		if count > 1 {
@@ -333,7 +406,7 @@ func serverRUFailureDiagnostic(record Record) check.Diagnostic {
 		Code:     codeServerRUFailure,
 		Severity: check.SeverityWarning,
 		Title:    "Automatic ServerRU collection failed",
-		Message:  "go-tidb completed a target statement without a usable same-session ServerRU sample",
+		Message:  "go-tidb encountered an error while collecting ServerRU or releasing its same-session connection",
 		Evidence: []check.Evidence{
 			{Message: "Query fingerprint: " + record.Fingerprint},
 			{Message: record.ServerRU.Error},
@@ -390,5 +463,21 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.ServerRUSamples,
 		statistics.ServerRUErrors,
 		strconv.FormatFloat(statistics.ServerRUTotal, 'g', -1, 64),
+	)
+}
+
+// FormatFingerprintServerRU renders one stable human-readable ServerRU
+// aggregate line.
+func FormatFingerprintServerRU(statistics FingerprintServerRU) string {
+	return fmt.Sprintf(
+		"server_ru_fingerprint: fingerprint=%s count=%d samples=%d errors=%d total=%s mean=%s min=%s max=%s",
+		statistics.Fingerprint,
+		statistics.Count,
+		statistics.Samples,
+		statistics.Errors,
+		strconv.FormatFloat(statistics.Total, 'g', -1, 64),
+		strconv.FormatFloat(statistics.Mean, 'g', -1, 64),
+		strconv.FormatFloat(statistics.Minimum, 'g', -1, 64),
+		strconv.FormatFloat(statistics.Maximum, 'g', -1, 64),
 	)
 }

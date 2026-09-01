@@ -185,9 +185,13 @@ statisticsはquery shapeを持つcaptured statement数とsnapshotでcheckしたs
 
 completeなshapeを持たないstatementはこれらのquery pattern ruleとschema ruleの対象外です
 
-`CollectServerRU` がsampleを生成した場合、runtime statisticsはtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、成功sample数、collection error数、ServerRU合計を分離します
+`CollectServerRU` を試行した場合、runtime statisticsはtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、成功sample数、collection error数、ServerRU合計を分離します
 
-`RUN003` はcollection failureによって測定dataが不完全なことを示すためsuppressできません
+textとJSON reportにはfingerprint別のdeterministicなcount、sample、error、total、mean、min、maxも含めます
+
+個別RU sampleは保持せず、これらの記述統計だけではregression thresholdを適用しません
+
+`RUN003` はcollectionまたはtemporary connection releaseのfailureを示し、capture integrityの確認が必要なためsuppressできません
 
 ## 許容したdiagnosticのsuppression
 

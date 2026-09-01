@@ -13,7 +13,7 @@ import (
 )
 
 // Version identifies the JSON Lines runtime artifact format.
-const Version = 2
+const Version = 1
 
 const statementFingerprintPrefix = "s1:"
 

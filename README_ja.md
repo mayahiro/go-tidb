@@ -454,6 +454,8 @@ recognized DML statementごとのsame-session diagnostic round tripを1回追加
 
 artifactと `tidbgo analyze` はtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、sample数、error数、ServerRU合計を分離します
 
+collectionを試行したfingerprintごとにcaptured statement数、成功sampleのtotal、mean、min、maxも個別sampleを保持せずreportします
+
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 
 scope、cost、writer error、retention、任意の1 operation向け `Debug` の詳細は[Statement observation guide](docs/observability_ja.md)を参照してください

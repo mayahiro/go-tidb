@@ -213,30 +213,104 @@ func TestAnalyzeSaturatesAccumulatedDuration(t *testing.T) {
 }
 
 func TestAnalyzeAggregatesServerRUCostAndReportsFailures(t *testing.T) {
-	first := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:first")
+	first := runtimeAnalysisRecord(1, SourceTypedMutation, "s1:first")
+	first.Operation = "UPDATE"
+	first.Terminal = "update_where"
+	first.SQL = "UPDATE `users` SET `active` = ? WHERE `id` = ?"
 	first.ServerRU = &ServerRU{Known: true, Value: 1.25, DiagnosticDurationNS: 100, AuxiliaryStatements: 1}
-	second := runtimeAnalysisRecord(2, SourceTypedSelect, "q1:second")
+	second := first
+	second.Sequence = 2
 	second.ServerRU = &ServerRU{Known: true, Value: 2.5, DiagnosticDurationNS: 200, AuxiliaryStatements: 1}
-	third := runtimeAnalysisRecord(3, SourceTypedSelect, "q1:third")
-	third.Operation = "UPDATE"
+	third := first
+	third.Sequence = 3
+	third.Fingerprint = "s1:third"
 	third.ServerRU = &ServerRU{DiagnosticDurationNS: 50, AuxiliaryStatements: 1, Error: "read failed"}
 	fourth := third
 	fourth.Sequence = 4
 	fourth.ServerRU = &ServerRU{DiagnosticDurationNS: 50, AuxiliaryStatements: 1, Error: "later read failed"}
+	fifth := first
+	fifth.Sequence = 5
+	fifth.ServerRU = nil
 
-	analysis := Analyze([]Record{first, second, third, fourth})
+	analysis := Analyze([]Record{fifth, first, second, third, fourth})
 	statistics := analysis.Statistics
-	if statistics.Statements != 4 || statistics.AuxiliaryStatements != 4 || statistics.ServerRUSamples != 2 || statistics.ServerRUErrors != 2 || statistics.ServerRUTotal != 3.75 || statistics.DiagnosticDuration != 400 {
+	if statistics.Statements != 5 || statistics.AuxiliaryStatements != 4 || statistics.ServerRUSamples != 2 || statistics.ServerRUErrors != 2 || statistics.ServerRUTotal != 3.75 || statistics.DiagnosticDuration != 400 {
 		t.Fatalf("statistics = %#v", statistics)
+	}
+	wantByFingerprint := []FingerprintServerRU{
+		{Fingerprint: "s1:first", Count: 3, Samples: 2, Total: 3.75, Mean: 1.875, Minimum: 1.25, Maximum: 2.5},
+		{Fingerprint: "s1:third", Count: 2, Errors: 2},
+	}
+	if got := analysis.ServerRUByFingerprint; !reflect.DeepEqual(got, wantByFingerprint) {
+		t.Fatalf("ServerRUByFingerprint = %#v, want %#v", got, wantByFingerprint)
 	}
 	if got, want := diagnosticCodes(analysis), []string{codeServerRUFailure}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
 	formatted := FormatStatistics(statistics)
-	for _, want := range []string{"statements=4", "auxiliary_statements=4", "diagnostic_duration=400ns", "server_ru_samples=2", "server_ru_errors=2", "server_ru_total=3.75"} {
+	for _, want := range []string{"statements=5", "auxiliary_statements=4", "diagnostic_duration=400ns", "server_ru_samples=2", "server_ru_errors=2", "server_ru_total=3.75"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("FormatStatistics() = %q, want substring %q", formatted, want)
 		}
+	}
+	if got, want := FormatFingerprintServerRU(analysis.ServerRUByFingerprint[0]), "server_ru_fingerprint: fingerprint=s1:first count=3 samples=2 errors=0 total=3.75 mean=1.875 min=1.25 max=2.5"; got != want {
+		t.Fatalf("FormatFingerprintServerRU() = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeSaturatesFingerprintServerRUTotalWithoutOverflowingMean(t *testing.T) {
+	first := runtimeAnalysisRecord(1, SourceTypedMutation, "s1:update")
+	first.Operation = "UPDATE"
+	first.ServerRU = &ServerRU{Known: true, Value: math.MaxFloat64, AuxiliaryStatements: 1}
+	second := first
+	second.Sequence = 2
+
+	analysis := Analyze([]Record{first, second})
+	if len(analysis.ServerRUByFingerprint) != 1 {
+		t.Fatalf("ServerRUByFingerprint = %#v, want one aggregate", analysis.ServerRUByFingerprint)
+	}
+	statistics := analysis.ServerRUByFingerprint[0]
+	if statistics.Total != math.MaxFloat64 || statistics.Mean != math.MaxFloat64 || statistics.Minimum != math.MaxFloat64 || statistics.Maximum != math.MaxFloat64 {
+		t.Fatalf("fingerprint ServerRU = %#v", statistics)
+	}
+}
+
+func TestAnalyzeCountsUsableServerRUAndReleaseErrorFromOneStatement(t *testing.T) {
+	record := runtimeAnalysisRecord(1, SourceTypedMutation, "s1:update")
+	record.Operation = "UPDATE"
+	record.ServerRU = &ServerRU{
+		Known:               true,
+		Value:               2.25,
+		AuxiliaryStatements: 1,
+		Error:               "release failed",
+	}
+
+	analysis := Analyze([]Record{record})
+	want := []FingerprintServerRU{{
+		Fingerprint: "s1:update",
+		Count:       1,
+		Samples:     1,
+		Errors:      1,
+		Total:       2.25,
+		Mean:        2.25,
+		Minimum:     2.25,
+		Maximum:     2.25,
+	}}
+	if !reflect.DeepEqual(analysis.ServerRUByFingerprint, want) {
+		t.Fatalf("ServerRUByFingerprint = %#v, want %#v", analysis.ServerRUByFingerprint, want)
+	}
+	if analysis.Statistics.ServerRUSamples != 1 || analysis.Statistics.ServerRUErrors != 1 {
+		t.Fatalf("statistics = %#v", analysis.Statistics)
+	}
+	if got := diagnosticCodes(analysis); !reflect.DeepEqual(got, []string{codeServerRUFailure}) {
+		t.Fatalf("diagnostic codes = %#v", got)
+	}
+}
+
+func TestAnalyzeReturnsNonNilEmptyServerRUStatistics(t *testing.T) {
+	analysis := Analyze(nil)
+	if analysis.ServerRUByFingerprint == nil || len(analysis.ServerRUByFingerprint) != 0 {
+		t.Fatalf("ServerRUByFingerprint = %#v, want non-nil empty", analysis.ServerRUByFingerprint)
 	}
 }
 
@@ -257,6 +331,33 @@ func BenchmarkAnalyzeCapturedQueryShapes(b *testing.B) {
 	}
 	var analysis Analysis
 	b.ReportAllocs()
+	for b.Loop() {
+		analysis = Analyze(records)
+	}
+	runtimeAnalysisSink = analysis
+}
+
+func BenchmarkAnalyzeServerRUOneFingerprint(b *testing.B) {
+	b.Run("1_sample", func(b *testing.B) {
+		benchmarkAnalyzeServerRUOneFingerprint(b, 1)
+	})
+	b.Run("10000_samples", func(b *testing.B) {
+		benchmarkAnalyzeServerRUOneFingerprint(b, 10_000)
+	})
+}
+
+func benchmarkAnalyzeServerRUOneFingerprint(b *testing.B, sampleCount int) {
+	sample := &ServerRU{Known: true, Value: 1.25, AuxiliaryStatements: 1}
+	records := make([]Record, sampleCount)
+	for index := range records {
+		records[index] = runtimeAnalysisRecord(uint64(index+1), SourceTypedMutation, "s1:update")
+		records[index].Operation = "UPDATE"
+		records[index].Terminal = "update_where"
+		records[index].ServerRU = sample
+	}
+	var analysis Analysis
+	b.ReportAllocs()
+	b.ReportMetric(float64(sampleCount), "samples/analyze")
 	for b.Loop() {
 		analysis = Analyze(records)
 	}

@@ -433,6 +433,9 @@ Runtime capture does not add `EXPLAIN` or other database I/O by default. Add
 same-session diagnostic round trip per recognized DML statement is acceptable.
 The artifact and `tidbgo analyze` keep target and diagnostic durations, go-tidb
 and auxiliary statement counts, samples, errors, and summed ServerRU separate.
+For each fingerprint that attempted collection, the analyzer also reports the
+captured statement count and successful-sample total, mean, minimum, and
+maximum without retaining individual samples.
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
 for scope, cost, writer-error, retention, and optional one-operation `Debug`

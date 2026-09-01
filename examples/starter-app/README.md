@@ -125,7 +125,9 @@ ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
 
 `*sql.DB` statements are temporarily pinned with their diagnostic query. The
 artifact keeps target and diagnostic cost separate, and a collection failure
-does not replace the application result.
+does not replace the application result. Offline analysis groups attempted
+ServerRU collection by bind-free fingerprint and reports count, samples,
+errors, total, mean, minimum, and maximum without retaining every sample.
 
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with

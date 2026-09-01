@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -46,16 +47,19 @@ func TestApplicationAnalyzeReportsRuntimeNPlusOneFromStandardInput(t *testing.T)
 func TestApplicationAnalyzeWritesStructuredJSON(t *testing.T) {
 	t.Parallel()
 
-	input := runtimeCaptureInput(t, runtimeCommandRecord(1, "q1:users"))
+	record := runtimeCommandRecord(1, "q1:users")
+	record.ServerRU = &runtimecapture.ServerRU{Known: true, Value: 1.5, AuxiliaryStatements: 1}
+	input := runtimeCaptureInput(t, record)
 	result := runApplicationWithInput(t, input, "analyze", "--json")
 	if got, want := result.Status(), cli.StatusSuccess; got != want {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
 	var output struct {
-		Statistics  runtimecapture.Statistics `json:"statistics"`
-		Diagnostics []any                     `json:"diagnostics"`
-		Suppressed  []any                     `json:"suppressed"`
-		Summary     struct {
+		Statistics            runtimecapture.Statistics            `json:"statistics"`
+		ServerRUByFingerprint []runtimecapture.FingerprintServerRU `json:"server_ru_by_fingerprint"`
+		Diagnostics           []any                                `json:"diagnostics"`
+		Suppressed            []any                                `json:"suppressed"`
+		Summary               struct {
 			Warnings int `json:"warnings"`
 		} `json:"summary"`
 	}
@@ -64,6 +68,18 @@ func TestApplicationAnalyzeWritesStructuredJSON(t *testing.T) {
 	}
 	if output.Statistics.Statements != 1 || output.Statistics.Scopes != 1 || output.Diagnostics == nil || output.Suppressed == nil || output.Summary.Warnings != 0 {
 		t.Fatalf("JSON output = %#v", output)
+	}
+	wantServerRU := []runtimecapture.FingerprintServerRU{{
+		Fingerprint: "q1:users",
+		Count:       1,
+		Samples:     1,
+		Total:       1.5,
+		Mean:        1.5,
+		Minimum:     1.5,
+		Maximum:     1.5,
+	}}
+	if !reflect.DeepEqual(output.ServerRUByFingerprint, wantServerRU) {
+		t.Fatalf("server_ru_by_fingerprint = %#v, want %#v", output.ServerRUByFingerprint, wantServerRU)
 	}
 }
 
@@ -83,6 +99,7 @@ func TestApplicationAnalyzeReportsServerRUCollectionFailureAndSeparatedCost(t *t
 	stdout := string(result.Stdout())
 	for _, want := range []string{
 		"WARNING[RUN003] Automatic ServerRU collection failed",
+		"server_ru_fingerprint: fingerprint=q1:users count=1 samples=0 errors=1 total=0 mean=0 min=0 max=0",
 		"auxiliary_statements=1",
 		"diagnostic_duration=2µs",
 		"server_ru_samples=0",
@@ -289,14 +306,14 @@ func TestApplicationAnalyzeReadsExplicitFile(t *testing.T) {
 func TestApplicationAnalyzeRejectsInvalidArtifact(t *testing.T) {
 	t.Parallel()
 
-	result := runApplicationWithInput(t, []byte(`{"version":1}`), "analyze")
+	result := runApplicationWithInput(t, []byte(`{"version":2}`), "analyze")
 	if got, want := result.Status(), exitUsage; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 	if stdout := result.Stdout(); len(stdout) != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if stderr := string(result.Stderr()); !strings.Contains(stderr, "runtime capture version is 1, want 2") {
+	if stderr := string(result.Stderr()); !strings.Contains(stderr, "runtime capture version is 2, want 1") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 }
@@ -325,10 +342,10 @@ func TestRuntimeAnalysisWritersPropagateErrors(t *testing.T) {
 	}
 	want := errors.New("write failed")
 	writer := failingWriter{err: want}
-	if err := writeRuntimeAnalysisText(writer, analysis.Statistics, report); !errors.Is(err, want) {
+	if err := writeRuntimeAnalysisText(writer, analysis, report); !errors.Is(err, want) {
 		t.Fatalf("writeRuntimeAnalysisText() error = %v, want %v", err, want)
 	}
-	if err := writeRuntimeAnalysisJSON(writer, analysis.Statistics, report); !errors.Is(err, want) {
+	if err := writeRuntimeAnalysisJSON(writer, analysis, report); !errors.Is(err, want) {
 		t.Fatalf("writeRuntimeAnalysisJSON() error = %v, want %v", err, want)
 	}
 }
