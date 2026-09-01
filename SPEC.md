@@ -176,6 +176,7 @@ The currently implemented surface provides:
   exact-code suppression with a required recorded reason
 - The `tidbgo version` command, `tidbgo check` text or JSON report command,
   offline `tidbgo analyze` runtime-capture and optional SQL-snapshot index
+  command, deterministic versioned `tidbgo baseline` ServerRU reference
   command, and offline `tidbgo lint` Go-source command
 
 ## 4. Planned runtime surface
@@ -279,7 +280,11 @@ auxiliary statement count, successful samples, collection errors, and summed
 ServerRU. The analyzer emits deterministic per-fingerprint ServerRU aggregates
 with captured statement count, successful sample count, error count, total,
 mean, minimum, and maximum. It retains one constant-size accumulator per
-observed fingerprint rather than individual samples.
+observed fingerprint rather than individual samples. `tidbgo baseline` streams
+the same artifact and writes one versioned, timestamp-free, fingerprint-sorted
+ServerRU aggregate JSON object to standard output. It rejects captures with no
+successful sample or any collection error and does not yet apply a regression
+threshold.
 
 `ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
 without another database call. Suppressible `PLN001` through `PLN004` warnings
@@ -338,7 +343,8 @@ configuration.
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
   SELECT-only `EXPLAIN ANALYZE` with returned-plan diagnostics, observer-only
   structured runtime capture, automatic captured-query diagnostics,
-  SQL-snapshot index checks, and offline runtime N+1 analysis
+  SQL-snapshot index checks, offline runtime N+1 analysis, and versioned
+  ServerRU baseline generation
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,

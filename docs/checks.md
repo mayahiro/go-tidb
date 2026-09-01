@@ -208,6 +208,17 @@ minimum, and maximum statistics. Individual
 RU samples are not retained, and these descriptive values do not apply a
 regression threshold.
 
+Persist the same fingerprint aggregates as a deterministic versioned reference
+without connecting to a database:
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+The command writes one JSON value to standard output and fails when no
+successful ServerRU sample exists or capture integrity is reduced by a
+collection error. It does not compare or enforce a threshold yet.
+
 ## Suppress an accepted diagnostic
 
 Every suppression names one exact diagnostic code and requires a non-empty

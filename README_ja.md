@@ -456,6 +456,16 @@ artifactと `tidbgo analyze` はtargetとdiagnosticのduration、go-tidbとauxil
 
 collectionを試行したfingerprintごとにcaptured statement数、成功sampleのtotal、mean、min、maxも個別sampleを保持せずreportします
 
+成功sampleが1件以上ありcollection errorがないcaptureでは、これらのaggregateをdeterministicなversion付きbaselineとして保存できます
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+このcommandはofflineで動作し、standard outputへexactly one JSON valueを書き込み、個別sampleを保持しません
+
+保存したbaselineは独立した比較stepのreference dataであり、作成時点ではregression thresholdを適用しません
+
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 
 scope、cost、writer error、retention、任意の1 operation向け `Debug` の詳細は[Statement observation guide](docs/observability_ja.md)を参照してください
@@ -586,6 +596,14 @@ tidbgo analyze runtime.jsonl --schema schema.sql
 `--schema` はofflineの `QRY006` と `QRY007` index checkを追加します
 
 詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
+
+`tidbgo baseline` はversion付きでfingerprint順のServerRU referenceを出力し、成功ServerRU sampleがない場合またはcollection errorがある場合は失敗します
+
+このcommandはthreshold比較をまだ適用しません
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
 
 default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
 

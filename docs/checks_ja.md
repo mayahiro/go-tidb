@@ -191,6 +191,16 @@ textとJSON reportにはfingerprint別のdeterministicなcount、sample、error�
 
 個別RU sampleは保持せず、これらの記述統計だけではregression thresholdを適用しません
 
+DBへ接続せず同じfingerprint aggregateをdeterministicなversion付きreferenceとして保存できます
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+このcommandはstandard outputへ1個のJSON valueを書き込み、成功ServerRU sampleがない場合またはcollection errorによりcapture integrityが低下している場合は失敗します
+
+現時点ではthresholdの比較または強制を行いません
+
 `RUN003` はcollectionまたはtemporary connection releaseのfailureを示し、capture integrityの確認が必要なためsuppressできません
 
 ## 許容したdiagnosticのsuppression

@@ -62,6 +62,7 @@ func TestApplicationHelp(t *testing.T) {
 		for _, want := range []string{
 			"Usage:\n  tidbgo [OPTIONS] <COMMAND>",
 			"analyze",
+			"baseline",
 			"check",
 			"lint",
 			"Additional commands:\n  version",

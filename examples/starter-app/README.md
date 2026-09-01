@@ -128,6 +128,10 @@ artifact keeps target and diagnostic cost separate, and a collection failure
 does not replace the application result. Offline analysis groups attempted
 ServerRU collection by bind-free fingerprint and reports count, samples,
 errors, total, mean, minimum, and maximum without retaining every sample.
+After a clean measurement run, write the deterministic versioned reference
+with `tidbgo baseline runtime.jsonl > server-ru-baseline.json`. Baseline
+creation is offline and rejects a capture with no successful samples or with
+collection errors; it does not apply a regression threshold.
 
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with

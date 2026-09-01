@@ -436,6 +436,16 @@ and auxiliary statement counts, samples, errors, and summed ServerRU separate.
 For each fingerprint that attempted collection, the analyzer also reports the
 captured statement count and successful-sample total, mean, minimum, and
 maximum without retaining individual samples.
+Save those aggregates as a deterministic versioned baseline when the capture
+contains at least one successful sample and no collection errors:
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+The command is offline, writes exactly one JSON value to standard output, and
+does not retain individual samples. A saved baseline is reference data for the
+separate comparison step; creating it does not apply a regression threshold.
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
 for scope, cost, writer-error, retention, and optional one-operation `Debug`
@@ -560,7 +570,15 @@ tidbgo analyze runtime.jsonl --schema schema.sql
 The command aggregates captured statements, applies `QRY002` through `QRY005`
 to recorded query shapes, and reports possible N+1 SELECTs within each observer
 scope. `--schema` adds offline `QRY006` and `QRY007` index checks. See the
-[statement observation guide](docs/observability.md#structured-runtime-capture)
+[statement observation guide](docs/observability.md#structured-runtime-capture).
+
+`tidbgo baseline` emits a versioned, fingerprint-sorted ServerRU reference and
+fails when the capture has no successful ServerRU sample or contains a
+collection error. Threshold comparison is not yet applied by this command.
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
 
 Analyze production Go source for default projections that can be proven wider
 than their local result use:

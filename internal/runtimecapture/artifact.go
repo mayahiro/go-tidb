@@ -1,5 +1,5 @@
-// Package runtimecapture defines the private structured artifact shared by
-// the ORM runtime writer and the tidbgo analyzer.
+// Package runtimecapture defines the private structured artifacts and offline
+// analysis shared by the ORM runtime writer and tidbgo commands.
 package runtimecapture
 
 import (

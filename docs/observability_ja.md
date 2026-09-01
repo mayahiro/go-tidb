@@ -220,6 +220,28 @@ entryはfingerprint順で、解析中はdistinct fingerprintごとに固定size�
 
 これらは記述統計であり、regression thresholdまたはbilling RUではありません
 
+完了したcaptureから再利用可能なreference artifactを作成できます
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+baselineはformat version `1` とfingerprint順の `server_ru_by_fingerprint` arrayを持つexactly one JSON objectです
+
+各entryは `fingerprint`、`count`、`samples`、`total`、`mean`、`min`、`max` を保存します
+
+collection errorはbaseline作成を失敗させるため、常に0となるfieldとして保存しません
+
+作成時刻を含まないため、同じanalysisからdeterministicな出力を生成します
+
+CLIはruntime inputをstreaming処理して個別sampleを保持せず、standard outputへの書き込み以外にDB accessを行いません
+
+成功ServerRU sampleがない場合、いずれかのfingerprintにcollectionまたはconnection release errorがある場合、runtime artifactが不正な場合はbaseline作成に失敗します
+
+sampleされていないcaptured statementは `count` に残り、`samples` が実際のmeasurement coverageを表します
+
+baseline作成時点ではregression thresholdを適用しません
+
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
 
 完了したartifactはDB接続なしで解析できます

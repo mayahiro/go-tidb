@@ -56,7 +56,7 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
 	}
-	reader, closeInput, diagnostic := openAnalyzeInput(context, invocation)
+	reader, closeInput, diagnostic := openRuntimeCaptureInput(context, invocation, analyzeInputID)
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
 	}
@@ -122,23 +122,6 @@ func parsedAnalyzeSuppressions(invocation *cli.Invocation) []check.Suppression {
 		}
 	}
 	return result
-}
-
-func openAnalyzeInput(context *cli.Context, invocation *cli.Invocation) (io.Reader, func() error, *cli.Diagnostic) {
-	input, present := cli.ValueAs[string](invocation, analyzeInputID)
-	if !present || input == "-" {
-		return context.Stdin(), func() error { return nil }, nil
-	}
-	path := input
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(context.CurrentDirectory(), path)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, nil, cli.NewDiagnostic(cli.CodeIOError, fmt.Sprintf("open runtime capture input %q: %s", input, checkInputOpenErrorReason(err))).
-			WithTarget(cli.ArgumentTarget(analyzeInputID))
-	}
-	return file, file.Close, nil
 }
 
 type runtimeAnalysisJSON struct {

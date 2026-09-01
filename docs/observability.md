@@ -215,6 +215,26 @@ sorted by fingerprint. Analysis retains one constant-size accumulator per
 distinct fingerprint and never retains the individual RU samples. These values
 are descriptive statistics, not a regression threshold or a billing-RU value.
 
+Create a reusable reference artifact from a completed capture:
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+The baseline is exactly one JSON object with format version `1` and a
+fingerprint-sorted `server_ru_by_fingerprint` array. Each entry stores
+`fingerprint`, `count`, `samples`, `total`, `mean`, `min`, and `max`. Collection
+errors reject creation and are not stored as an always-zero field. The artifact
+has no creation timestamp and therefore produces deterministic output for the
+same analysis. The CLI streams the runtime input and retains no individual
+samples. It writes only to standard output and performs no database access.
+
+Baseline creation fails when no successful ServerRU sample exists, any
+fingerprint reports a collection or connection-release error, or the runtime
+artifact is invalid. Unsampled captured statements remain represented by
+`count`; `samples` states the actual measurement coverage. Creating the
+baseline does not apply a regression threshold.
+
 Analyze a completed artifact without a database connection:
 
 ```sh
