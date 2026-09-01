@@ -136,7 +136,9 @@ database connection or an application-side query registry.
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and
 returns actual rows, execution information, memory, and disk usage for each
-operator. Its returned `orm.ExplainAnalyzePlan` can be inspected directly:
+operator. Each row also resolves an unambiguous compiler-owned access alias to
+its physical table, Go model, and root-relative relation path. Its returned
+`orm.ExplainAnalyzePlan` can be inspected directly:
 
 ```go
 runtimePlan, err := ExplainAnalyzeUserByEmail(ctx, db, email)

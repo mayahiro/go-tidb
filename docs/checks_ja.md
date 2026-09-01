@@ -123,6 +123,8 @@ diagnostics = append(diagnostics, runtimePlan.Diagnostics()...)
 
 不完全なstatistics、保守的なrow estimateの差、大規模table full scan、認識可能な正数のdisk usageを `PLN001` から `PLN004` のsuppressible warningとして返します
 
+evidenceはTiDBのaccess objectを保持し、mappingを一意に判断できる場合はcompilerが解決したphysical table、Go model、Relation pathも追加します
+
 これは手動のconnected analysisであり、自動runtime captureではありません
 
 `RuntimeCapture` を設定しても `EXPLAIN ANALYZE` の実行、plan rowの収集、これらのdiagnostic生成は行いません

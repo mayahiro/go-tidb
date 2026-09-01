@@ -169,13 +169,17 @@ local `database/sql` test driverを使い、MySQL driver、network round trip、
 
 ## EXPLAIN ANALYZE client benchmark
 
-1個のtyped SELECTをcompileし、3 operatorのTiDB runtime planをscanするclient-side costを計測します
+typed SELECTをcompileし、plan access metadataを解決してTiDB runtime planをscanするclient-side costを計測します
 
 ```sh
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze($|RelationAliases$)' -benchmem -count=5
 ```
 
-local `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
+1個目のworkloadは3個のphysical table operatorをscanします
+
+Relation workloadは4 operatorをscanし、root、direct Relation、many-to-many junction、targetのaliasを解決します
+
+いずれもlocal `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
 
 取得済みplanをdiagnosticへ変換するcostは別に計測します
 
@@ -183,7 +187,7 @@ local `database/sql` test driverを使い、SELECT executionとTiDB runtime cost
 go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
 ```
 
-clean caseはdiagnosticなし、warning caseは不完全なstatistics、大規模full scan、disk usageのevidenceを生成します
+clean caseはdiagnosticなし、warning caseは不完全なstatistics、大規模full scan、disk usageのevidenceを生成し、resolved access caseはphysical table、model、Relation metadataを含めます
 
 どちらもDB I/Oを行わずtimingとRU textをparseしません
 

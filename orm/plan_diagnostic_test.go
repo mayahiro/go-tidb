@@ -14,12 +14,14 @@ func TestExplainAnalyzePlanDiagnosticsReportsHighConfidenceRuntimeFacts(t *testi
 
 	plan := ExplainAnalyzePlan{
 		{
-			ID:           "│ └─TableFullScan_18",
-			EstRows:      10_000,
-			ActRows:      20_000,
-			AccessObject: "table:videos",
-			OperatorInfo: "range:[private-value,private-value], keep order:false, stats:pseudo",
-			Disk:         "N/A",
+			ID:            "│ └─TableFullScan_18",
+			EstRows:       10_000,
+			ActRows:       20_000,
+			AccessObject:  "table:tidbgo_t0",
+			OperatorInfo:  "range:[private-value,private-value], keep order:false, stats:pseudo",
+			Disk:          "N/A",
+			PhysicalTable: "videos",
+			Model:         "Video",
 		},
 		{
 			ID:           "├─IndexRangeScan_20(Build)",
@@ -66,6 +68,12 @@ func TestExplainAnalyzePlanDiagnosticsReportsHighConfidenceRuntimeFacts(t *testi
 			}
 		}
 	}
+	if got, want := diagnostics[0].Evidence[0].Message, "TableFullScan_18 on table:tidbgo_t0 [physical table=videos, model=Video] reported stats:pseudo"; got != want {
+		t.Fatalf("PLN001 evidence = %q, want %q", got, want)
+	}
+	if got, want := diagnostics[2].Evidence[0].Message, "TableFullScan_18 on table:tidbgo_t0 [physical table=videos, model=Video] produced 20000 rows"; got != want {
+		t.Fatalf("PLN003 evidence = %q, want %q", got, want)
+	}
 }
 
 func TestExplainAnalyzePlanDiagnosticsUsesConservativeThresholds(t *testing.T) {
@@ -95,6 +103,35 @@ func TestExplainAnalyzePlanDiagnosticsIncludesExactThresholdsAndZeroEstimate(t *
 	want := []string{codePlanEstimateDivergence, codePlanLargeTableFullScan, codePlanDiskUsage}
 	if got := queryDiagnosticCodes(plan.Diagnostics()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestExplainAnalyzePlanDiagnosticsIncludesResolvedAccessInEveryEvidence(t *testing.T) {
+	t.Parallel()
+
+	plan := ExplainAnalyzePlan{{
+		ID:            "TableFullScan_1",
+		EstRows:       100,
+		ActRows:       10_000,
+		AccessObject:  "table:tidbgo_t1",
+		Disk:          "1 KB",
+		PhysicalTable: "makers",
+		Model:         "Maker",
+		RelationPath:  "Video.Maker",
+	}}
+	diagnostics := plan.Diagnostics()
+	want := []string{
+		"TableFullScan_1 on table:tidbgo_t1 [physical table=makers, model=Maker, relation=Video.Maker] estimated 100 rows and produced 10000 rows (100.00x difference)",
+		"TableFullScan_1 on table:tidbgo_t1 [physical table=makers, model=Maker, relation=Video.Maker] produced 10000 rows",
+		"TableFullScan_1 on table:tidbgo_t1 [physical table=makers, model=Maker, relation=Video.Maker] reported 1 KB of disk usage",
+	}
+	if len(diagnostics) != len(want) {
+		t.Fatalf("Diagnostics() = %#v, want %d diagnostics", diagnostics, len(want))
+	}
+	for index := range want {
+		if got := diagnostics[index].Evidence[0].Message; got != want[index] {
+			t.Fatalf("diagnostics[%d] evidence = %q, want %q", index, got, want[index])
+		}
 	}
 }
 
@@ -152,6 +189,28 @@ func BenchmarkExplainAnalyzePlanDiagnosticsWithWarnings(b *testing.B) {
 		{ID: "TableReader_1", EstRows: 20, ActRows: 20, Disk: "N/A"},
 		{ID: "└─TableFullScan_2", EstRows: 10_000, ActRows: 100_000, AccessObject: "table:videos", OperatorInfo: "stats:pseudo", Disk: "N/A"},
 		{ID: "HashAgg_3", EstRows: 1, ActRows: 1, Disk: "4 KB"},
+	}
+	var diagnostics []check.Diagnostic
+	b.ReportAllocs()
+	for b.Loop() {
+		diagnostics = plan.Diagnostics()
+	}
+	queryDiagnosticSink = diagnostics
+}
+
+func BenchmarkExplainAnalyzePlanDiagnosticsWithResolvedAccess(b *testing.B) {
+	plan := ExplainAnalyzePlan{
+		{
+			ID:            "└─TableFullScan_2",
+			EstRows:       10_000,
+			ActRows:       100_000,
+			AccessObject:  "table:tidbgo_t1",
+			OperatorInfo:  "stats:pseudo",
+			Disk:          "N/A",
+			PhysicalTable: "makers",
+			Model:         "Maker",
+			RelationPath:  "Video.Maker",
+		},
 	}
 	var diagnostics []check.Diagnostic
 	b.ReportAllocs()

@@ -170,15 +170,17 @@ driver, network round trip, TiDB optimization, and actual RU consumption
 
 ## EXPLAIN ANALYZE client benchmark
 
-Measure the client-side cost of compiling one typed SELECT and scanning a
-three-operator TiDB runtime plan:
+Measure the client-side cost of compiling typed SELECTs, resolving plan access
+metadata, and scanning TiDB runtime plans:
 
 ```sh
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze($|RelationAliases$)' -benchmem -count=5
 ```
 
-This benchmark uses a local `database/sql` test driver. It measures neither
-the SELECT execution nor TiDB runtime cost and consumes no actual RU
+The first workload scans three physical-table operators. The relation workload
+scans four operators and resolves root, direct relation, many-to-many junction,
+and target aliases. Both use a local `database/sql` test driver, measure neither
+the SELECT execution nor TiDB runtime cost, and consume no actual RU
 
 Measure the cost of diagnosing already returned plans separately:
 
@@ -186,8 +188,9 @@ Measure the cost of diagnosing already returned plans separately:
 go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
 ```
 
-The clean case has no diagnostics, while the warning case emits incomplete
-statistics, large full-scan, and disk-use evidence. Neither case performs
+The clean case has no diagnostics, the warning case emits incomplete
+statistics, large full-scan, and disk-use evidence, and the resolved-access
+case includes physical table, model, and relation metadata. No case performs
 database I/O or parses timing and RU text
 
 ## ServerRU client benchmark

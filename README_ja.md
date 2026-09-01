@@ -496,6 +496,10 @@ diagnostics := runtimePlan.Diagnostics()
 
 `Diagnostics` は追加のDB callを行わず、返されたrowから不完全なstatistics、保守的なestimateとactual rowの差、大規模table full scan、disk usageを検査します
 
+TiDBがcompiler-owned table aliasを返した場合、各runtime plan rowはtyped query metadataから `PhysicalTable`、`Model`、rootからの `RelationPath` も解決します
+
+junction tableにはmodelを設定せず、曖昧なaccess objectは推測せず未解決のままにします
+
 limitを追加せずcompleteなroot SELECTを実行し、database resourceとRUを消費します
 
 mutation、raw SQL、collection preload statementは対象外です

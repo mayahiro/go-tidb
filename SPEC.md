@@ -94,6 +94,8 @@ The following decisions apply throughout v0.1:
     as billed RU.
 12. `EXPLAIN ANALYZE` is allowed only for `SELECT` and remains opt-in. Plan
     diagnostics inspect only its returned rows and add no database statement.
+    Compiler-owned access aliases resolve from query-occurrence metadata, not
+    model tags or SQL parsing.
 13. Raw SQL is an explicit escape hatch without typed relation hydration or
     static query-AST diagnostics. Returned columns may still use model-aware
     scanning.
@@ -280,8 +282,10 @@ ServerRU.
 without another database call. Suppressible `PLN001` through `PLN004` warnings
 cover pseudo or partial statistics, conservative estimated-to-actual row
 divergence, large `TableFullScan` output, and recognized positive disk usage.
-The checks do not parse timing or RU text and do not predict that a proposed
-index or rewrite will improve the plan.
+Runtime-plan rows and diagnostic evidence attach unambiguous physical table,
+Go model, and root-relative relation-path metadata to compiler-owned aliases.
+The checks do not parse timing, RU text, or compiled SQL and do not predict that
+a proposed index or rewrite will improve the plan.
 
 Planned catalogs cover:
 

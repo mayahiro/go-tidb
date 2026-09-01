@@ -311,6 +311,24 @@ TiDB default formatの9 columnを `ID`、`EstRows`、`ActRows`、`Task`、`Acces
 
 application modelをhydrateせずruntime planを返します
 
+各rowはcompilerから導出した `PhysicalTable`、`Model`、`RelationPath` fieldも持ちます
+
+これらはTiDBが返す追加columnではありません
+
+go-tidbは `AccessObject` の正確な `table:` tokenを読み、compile済みroot SELECT、inline preload join、Relation predicate、many-to-many junction、Relation-first TopN associationのmetadataと照合します
+
+生成aliasはmodel tagではなく1 query内のoccurrenceを識別します
+
+同じnesting depthに複数Relationがある場合もRelation occurrenceごとに異なるaliasを使い、targetとrootからのRelation pathを識別可能にします
+
+`PhysicalTable` と `Model` はrootまたは関連modelを識別し、rootの `RelationPath` は空です
+
+junction tableはphysical tableとRelation pathを持ちますがGo modelを持ちません
+
+derived tableにはphysical table mappingを設定しません
+
+TiDBが未知のtokenまたは複数Relation pathで共有するphysical nameだけを返した場合は `AccessObject` を保持し、SQL parseまたは推測を行わず曖昧なderived fieldを空にします
+
 `Explain` と同じtyped boundaryを持ち、mutation builderとcaller-supplied raw SQLは対象外です
 
 inline to-one joinはroot SELECTの一部として実行し、collection preload statementは除外します
@@ -350,11 +368,11 @@ warningは確認すべきplan上の事実を示すものであり、index追加�
 
 timing、RU、loop、RPC detail、memory、その他のfree-form execution textはparseしません
 
-diagnostic evidenceにはoperator identifier、access object、row count、認識したdisk valueを含みます
+diagnostic evidenceにはoperator identifier、access object、解決できたphysical table、model、Relation path、row count、認識したdisk valueを含みます
 
 bind value由来のpredicate rangeを含み得るため、完全な `OperatorInfo` はコピーしません
 
-access objectとschema identifierはdevelopment metadataとして扱ってください
+access object、model、Relation、schema identifierはdevelopment metadataとして扱ってください
 
 結果はapplicationが所有するdiagnostic arrayへ追加し、offline checkと同じreportおよびsuppression policyで `tidbgo check` へ渡せます
 

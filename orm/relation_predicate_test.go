@@ -176,7 +176,7 @@ func TestSelectQueryBuildsLogicalRelationPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `id` FROM `preload_users` AS `tidbgo_r0` WHERE (EXISTS (SELECT 1 FROM `preload_orders` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`user_id` = `tidbgo_r0`.`id`)) OR NOT (EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j1` JOIN `preload_roles` AS `tidbgo_r1` ON (`tidbgo_r1`.`id` = `tidbgo_j1`.`role_id`) WHERE (`tidbgo_j1`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r1`.`name` = ?)))"
+	wantSQL := "SELECT `id` FROM `preload_users` AS `tidbgo_r0` WHERE (EXISTS (SELECT 1 FROM `preload_orders` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`user_id` = `tidbgo_r0`.`id`)) OR NOT (EXISTS (SELECT 1 FROM `preload_user_roles` AS `tidbgo_j2` JOIN `preload_roles` AS `tidbgo_r2` ON (`tidbgo_r2`.`id` = `tidbgo_j2`.`role_id`) WHERE (`tidbgo_j2`.`user_id` = `tidbgo_r0`.`id`) AND `tidbgo_r2`.`name` = ?)))"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}

@@ -27,8 +27,8 @@ func TestSelectQueryExplainAnalyzeReturnsTiDBRuntimePlan(t *testing.T) {
 	}
 	want := ExplainAnalyzePlan{
 		{ID: "IndexLookUp_10", EstRows: 1, ActRows: 1, Task: "root", ExecutionInfo: "time:1ms, loops:2, RU:0.5", Memory: "1 KB", Disk: "N/A"},
-		{ID: "IndexRangeScan_8(Build)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model, index:name(name)", ExecutionInfo: "time:500us, loops:1", OperatorInfo: "range:[Ada,Ada]", Memory: "N/A", Disk: "N/A"},
-		{ID: "TableRowIDScan_9(Probe)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model", ExecutionInfo: "time:400us, loops:1", OperatorInfo: "keep order:false", Memory: "N/A", Disk: "N/A"},
+		{ID: "IndexRangeScan_8(Build)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model, index:name(name)", ExecutionInfo: "time:500us, loops:1", OperatorInfo: "range:[Ada,Ada]", Memory: "N/A", Disk: "N/A", PhysicalTable: "scan_model", Model: "scanModel"},
+		{ID: "TableRowIDScan_9(Probe)", EstRows: 1, ActRows: 1, Task: "cop[tikv]", AccessObject: "table:scan_model", ExecutionInfo: "time:400us, loops:1", OperatorInfo: "keep order:false", Memory: "N/A", Disk: "N/A", PhysicalTable: "scan_model", Model: "scanModel"},
 	}
 	if !reflect.DeepEqual(plan, want) {
 		t.Fatalf("ExplainAnalyze() = %#v, want %#v", plan, want)
@@ -54,6 +54,118 @@ func TestSelectQueryExplainAnalyzeReturnsNonNilEmptyPlan(t *testing.T) {
 	}
 	if plan == nil || len(plan) != 0 {
 		t.Fatalf("ExplainAnalyze() = %#v, want non-nil empty plan", plan)
+	}
+}
+
+func TestSelectQueryExplainAnalyzeResolvesInlinePreloadAliases(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"TableFullScan_1", "1", "1", "cop[tikv]", "table:tidbgo_t0", "time:1ms", "stats:pseudo", "N/A", "N/A"},
+		[]driver.Value{"IndexRangeScan_2", "1", "1", "cop[tikv]", "partition:p0, table:tidbgo_t1, index:PRIMARY(id)", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"IndexRangeScan_3", "1", "1", "cop[tikv]", "table:tidbgo_t2", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_4", "1", "1", "cop[tikv]", "table:tidbgo_t99", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := Query[preloadOrder]().Preload("User.Profile").ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	want := []struct {
+		table    string
+		model    string
+		relation string
+	}{
+		{table: "preload_orders", model: "preloadOrder"},
+		{table: "preload_users", model: "preloadUser", relation: "User"},
+		{table: "preload_profiles", model: "preloadProfile", relation: "User.Profile"},
+		{},
+	}
+	for index := range want {
+		row := plan[index]
+		if row.PhysicalTable != want[index].table || row.Model != want[index].model || row.RelationPath != want[index].relation {
+			t.Fatalf("plan[%d] access = (%q, %q, %q), want (%q, %q, %q)", index, row.PhysicalTable, row.Model, row.RelationPath, want[index].table, want[index].model, want[index].relation)
+		}
+	}
+}
+
+func TestSelectQueryExplainAnalyzeResolvesNestedRelationPredicatePath(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"TableFullScan_1", "1", "1", "cop[tikv]", "table:tidbgo_r2", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := Query[preloadUser]().
+		Where(Has("Orders", Has("User", Equal("Email", "ada@example.com")))).
+		ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	if got := plan[0]; got.PhysicalTable != "preload_users" || got.Model != "preloadUser" || got.RelationPath != "Orders.User" {
+		t.Fatalf("resolved access = (%q, %q, %q), want nested Orders.User path", got.PhysicalTable, got.Model, got.RelationPath)
+	}
+}
+
+func TestSelectQueryExplainAnalyzeResolvesRelationPredicateAliases(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"TableFullScan_1", "1", "1", "cop[tikv]", "table:tidbgo_r0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_2", "1", "1", "cop[tikv]", "table:tidbgo_r1", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_3", "1", "1", "cop[tikv]", "table:tidbgo_j2", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_4", "1", "1", "cop[tikv]", "table:tidbgo_r2", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := Query[preloadUser]().
+		Where(Or(Has("Orders"), Has("Roles", Equal("Name", "admin")))).
+		ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	want := []struct {
+		table    string
+		model    string
+		relation string
+	}{
+		{table: "preload_users", model: "preloadUser"},
+		{table: "preload_orders", model: "preloadOrder", relation: "Orders"},
+		{table: "preload_user_roles", relation: "Roles"},
+		{table: "preload_roles", model: "preloadRole", relation: "Roles"},
+	}
+	for index := range want {
+		row := plan[index]
+		if row.PhysicalTable != want[index].table || row.Model != want[index].model || row.RelationPath != want[index].relation {
+			t.Fatalf("plan[%d] access = (%q, %q, %q), want (%q, %q, %q)", index, row.PhysicalTable, row.Model, row.RelationPath, want[index].table, want[index].model, want[index].relation)
+		}
+	}
+}
+
+func TestSelectQueryExplainAnalyzeResolvesRelationTopNAliases(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"IndexRangeScan_1", "20", "20", "cop[tikv]", "table:tidbgo_a0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableRowIDScan_2", "20", "20", "cop[tikv]", "table:tidbgo_t0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"IndexRangeScan_3", "20", "20", "cop[tikv]", "table:tidbgo_t1", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableScan_4", "20", "20", "root", "table:tidbgo_k0", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := relationTopNBenchmarkQuery().ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	want := []struct {
+		table    string
+		model    string
+		relation string
+	}{
+		{table: "relation_topn_video_genres", model: "relationTopNVideoGenre", relation: "VideoGenres"},
+		{table: "relation_topn_videos", model: "relationTopNVideo"},
+		{table: "relation_topn_makers", model: "relationTopNMaker", relation: "Maker"},
+		{},
+	}
+	for index := range want {
+		row := plan[index]
+		if row.PhysicalTable != want[index].table || row.Model != want[index].model || row.RelationPath != want[index].relation {
+			t.Fatalf("plan[%d] access = (%q, %q, %q), want (%q, %q, %q)", index, row.PhysicalTable, row.Model, row.RelationPath, want[index].table, want[index].model, want[index].relation)
+		}
 	}
 }
 
@@ -172,6 +284,34 @@ func BenchmarkSelectQueryExplainAnalyze(b *testing.B) {
 		}
 	})
 	query := Query[scanModel]().Select("ID", "Name").Where(Equal("Name", "Ada"))
+	ctx := context.Background()
+	var plan ExplainAnalyzePlan
+	var err error
+
+	b.ReportAllocs()
+	for b.Loop() {
+		plan, err = query.ExplainAnalyze(ctx, database)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	mutationBenchmarkAffectedSink = int64(len(plan))
+}
+
+func BenchmarkSelectQueryExplainAnalyzeRelationAliases(b *testing.B) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"TableFullScan_1", "1", "1", "cop[tikv]", "table:tidbgo_r0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_2", "1", "1", "cop[tikv]", "table:tidbgo_r1", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_3", "1", "1", "cop[tikv]", "table:tidbgo_j2", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableFullScan_4", "1", "1", "cop[tikv]", "table:tidbgo_r2", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := sql.OpenDB(&allTestConnector{state: state})
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Errorf("DB.Close() error = %v", err)
+		}
+	})
+	query := Query[preloadUser]().Where(Or(Has("Orders"), Has("Roles", Equal("Name", "admin"))))
 	ctx := context.Background()
 	var plan ExplainAnalyzePlan
 	var err error

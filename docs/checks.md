@@ -136,6 +136,8 @@ resources. `Diagnostics` itself is deterministic, performs no database I/O,
 and inspects only those already returned rows. It emits suppressible `PLN001`
 through `PLN004` warnings for incomplete statistics, conservative row-estimate
 divergence, a large table full scan, and positive recognized disk usage.
+Evidence keeps TiDB's access object and adds the compiler-resolved physical
+table, Go model, and relation path when the mapping is unambiguous.
 
 This is manual connected analysis, not automatic runtime capture. Installing a
 `RuntimeCapture` does not run `EXPLAIN ANALYZE`, collect plan rows, or create

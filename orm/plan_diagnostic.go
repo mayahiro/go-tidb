@@ -40,24 +40,24 @@ func (plan ExplainAnalyzePlan) Diagnostics() []check.Diagnostic {
 	var diskUsage []check.Evidence
 
 	for index := range plan {
-		row := plan[index]
+		row := &plan[index]
 		operator := planOperatorIdentifier(row.ID)
 		statisticsStatus := planStatisticsStatus(row.OperatorInfo)
 		if statisticsStatus != "" {
 			incompleteStatistics = append(incompleteStatistics, check.Evidence{
-				Message: planOperatorAccess(operator, row.AccessObject) + " reported " + statisticsStatus,
+				Message: planOperatorEvidence(operator, row, " reported ", statisticsStatus, ""),
 			})
 		} else if evidence, ok := planEstimateDivergenceEvidence(row, operator); ok {
 			estimateDivergence = append(estimateDivergence, check.Evidence{Message: evidence})
 		}
 		if planOperatorName(operator) == "TableFullScan" && row.ActRows >= planFullScanRowsThreshold {
 			largeTableFullScan = append(largeTableFullScan, check.Evidence{
-				Message: planOperatorAccess(operator, row.AccessObject) + " produced " + strconv.FormatInt(row.ActRows, 10) + " rows",
+				Message: planOperatorEvidence(operator, row, " produced ", strconv.FormatInt(row.ActRows, 10), " rows"),
 			})
 		}
 		if positivePlanUsage(row.Disk) {
 			diskUsage = append(diskUsage, check.Evidence{
-				Message: operator + " reported " + strings.TrimSpace(row.Disk) + " of disk usage",
+				Message: planOperatorEvidence(operator, row, " reported ", strings.TrimSpace(row.Disk), " of disk usage"),
 			})
 		}
 	}
@@ -137,7 +137,7 @@ func planStatisticsStatus(operatorInfo string) string {
 	return ""
 }
 
-func planEstimateDivergenceEvidence(row ExplainAnalyzeRow, operator string) (string, bool) {
+func planEstimateDivergenceEvidence(row *ExplainAnalyzeRow, operator string) (string, bool) {
 	actual := float64(row.ActRows)
 	if row.ActRows < 0 || row.EstRows < 0 || math.IsNaN(row.EstRows) || math.IsInf(row.EstRows, 0) {
 		return "", false
@@ -150,12 +150,32 @@ func planEstimateDivergenceEvidence(row ExplainAnalyzeRow, operator string) (str
 	if smaller != 0 && larger/smaller < planEstimateRatioThreshold {
 		return "", false
 	}
-	message := operator + " estimated " + strconv.FormatFloat(row.EstRows, 'f', -1, 64) +
-		" rows and produced " + strconv.FormatInt(row.ActRows, 10) + " rows"
+	estimated := strconv.FormatFloat(row.EstRows, 'f', -1, 64)
+	actualRows := strconv.FormatInt(row.ActRows, 10)
+	ratio := ""
 	if smaller != 0 {
-		message += " (" + strconv.FormatFloat(larger/smaller, 'f', 2, 64) + "x difference)"
+		ratio = strconv.FormatFloat(larger/smaller, 'f', 2, 64)
 	}
-	return message, true
+	accessObject := strings.TrimSpace(row.AccessObject)
+	capacity := planOperatorAccessCapacity(operator, accessObject, row) +
+		len(" estimated  rows and produced  rows") + len(estimated) + len(actualRows)
+	if ratio != "" {
+		capacity += len(" (x difference)") + len(ratio)
+	}
+	var message strings.Builder
+	message.Grow(capacity)
+	writePlanOperatorAccess(&message, operator, accessObject, row)
+	message.WriteString(" estimated ")
+	message.WriteString(estimated)
+	message.WriteString(" rows and produced ")
+	message.WriteString(actualRows)
+	message.WriteString(" rows")
+	if ratio != "" {
+		message.WriteString(" (")
+		message.WriteString(ratio)
+		message.WriteString("x difference)")
+	}
+	return message.String(), true
 }
 
 func planOperatorIdentifier(identifier string) string {
@@ -176,12 +196,75 @@ func planOperatorName(identifier string) string {
 	return identifier
 }
 
-func planOperatorAccess(operator, accessObject string) string {
-	accessObject = strings.TrimSpace(accessObject)
-	if accessObject == "" {
-		return operator
+func planOperatorEvidence(operator string, row *ExplainAnalyzeRow, action, value, unit string) string {
+	accessObject := strings.TrimSpace(row.AccessObject)
+	capacity := planOperatorAccessCapacity(operator, accessObject, row) + len(action) + len(value) + len(unit)
+	var result strings.Builder
+	result.Grow(capacity)
+	writePlanOperatorAccess(&result, operator, accessObject, row)
+	result.WriteString(action)
+	result.WriteString(value)
+	result.WriteString(unit)
+	return result.String()
+}
+
+func planOperatorAccessCapacity(operator, accessObject string, row *ExplainAnalyzeRow) int {
+	capacity := len(operator)
+	if accessObject != "" {
+		capacity += len(" on ") + len(accessObject)
 	}
-	return operator + " on " + accessObject
+	if row.PhysicalTable == "" && row.Model == "" && row.RelationPath == "" {
+		return capacity
+	}
+	capacity += len(" []")
+	fieldCount := 0
+	if row.PhysicalTable != "" {
+		capacity += len("physical table=") + len(row.PhysicalTable)
+		fieldCount++
+	}
+	if row.Model != "" {
+		capacity += len("model=") + len(row.Model)
+		fieldCount++
+	}
+	if row.RelationPath != "" {
+		capacity += len("relation=") + len(row.RelationPath)
+		fieldCount++
+	}
+	return capacity + max(0, fieldCount-1)*len(", ")
+}
+
+func writePlanOperatorAccess(result *strings.Builder, operator, accessObject string, row *ExplainAnalyzeRow) {
+	result.WriteString(operator)
+	if accessObject != "" {
+		result.WriteString(" on ")
+		result.WriteString(accessObject)
+	}
+	if row.PhysicalTable == "" && row.Model == "" && row.RelationPath == "" {
+		return
+	}
+	result.WriteString(" [")
+	wrote := false
+	if row.PhysicalTable != "" {
+		result.WriteString("physical table=")
+		result.WriteString(row.PhysicalTable)
+		wrote = true
+	}
+	if row.Model != "" {
+		if wrote {
+			result.WriteString(", ")
+		}
+		result.WriteString("model=")
+		result.WriteString(row.Model)
+		wrote = true
+	}
+	if row.RelationPath != "" {
+		if wrote {
+			result.WriteString(", ")
+		}
+		result.WriteString("relation=")
+		result.WriteString(row.RelationPath)
+	}
+	result.WriteByte(']')
 }
 
 func planOperatorCount(count int) string {

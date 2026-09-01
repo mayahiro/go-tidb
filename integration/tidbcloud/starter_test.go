@@ -674,6 +674,9 @@ func testSelectExplainAnalyze(t *testing.T, ctx context.Context, database *sql.D
 		}
 		if strings.Contains(row.AccessObject, "table:tidbgo_it_orders") {
 			foundTable = true
+			if row.PhysicalTable != "tidbgo_it_orders" || row.Model != "starterOrder" || row.RelationPath != "" {
+				t.Fatalf("SELECT EXPLAIN ANALYZE order access metadata = (%q, %q, %q)", row.PhysicalTable, row.Model, row.RelationPath)
+			}
 		}
 		if row.Task == "root" && row.ActRows == 1 {
 			foundActualRootRow = true
@@ -1409,6 +1412,9 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	for _, row := range plan {
 		if strings.Contains(row.AccessObject, "table:tidbgo_a0") {
 			foundAssociation = true
+			if row.PhysicalTable != "tidbgo_it_topn_video_genres" || row.Model != "starterTopNVideoGenre" || row.RelationPath != "VideoGenres" {
+				t.Fatalf("relation TopN association access metadata = (%q, %q, %q)", row.PhysicalTable, row.Model, row.RelationPath)
+			}
 		}
 		if strings.Contains(row.AccessObject, "index:tidbgo_it_topn_video_genres_genre_video") {
 			foundIndex = true

@@ -294,6 +294,23 @@ without adding a protective limit, then returns a non-nil
 `OperatorInfo`, `Memory`, and `Disk`. It returns the runtime plan rather than
 hydrating application models.
 
+Each row also has compiler-derived `PhysicalTable`, `Model`, and
+`RelationPath` fields. These are not additional TiDB columns. go-tidb reads the
+exact `table:` token from `AccessObject` and resolves it against metadata for
+the compiled root SELECT, inline preload joins, relation predicates,
+many-to-many junctions, and relation-first TopN associations. Generated aliases
+identify occurrences in one query and do not come from model tags. Relation
+occurrences use distinct aliases, so a target and its root-relative relation
+path remain identifiable when multiple relations appear at the same nesting
+depth.
+
+`PhysicalTable` and `Model` identify the root or related model. `RelationPath`
+is empty for the root. A junction table has a physical table and relation path
+but no Go model. A derived table has no physical-table mapping. If TiDB returns
+an unknown token or only a physical name shared by multiple relation paths,
+go-tidb preserves `AccessObject` and leaves the ambiguous derived fields empty
+instead of parsing the SQL or guessing.
+
 `ExplainAnalyze` has the same typed boundary as `Explain`: mutation builders
 and caller-supplied raw SQL cannot enter it, inline to-one joins are part of the
 root SELECT, and collection preload statements are excluded. It executes the
@@ -329,12 +346,13 @@ are intentionally conservative. A warning identifies a plan fact to inspect;
 it does not prove that an index or query rewrite is better. Timing, RU, loops,
 RPC details, memory, and other free-form execution text are not parsed.
 
-The diagnostic evidence includes operator identifiers, access objects, row
-counts, and recognized disk values. It does not copy full `OperatorInfo`, which
-can contain predicate ranges derived from bind values. Treat access-object and
-schema identifiers as development metadata. The result can be appended to an
-application-owned diagnostic array and passed to `tidbgo check` for the same
-reporting and suppression policy as offline checks.
+The diagnostic evidence includes operator identifiers, access objects,
+resolved physical tables, models and relation paths when available, row counts,
+and recognized disk values. It does not copy full `OperatorInfo`, which can
+contain predicate ranges derived from bind values. Treat access-object, model,
+relation, and schema identifiers as development metadata. The result can be
+appended to an application-owned diagnostic array and passed to `tidbgo check`
+for the same reporting and suppression policy as offline checks.
 
 TiDB documents `estRows`, `actRows`, pseudo statistics, and execution-info
 fields in its [execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)

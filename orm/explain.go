@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/mayahiro/go-tidb/model"
 )
 
 const (
@@ -61,6 +63,16 @@ type ExplainAnalyzeRow struct {
 	Memory string
 	// Disk is TiDB's formatted peak operator disk usage or N/A.
 	Disk string
+	// PhysicalTable is the physical table resolved from compiler-owned query
+	// metadata. It is empty when the access object cannot be resolved
+	// unambiguously.
+	PhysicalTable string
+	// Model is the declared Go model type name associated with PhysicalTable.
+	// It is empty for a junction table or an ambiguous access object.
+	Model string
+	// RelationPath is the dot-separated relation path from the query root. It
+	// is empty for the root model or when the path is ambiguous.
+	RelationPath string
 }
 
 // ExplainAnalyzePlan is TiDB's completed default row-format runtime plan.
@@ -78,7 +90,7 @@ type ExplainAnalyzePlan []ExplainAnalyzeRow
 // the root SELECT, although TiDB can evaluate certain subqueries during query
 // optimization.
 func (q *SelectQuery[T]) Explain(ctx context.Context, executor QueryExecutor) ([]ExplainRow, error) {
-	rows, err := q.queryExplainRows(ctx, executor, StatementExplain, explainPrefix)
+	rows, err := q.queryExplainRows(ctx, executor, StatementExplain, explainPrefix, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -96,14 +108,21 @@ func (q *SelectQuery[T]) Explain(ctx context.Context, executor QueryExecutor) ([
 // executed or analyzed. Call Diagnostics on the returned ExplainAnalyzePlan to
 // inspect high-confidence runtime-plan facts without another database call.
 func (q *SelectQuery[T]) ExplainAnalyze(ctx context.Context, executor QueryExecutor) (ExplainAnalyzePlan, error) {
-	rows, err := q.queryExplainRows(ctx, executor, StatementExplainAnalyze, explainAnalyzePrefix)
+	var access planAccessResolver
+	rows, err := q.queryExplainRows(ctx, executor, StatementExplainAnalyze, explainAnalyzePrefix, &access)
 	if err != nil {
 		return nil, err
 	}
-	return collectExplainAnalyzeRows(rows)
+	return collectExplainAnalyzeRows(rows, access)
 }
 
-func (q *SelectQuery[T]) queryExplainRows(ctx context.Context, executor QueryExecutor, operation StatementOperation, prefix string) (queryResultRows, error) {
+func (q *SelectQuery[T]) queryExplainRows(
+	ctx context.Context,
+	executor QueryExecutor,
+	operation StatementOperation,
+	prefix string,
+	access *planAccessResolver,
+) (queryResultRows, error) {
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return nil, err
 	}
@@ -111,9 +130,19 @@ func (q *SelectQuery[T]) queryExplainRows(ctx context.Context, executor QueryExe
 	if err != nil {
 		return nil, err
 	}
+	if access != nil {
+		descriptor, describeErr := model.DescribeType(q.selection.modelType)
+		if describeErr != nil {
+			return nil, fmt.Errorf("orm: describe EXPLAIN ANALYZE model: %w", describeErr)
+		}
+		err = compilePlanAccessResolver(descriptor, &q.selection, compiled, access)
+		if err != nil {
+			return nil, fmt.Errorf("orm: compile EXPLAIN ANALYZE access metadata: %w", err)
+		}
+	}
 	statement := prefix + compiled.statement.sql
 	metadata := runtimePlanMetadata(runtimeSelectMetadata(ctx, &q.selection, compiled, strings.ToLower(string(operation))))
-	return queryTextRowsOperationWithMetadata(
+	rows, err := queryTextRowsOperationWithMetadata(
 		ctx,
 		executor,
 		operation,
@@ -122,6 +151,7 @@ func (q *SelectQuery[T]) queryExplainRows(ctx context.Context, executor QueryExe
 		compiled.arguments,
 		metadata,
 	)
+	return rows, err
 }
 
 func collectExplainRows(rows queryResultRows) ([]ExplainRow, error) {
@@ -151,7 +181,7 @@ func validateExplainColumns(columns []string) error {
 	return validatePlanColumns("EXPLAIN", columns, explainColumnNames[:])
 }
 
-func collectExplainAnalyzeRows(rows queryResultRows) (ExplainAnalyzePlan, error) {
+func collectExplainAnalyzeRows(rows queryResultRows, access planAccessResolver) (ExplainAnalyzePlan, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, fmt.Errorf("orm: read EXPLAIN ANALYZE columns: %w", err))
@@ -176,6 +206,10 @@ func collectExplainAnalyzeRows(rows queryResultRows) (ExplainAnalyzePlan, error)
 		); err != nil {
 			return nil, closeRowsAfterError("EXPLAIN ANALYZE", rows, fmt.Errorf("orm: scan EXPLAIN ANALYZE row: %w", err))
 		}
+		resolved := access.resolve(row.AccessObject)
+		row.PhysicalTable = resolved.physicalTable
+		row.Model = resolved.model
+		row.RelationPath = resolved.relationPath
 		result = append(result, row)
 	}
 	if err := finishRows("EXPLAIN ANALYZE", rows); err != nil {

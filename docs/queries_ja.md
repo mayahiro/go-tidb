@@ -371,6 +371,8 @@ field、runtime boundary、TiDB固有の注意事項は[Statement observation](o
 
 `Diagnostics` methodは追加のdatabase statementを実行せず、返されたrowから保守的なruntime plan warningを検査します
 
+`ExplainAnalyze` はmappingを一意に判断できるcompiler-owned access aliasをphysical table、Go model、rootからのRelation pathへ解決します
+
 queryを変更するとplanも変わるためprotective `LIMIT` を自動追加しません
 
 実行するSELECTのdatabase resourceとRUを消費し、runtime plan収集のoverheadも追加され得ます

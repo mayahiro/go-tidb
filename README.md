@@ -474,6 +474,10 @@ diagnostics := runtimePlan.Diagnostics()
 usage as `orm.ExplainAnalyzePlan`. `Diagnostics` checks the returned rows for
 incomplete statistics, a conservative estimate-to-actual row divergence, a
 large table full scan, and positive disk usage without another database call.
+When TiDB reports a compiler-owned table alias, each runtime-plan row also
+resolves `PhysicalTable`, `Model`, and the root-relative `RelationPath` from the
+typed query metadata. Junction tables have no model, and ambiguous access
+objects remain unresolved instead of being guessed.
 `ExplainAnalyze` executes the complete root SELECT without adding a limit and
 consumes database resources and RU. Mutation, raw SQL, and collection preload
 statements remain outside this path. See the [runtime-plan
