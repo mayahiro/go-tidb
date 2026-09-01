@@ -30,9 +30,9 @@ type FingerprintServerRUBaseline struct {
 	Maximum     float64 `json:"max"`
 }
 
-// NewServerRUBaseline creates a baseline from a completed runtime analysis.
-// It rejects a capture with no successful samples and any collection error
-// because either condition would make the saved reference incomplete.
+// NewServerRUBaseline creates a comparison-ready baseline from a completed
+// runtime analysis. It rejects incomplete measurement coverage, fewer than
+// five samples per fingerprint, and any collection error.
 func NewServerRUBaseline(analysis Analysis) (ServerRUBaseline, error) {
 	statistics := make([]FingerprintServerRUBaseline, len(analysis.ServerRUByFingerprint))
 	for index, source := range analysis.ServerRUByFingerprint {
@@ -63,14 +63,17 @@ func NewServerRUBaseline(analysis Analysis) (ServerRUBaseline, error) {
 	return baseline, nil
 }
 
-// Validate checks the version, ordering, completeness, and numeric invariants
-// required for a ServerRU baseline.
+// Validate checks the version, ordering, comparison coverage, and numeric
+// invariants required for a ServerRU baseline.
 func (baseline ServerRUBaseline) Validate() error {
 	if baseline.Version != ServerRUBaselineVersion {
 		return fmt.Errorf("ServerRU baseline version is %d, want %d", baseline.Version, ServerRUBaselineVersion)
 	}
 	if len(baseline.ServerRUByFingerprint) == 0 {
-		return fmt.Errorf("ServerRU baseline requires at least one successful sample")
+		return fmt.Errorf(
+			"ServerRU baseline requires at least one measured fingerprint with at least %d successful samples",
+			ServerRUComparisonMinimumSamples,
+		)
 	}
 	for index, statistics := range baseline.ServerRUByFingerprint {
 		if statistics.Fingerprint == "" {
@@ -109,6 +112,16 @@ func (baseline ServerRUBaseline) Validate() error {
 		}
 		if statistics.Total != math.MaxFloat64 && math.Abs(statistics.Mean-expectedMean) > tolerance {
 			return fmt.Errorf("server_ru_by_fingerprint[%d] has inconsistent total, sample count, and mean", index)
+		}
+		if statistics.Samples != statistics.Count {
+			return fmt.Errorf("server_ru_by_fingerprint[%d] requires complete measurement coverage", index)
+		}
+		if statistics.Samples < ServerRUComparisonMinimumSamples {
+			return fmt.Errorf(
+				"server_ru_by_fingerprint[%d] requires at least %d samples",
+				index,
+				ServerRUComparisonMinimumSamples,
+			)
 		}
 	}
 	return nil

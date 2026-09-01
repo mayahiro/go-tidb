@@ -14,8 +14,8 @@ func TestNewServerRUBaselineCopiesValidatedStatistics(t *testing.T) {
 	t.Parallel()
 
 	analysis := Analysis{ServerRUByFingerprint: []FingerprintServerRU{
-		{Fingerprint: "q1:first", Count: 3, Samples: 2, Total: 4, Mean: 2, Minimum: 1, Maximum: 3},
-		{Fingerprint: "s1:second", Count: 1, Samples: 1, Total: 1.25, Mean: 1.25, Minimum: 1.25, Maximum: 1.25},
+		{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: 10, Mean: 2, Minimum: 1, Maximum: 3},
+		{Fingerprint: "s1:second", Count: 5, Samples: 5, Total: 6.25, Mean: 1.25, Minimum: 1.25, Maximum: 1.25},
 	}}
 	baseline, err := NewServerRUBaseline(analysis)
 	if err != nil {
@@ -24,8 +24,8 @@ func TestNewServerRUBaselineCopiesValidatedStatistics(t *testing.T) {
 	want := ServerRUBaseline{
 		Version: ServerRUBaselineVersion,
 		ServerRUByFingerprint: []FingerprintServerRUBaseline{
-			{Fingerprint: "q1:first", Count: 3, Samples: 2, Total: 4, Mean: 2, Minimum: 1, Maximum: 3},
-			{Fingerprint: "s1:second", Count: 1, Samples: 1, Total: 1.25, Mean: 1.25, Minimum: 1.25, Maximum: 1.25},
+			{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: 10, Mean: 2, Minimum: 1, Maximum: 3},
+			{Fingerprint: "s1:second", Count: 5, Samples: 5, Total: 6.25, Mean: 1.25, Minimum: 1.25, Maximum: 1.25},
 		},
 	}
 	if !reflect.DeepEqual(baseline, want) {
@@ -45,16 +45,26 @@ func TestNewServerRUBaselineRejectsIncompleteStatistics(t *testing.T) {
 		statistics []FingerprintServerRU
 		want       string
 	}{
-		{name: "no collection", want: "at least one successful sample"},
+		{name: "no collection", want: "at least 5 successful samples"},
 		{
 			name:       "error-only collection",
-			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 1, Errors: 1}},
+			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 5, Errors: 1}},
 			want:       "ServerRU collection errors: 1",
 		},
 		{
 			name:       "successful sample with error",
-			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 1, Samples: 1, Errors: 1, Total: 1, Mean: 1, Minimum: 1, Maximum: 1}},
+			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 5, Samples: 5, Errors: 1, Total: 5, Mean: 1, Minimum: 1, Maximum: 1}},
 			want:       "ServerRU collection errors: 1",
+		},
+		{
+			name:       "incomplete measurement coverage",
+			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 5, Samples: 4, Total: 4, Mean: 1, Minimum: 1, Maximum: 1}},
+			want:       "complete measurement coverage",
+		},
+		{
+			name:       "insufficient samples",
+			statistics: []FingerprintServerRU{{Fingerprint: "q1:first", Count: 4, Samples: 4, Total: 4, Mean: 1, Minimum: 1, Maximum: 1}},
+			want:       "at least 5 samples",
 		},
 	}
 	for _, test := range tests {
@@ -73,9 +83,9 @@ func TestServerRUBaselineValidateRejectsInvalidData(t *testing.T) {
 
 	valid := FingerprintServerRUBaseline{
 		Fingerprint: "q1:first",
-		Count:       2,
-		Samples:     2,
-		Total:       4,
+		Count:       5,
+		Samples:     5,
+		Total:       10,
 		Mean:        2,
 		Minimum:     1,
 		Maximum:     3,
@@ -86,15 +96,17 @@ func TestServerRUBaselineValidateRejectsInvalidData(t *testing.T) {
 		want     string
 	}{
 		{name: "version", baseline: ServerRUBaseline{Version: 2, ServerRUByFingerprint: []FingerprintServerRUBaseline{valid}}, want: "version is 2, want 1"},
-		{name: "fingerprint", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Count: 1, Samples: 1}}}, want: "requires fingerprint"},
-		{name: "unsorted", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "s1:z", Count: 1, Samples: 1}, {Fingerprint: "q1:a", Count: 1, Samples: 1}}}, want: "unique and sorted"},
+		{name: "fingerprint", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Count: 5, Samples: 5}}}, want: "requires fingerprint"},
+		{name: "unsorted", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "s1:z", Count: 5, Samples: 5}, {Fingerprint: "q1:a", Count: 5, Samples: 5}}}, want: "unique and sorted"},
 		{name: "duplicate", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{valid, valid}}, want: "unique and sorted"},
-		{name: "count", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Samples: 1}}}, want: "positive count"},
-		{name: "samples", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 1, Samples: 2}}}, want: "invalid sample count"},
-		{name: "negative total", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 1, Samples: 1, Total: -1}}}, want: "invalid total"},
-		{name: "statistics order", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 1, Samples: 1, Total: 2, Mean: 2, Minimum: 3, Maximum: 4}}}, want: "inconsistent min, mean, and max"},
-		{name: "mean", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 2, Samples: 2, Total: 4, Mean: 1, Maximum: 1}}}, want: "inconsistent total, sample count, and mean"},
-		{name: "saturated total mean", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 2, Samples: 2, Total: math.MaxFloat64}}}, want: "inconsistent total, sample count, and mean"},
+		{name: "count", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Samples: 5}}}, want: "positive count"},
+		{name: "samples", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 6}}}, want: "invalid sample count"},
+		{name: "negative total", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: -1}}}, want: "invalid total"},
+		{name: "statistics order", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: 10, Mean: 2, Minimum: 3, Maximum: 4}}}, want: "inconsistent min, mean, and max"},
+		{name: "mean", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: 10, Mean: 1, Maximum: 1}}}, want: "inconsistent total, sample count, and mean"},
+		{name: "saturated total mean", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 5, Total: math.MaxFloat64}}}, want: "inconsistent total, sample count, and mean"},
+		{name: "coverage", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 4, Total: 4, Mean: 1, Minimum: 1, Maximum: 1}}}, want: "complete measurement coverage"},
+		{name: "minimum samples", baseline: ServerRUBaseline{Version: 1, ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 4, Samples: 4, Total: 4, Mean: 1, Minimum: 1, Maximum: 1}}}, want: "at least 5 samples"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -113,9 +125,9 @@ func TestServerRUBaselineEncodeDecodeRoundTrip(t *testing.T) {
 		Version: ServerRUBaselineVersion,
 		ServerRUByFingerprint: []FingerprintServerRUBaseline{{
 			Fingerprint: "q1:<users>",
-			Count:       1,
-			Samples:     1,
-			Total:       1.5,
+			Count:       5,
+			Samples:     5,
+			Total:       7.5,
 			Mean:        1.5,
 			Minimum:     1.5,
 			Maximum:     1.5,
@@ -125,7 +137,7 @@ func TestServerRUBaselineEncodeDecodeRoundTrip(t *testing.T) {
 	if err := EncodeServerRUBaseline(&output, baseline); err != nil {
 		t.Fatalf("EncodeServerRUBaseline() error = %v", err)
 	}
-	const want = `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:<users>","count":1,"samples":1,"total":1.5,"mean":1.5,"min":1.5,"max":1.5}]}` + "\n"
+	const want = `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:<users>","count":5,"samples":5,"total":7.5,"mean":1.5,"min":1.5,"max":1.5}]}` + "\n"
 	if got := output.String(); got != want {
 		t.Fatalf("encoded baseline = %q, want %q", got, want)
 	}
@@ -143,8 +155,8 @@ func TestNewServerRUBaselineAcceptsSaturatedTotal(t *testing.T) {
 
 	baseline, err := NewServerRUBaseline(Analysis{ServerRUByFingerprint: []FingerprintServerRU{{
 		Fingerprint: "q1:first",
-		Count:       2,
-		Samples:     2,
+		Count:       5,
+		Samples:     5,
 		Total:       math.MaxFloat64,
 		Mean:        math.MaxFloat64,
 		Minimum:     math.MaxFloat64,
@@ -161,7 +173,7 @@ func TestNewServerRUBaselineAcceptsSaturatedTotal(t *testing.T) {
 func TestDecodeServerRUBaselineRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
-	valid := `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:first","count":1,"samples":1,"total":1,"mean":1,"min":1,"max":1}]}`
+	valid := `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:first","count":5,"samples":5,"total":5,"mean":1,"min":1,"max":1}]}`
 	tests := []struct {
 		name  string
 		input string
@@ -169,7 +181,7 @@ func TestDecodeServerRUBaselineRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "malformed", input: `{`, want: "decode ServerRU baseline"},
 		{name: "unknown field", input: strings.Replace(valid, `"version":1`, `"version":1,"unknown":true`, 1), want: "unknown field"},
-		{name: "analysis-only error field", input: strings.Replace(valid, `"samples":1`, `"samples":1,"errors":0`, 1), want: "unknown field"},
+		{name: "analysis-only error field", input: strings.Replace(valid, `"samples":5`, `"samples":5,"errors":0`, 1), want: "unknown field"},
 		{name: "trailing value", input: valid + ` {}`, want: "more than one JSON value"},
 		{name: "new version", input: strings.Replace(valid, `"version":1`, `"version":2`, 1), want: "version is 2, want 1"},
 	}
@@ -192,7 +204,7 @@ func TestServerRUBaselineIORejectsNilAndPropagatesWriteError(t *testing.T) {
 	}
 	baseline := ServerRUBaseline{
 		Version:               1,
-		ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 1, Samples: 1}},
+		ServerRUByFingerprint: []FingerprintServerRUBaseline{{Fingerprint: "q1:first", Count: 5, Samples: 5}},
 	}
 	if err := EncodeServerRUBaseline(nil, baseline); err == nil || !strings.Contains(err.Error(), "output is nil") {
 		t.Fatalf("EncodeServerRUBaseline(nil) error = %v", err)
@@ -217,9 +229,9 @@ func benchmarkNewServerRUBaseline(b *testing.B, fingerprintCount int) {
 	for index := range statistics {
 		statistics[index] = FingerprintServerRU{
 			Fingerprint: fmt.Sprintf("q1:%08d", index),
-			Count:       1,
-			Samples:     1,
-			Total:       1,
+			Count:       5,
+			Samples:     5,
+			Total:       5,
 			Mean:        1,
 			Minimum:     1,
 			Maximum:     1,

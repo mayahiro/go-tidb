@@ -57,6 +57,7 @@ func TestApplicationAnalyzeWritesStructuredJSON(t *testing.T) {
 	var output struct {
 		Statistics            runtimecapture.Statistics            `json:"statistics"`
 		ServerRUByFingerprint []runtimecapture.FingerprintServerRU `json:"server_ru_by_fingerprint"`
+		ServerRUComparison    *runtimecapture.ServerRUComparison   `json:"server_ru_comparison"`
 		Diagnostics           []any                                `json:"diagnostics"`
 		Suppressed            []any                                `json:"suppressed"`
 		Summary               struct {
@@ -80,6 +81,172 @@ func TestApplicationAnalyzeWritesStructuredJSON(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(output.ServerRUByFingerprint, wantServerRU) {
 		t.Fatalf("server_ru_by_fingerprint = %#v, want %#v", output.ServerRUByFingerprint, wantServerRU)
+	}
+	if output.ServerRUComparison != nil {
+		t.Fatalf("server_ru_comparison = %#v, want omitted", output.ServerRUComparison)
+	}
+}
+
+func TestApplicationAnalyzeComparesServerRUBaseline(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeAnalyzeServerRUBaseline(t, directory, "baseline.json", "q1:users", 1, 1.1)
+	records := runtimeServerRURecords("q1:users", 1.1, 1.2, 1.3, 1.2, 1.1)
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, records...),
+		"analyze",
+		"--baseline",
+		"baseline.json",
+	)
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"server_ru_comparison: fingerprint=q1:users status=pass baseline_count=5 baseline_samples=5 baseline_mean=1 baseline_max=1.1 current_count=5 current_samples=5 current_errors=0 current_mean=1.18 limit=1.3",
+		"server_ru_comparison_summary: fingerprints=1 passed=1 regressions=0 unavailable=0 minimum_samples=5 maximum_mean_ratio=1.3",
+		"summary: errors=0 warnings=0 info=0 suppressed=0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func TestApplicationAnalyzeFailsOnServerRURegression(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeAnalyzeServerRUBaseline(t, directory, "baseline.json", "q1:users", 1, 1.1)
+	records := runtimeServerRURecords("q1:users", 1.4, 1.4, 1.4, 1.4, 1.4)
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, records...),
+		"analyze",
+		"--baseline",
+		"baseline.json",
+	)
+	if got, want := result.Status(), exitCheckFailure; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"ERROR[RU001] ServerRU mean regressed from the baseline",
+		"current mean 1.4 RU exceeds limit 1.3 RU",
+		"status=regression",
+		"summary: errors=1 warnings=0 info=0 suppressed=0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func TestApplicationAnalyzeWritesStructuredServerRUComparison(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeAnalyzeServerRUBaseline(t, directory, "baseline.json", "q1:users", 1, 1.1)
+	records := runtimeServerRURecords("q1:users", 1, 1, 1, 1, 1)
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, records...),
+		"analyze",
+		"--baseline",
+		"baseline.json",
+		"--json",
+	)
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	var output struct {
+		ServerRUComparison *runtimecapture.ServerRUComparison `json:"server_ru_comparison"`
+	}
+	if err := json.Unmarshal(result.Stdout(), &output); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, output = %q", err, result.Stdout())
+	}
+	if output.ServerRUComparison == nil ||
+		output.ServerRUComparison.Summary.Passed != 1 ||
+		len(output.ServerRUComparison.Entries) != 1 ||
+		output.ServerRUComparison.Entries[0].Status != runtimecapture.ServerRUComparisonPass {
+		t.Fatalf("server_ru_comparison = %#v", output.ServerRUComparison)
+	}
+}
+
+func TestApplicationAnalyzeFailsWhenServerRUComparisonCoverageChanges(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeAnalyzeServerRUBaseline(t, directory, "baseline.json", "q1:old", 1, 1.1)
+	records := runtimeServerRURecords("q1:new", 1, 1, 1, 1, 1)
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, records...),
+		"analyze",
+		"--baseline",
+		"baseline.json",
+	)
+	if got, want := result.Status(), exitCheckFailure; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"ERROR[RU002] ServerRU baseline comparison is incomplete",
+		"Fingerprint q1:new: current measurement has no baseline entry",
+		"Fingerprint q1:old: baseline entry has no current measurement",
+		"fingerprints=2 passed=0 regressions=0 unavailable=2",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func TestApplicationAnalyzeRejectsInvalidServerRUBaseline(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "baseline.json"), []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	result := runApplicationAt(t, directory, nil, "analyze", "--baseline", "baseline.json")
+	if got, want := result.Status(), exitUsage; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if stderr := string(result.Stderr()); !strings.Contains(stderr, "ServerRU baseline version is 2, want 1") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestApplicationAnalyzeReportsMissingServerRUBaselineWithoutResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	result := runApplicationAt(t, directory, nil, "analyze", "--baseline", "missing.json")
+	if got, want := result.Status(), exitInternalError; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	stderr := string(result.Stderr())
+	if !strings.Contains(stderr, `open ServerRU baseline "missing.json": file does not exist`) || strings.Contains(stderr, directory) {
+		t.Fatalf("stderr = %q, want user-supplied path without resolved directory", stderr)
+	}
+}
+
+func TestApplicationAnalyzeRequiresServerRUBaselineFile(t *testing.T) {
+	t.Parallel()
+
+	result := runApplicationWithInput(t, nil, "analyze", "--baseline", "-")
+	if got, want := result.Status(), exitUsage; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if stderr := string(result.Stderr()); !strings.Contains(stderr, "ServerRU baseline must be a file path") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -342,10 +509,10 @@ func TestRuntimeAnalysisWritersPropagateErrors(t *testing.T) {
 	}
 	want := errors.New("write failed")
 	writer := failingWriter{err: want}
-	if err := writeRuntimeAnalysisText(writer, analysis, report); !errors.Is(err, want) {
+	if err := writeRuntimeAnalysisText(writer, analysis, nil, report); !errors.Is(err, want) {
 		t.Fatalf("writeRuntimeAnalysisText() error = %v, want %v", err, want)
 	}
-	if err := writeRuntimeAnalysisJSON(writer, analysis, report); !errors.Is(err, want) {
+	if err := writeRuntimeAnalysisJSON(writer, analysis, nil, report); !errors.Is(err, want) {
 		t.Fatalf("writeRuntimeAnalysisJSON() error = %v, want %v", err, want)
 	}
 }
@@ -376,5 +543,49 @@ func runtimeCommandRecord(sequence uint64, fingerprint string) runtimecapture.Re
 		SQL:           "SELECT `id` FROM `users` WHERE `id` = ?",
 		ArgumentCount: 1,
 		DurationNS:    1000,
+	}
+}
+
+func runtimeServerRURecords(fingerprint string, values ...float64) []runtimecapture.Record {
+	records := make([]runtimecapture.Record, len(values))
+	for index, value := range values {
+		records[index] = runtimeCommandRecord(uint64(index+1), fingerprint)
+		records[index].ScopeID = uint64(index + 1)
+		records[index].ServerRU = &runtimecapture.ServerRU{
+			Known:               true,
+			Value:               value,
+			AuxiliaryStatements: 1,
+		}
+	}
+	return records
+}
+
+func writeAnalyzeServerRUBaseline(
+	t testing.TB,
+	directory string,
+	name string,
+	fingerprint string,
+	mean float64,
+	maximum float64,
+) {
+	t.Helper()
+	baseline := runtimecapture.ServerRUBaseline{
+		Version: runtimecapture.ServerRUBaselineVersion,
+		ServerRUByFingerprint: []runtimecapture.FingerprintServerRUBaseline{{
+			Fingerprint: fingerprint,
+			Count:       5,
+			Samples:     5,
+			Total:       mean * 5,
+			Mean:        mean,
+			Minimum:     mean,
+			Maximum:     maximum,
+		}},
+	}
+	var output bytes.Buffer
+	if err := runtimecapture.EncodeServerRUBaseline(&output, baseline); err != nil {
+		t.Fatalf("EncodeServerRUBaseline() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, name), output.Bytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 }

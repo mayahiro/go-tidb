@@ -171,6 +171,7 @@ runtime capture artifactは作成済みdiagnostic arrayではなくexecution rec
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 このcommandはDBへ接続しません
@@ -189,7 +190,7 @@ completeなshapeを持たないstatementはこれらのquery pattern ruleとsche
 
 textとJSON reportにはfingerprint別のdeterministicなcount、sample、error、total、mean、min、maxも含めます
 
-個別RU sampleは保持せず、これらの記述統計だけではregression thresholdを適用しません
+個別RU sampleは保持しません
 
 DBへ接続せず同じfingerprint aggregateをdeterministicなversion付きreferenceとして保存できます
 
@@ -197,9 +198,15 @@ DBへ接続せず同じfingerprint aggregateをdeterministicなversion付きrefe
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-このcommandはstandard outputへ1個のJSON valueを書き込み、成功ServerRU sampleがない場合またはcollection errorによりcapture integrityが低下している場合は失敗します
+このcommandはstandard outputへ1個のJSON valueを書き込み、全measured fingerprintで5件以上の成功sample、完全なmeasurement coverage、collection errorなしを必須とします
 
-現時点ではthresholdの比較または強制を行いません
+`tidbgo analyze --baseline` は同じmeasured fingerprint setとcurrent captureの計測品質を要求します
+
+current meanがbaseline meanの130%とbaselineで観測した最大値の両方を超えた場合はsuppressできない `RU001` をreportします
+
+fingerprintの欠落、collection error、不完全なcoverage、current sampleが5件未満の場合はsuppressできない `RU002` をreportします
+
+固定policyとoutput contractの全体は[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
 
 `RUN003` はcollectionまたはtemporary connection releaseのfailureを示し、capture integrityの確認が必要なためsuppressできません
 

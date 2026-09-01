@@ -229,11 +229,49 @@ has no creation timestamp and therefore produces deterministic output for the
 same analysis. The CLI streams the runtime input and retains no individual
 samples. It writes only to standard output and performs no database access.
 
-Baseline creation fails when no successful ServerRU sample exists, any
-fingerprint reports a collection or connection-release error, or the runtime
-artifact is invalid. Unsampled captured statements remain represented by
-`count`; `samples` states the actual measurement coverage. Creating the
-baseline does not apply a regression threshold.
+Baseline creation requires every measured fingerprint to have complete
+coverage (`count == samples`), at least five successful samples, and no
+collection or connection-release error. It also fails when the runtime
+artifact is invalid. Creating the artifact itself does not compare a current
+measurement.
+
+Compare a current runtime capture with the saved reference:
+
+```sh
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+```
+
+The baseline option requires a file path so the runtime artifact can still use
+standard input. Comparison is offline and deterministic. The baseline and
+current capture must contain the same measured fingerprint set. Current
+coverage must also be complete and error-free, with at least five successful
+samples per fingerprint. Different statement counts are allowed when both
+sides have complete coverage because the metric is the per-statement mean.
+Fingerprints with no collection attempt are outside this set, so enable
+`CollectServerRU` consistently across the complete measurement workload.
+
+For each comparable fingerprint, the effective limit is:
+
+```text
+max(baseline mean * 1.30, baseline maximum)
+```
+
+The current mean is an `RU001` regression only when it is strictly greater
+than that limit. Equality passes. The observed baseline maximum acts as an
+empirical noise floor; there is no fixed absolute RU allowance that would hide
+a material relative increase in a low-RU query. A new or missing fingerprint,
+collection error, incomplete coverage, or fewer than five current samples
+produces `RU002` instead of claiming a regression result.
+
+Both diagnostics are non-suppressible errors and therefore produce check exit
+status `1`. Text output includes one `server_ru_comparison` line per
+fingerprint and a comparison summary. JSON output adds
+`server_ru_comparison`, including the fixed policy, summary, sorted entries,
+status, measurement coverage, compared means, observed baseline maximum, and
+effective limit. Entry status is one of `pass`, `regression`,
+`missing_baseline`, `missing_current`, `collection_error`,
+`incomplete_coverage`, or `insufficient_samples`. This value is TiDB statement
+ServerRU, not billing RU.
 
 Analyze a completed artifact without a database connection:
 
@@ -241,6 +279,7 @@ Analyze a completed artifact without a database connection:
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 ```
 

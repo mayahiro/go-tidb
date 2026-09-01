@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ const (
 	analyzeInputID    = "runtime-input"
 	analyzeJSONID     = "runtime-json"
 	analyzeSchemaID   = "runtime-schema"
+	analyzeBaselineID = "runtime-baseline"
 	analyzeSuppressID = "runtime-suppress"
 )
 
@@ -35,6 +37,12 @@ func analyzeCommand() *cli.Command {
 				Long("schema").
 				Parser(cli.StringParser()).
 				Help("Check captured query index shapes against a TiDB SQL schema snapshot"),
+		).
+		Option(
+			cli.ValueOption(analyzeBaselineID).
+				Long("baseline").
+				Parser(cli.StringParser()).
+				Help("Compare ServerRU measurements with a saved baseline JSON file"),
 		).
 		Option(
 			cli.ValueOption(analyzeSuppressID).
@@ -56,6 +64,10 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
 	}
+	baseline, diagnostic := analyzeBaseline(context, invocation)
+	if diagnostic != nil {
+		return cli.Outcome{}, diagnostic
+	}
 	reader, closeInput, diagnostic := openRuntimeCaptureInput(context, invocation, analyzeInputID)
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
@@ -68,6 +80,16 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error()).
 			WithTarget(cli.ArgumentTarget(analyzeInputID))
 	}
+	var comparison *runtimecapture.ServerRUComparison
+	if baseline != nil {
+		result, compareErr := runtimecapture.CompareServerRU(analysis, *baseline)
+		if compareErr != nil {
+			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, compareErr.Error()).
+				WithTarget(cli.OptionTarget(analyzeBaselineID))
+		}
+		comparison = &result
+		analysis.Diagnostics = append(analysis.Diagnostics, result.Diagnostics()...)
+	}
 	report, err := check.NewReport(analysis.Diagnostics, parsedAnalyzeSuppressions(invocation)...)
 	if err != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error()).
@@ -76,9 +98,9 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 
 	jsonOutput, _ := invocation.Flag(analyzeJSONID)
 	if jsonOutput {
-		err = writeRuntimeAnalysisJSON(context.Stdout(), analysis, report)
+		err = writeRuntimeAnalysisJSON(context.Stdout(), analysis, comparison, report)
 	} else {
-		err = writeRuntimeAnalysisText(context.Stdout(), analysis, report)
+		err = writeRuntimeAnalysisText(context.Stdout(), analysis, comparison, report)
 	}
 	if err != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "write runtime analysis: "+err.Error())
@@ -87,6 +109,46 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 		return cli.NewOutcome(exitCheckFailure), nil
 	}
 	return cli.Success(), nil
+}
+
+func analyzeBaseline(context *cli.Context, invocation *cli.Invocation) (*runtimecapture.ServerRUBaseline, *cli.Diagnostic) {
+	input, present := cli.ValueAs[string](invocation, analyzeBaselineID)
+	if !present {
+		return nil, nil
+	}
+	if input == "" || input == "-" {
+		return nil, cli.NewDiagnostic(cli.CodeInvalidValue, "ServerRU baseline must be a file path").
+			WithTarget(cli.OptionTarget(analyzeBaselineID))
+	}
+	path := input
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(context.CurrentDirectory(), path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, cli.NewDiagnostic(
+			cli.CodeIOError,
+			fmt.Sprintf("open ServerRU baseline %q: %s", input, checkInputOpenErrorReason(err)),
+		).WithTarget(cli.OptionTarget(analyzeBaselineID))
+	}
+	baseline, err := runtimecapture.DecodeServerRUBaseline(file)
+	closeErr := file.Close()
+	if err != nil {
+		var pathError *os.PathError
+		if errors.As(err, &pathError) {
+			return nil, cli.NewDiagnostic(
+				cli.CodeIOError,
+				fmt.Sprintf("read ServerRU baseline %q: read failed", input),
+			).WithTarget(cli.OptionTarget(analyzeBaselineID))
+		}
+		return nil, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error()).
+			WithTarget(cli.OptionTarget(analyzeBaselineID))
+	}
+	if closeErr != nil {
+		return nil, cli.NewDiagnostic(cli.CodeIOError, "close ServerRU baseline: close failed").
+			WithTarget(cli.OptionTarget(analyzeBaselineID))
+	}
+	return &baseline, nil
 }
 
 func analyzeOptions(context *cli.Context, invocation *cli.Invocation) ([]runtimecapture.AnalysisOption, *cli.Diagnostic) {
@@ -127,24 +189,36 @@ func parsedAnalyzeSuppressions(invocation *cli.Invocation) []check.Suppression {
 type runtimeAnalysisJSON struct {
 	Statistics            runtimecapture.Statistics            `json:"statistics"`
 	ServerRUByFingerprint []runtimecapture.FingerprintServerRU `json:"server_ru_by_fingerprint"`
+	ServerRUComparison    *runtimecapture.ServerRUComparison   `json:"server_ru_comparison,omitempty"`
 	Diagnostics           []check.Diagnostic                   `json:"diagnostics"`
 	Suppressed            []check.SuppressedDiagnostic         `json:"suppressed"`
 	Summary               check.Summary                        `json:"summary"`
 }
 
-func writeRuntimeAnalysisJSON(writer io.Writer, analysis runtimecapture.Analysis, report check.Report) error {
+func writeRuntimeAnalysisJSON(
+	writer io.Writer,
+	analysis runtimecapture.Analysis,
+	comparison *runtimecapture.ServerRUComparison,
+	report check.Report,
+) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(runtimeAnalysisJSON{
 		Statistics:            analysis.Statistics,
 		ServerRUByFingerprint: analysis.ServerRUByFingerprint,
+		ServerRUComparison:    comparison,
 		Diagnostics:           report.Diagnostics(),
 		Suppressed:            report.Suppressed(),
 		Summary:               report.Summary(),
 	})
 }
 
-func writeRuntimeAnalysisText(writer io.Writer, analysis runtimecapture.Analysis, report check.Report) error {
+func writeRuntimeAnalysisText(
+	writer io.Writer,
+	analysis runtimecapture.Analysis,
+	comparison *runtimecapture.ServerRUComparison,
+	report check.Report,
+) error {
 	for _, diagnostic := range report.Diagnostics() {
 		if err := writeTextDiagnostic(writer, stringUpper(diagnostic.Severity), diagnostic, ""); err != nil {
 			return err
@@ -158,6 +232,16 @@ func writeRuntimeAnalysisText(writer io.Writer, analysis runtimecapture.Analysis
 	}
 	for _, statistics := range analysis.ServerRUByFingerprint {
 		if _, err := fmt.Fprintln(writer, runtimecapture.FormatFingerprintServerRU(statistics)); err != nil {
+			return err
+		}
+	}
+	if comparison != nil {
+		for _, entry := range comparison.Entries {
+			if _, err := fmt.Fprintln(writer, runtimecapture.FormatFingerprintServerRUComparison(entry)); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(writer, runtimecapture.FormatServerRUComparisonSummary(*comparison)); err != nil {
 			return err
 		}
 	}

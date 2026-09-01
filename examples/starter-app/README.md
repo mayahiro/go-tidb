@@ -130,8 +130,12 @@ ServerRU collection by bind-free fingerprint and reports count, samples,
 errors, total, mean, minimum, and maximum without retaining every sample.
 After a clean measurement run, write the deterministic versioned reference
 with `tidbgo baseline runtime.jsonl > server-ru-baseline.json`. Baseline
-creation is offline and rejects a capture with no successful samples or with
-collection errors; it does not apply a regression threshold.
+creation is offline and requires complete error-free coverage with at least
+five samples per measured fingerprint. Compare another capture with
+`tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json`.
+The fixed policy reports `RU001` only when the current mean exceeds both 130%
+of the baseline mean and the observed baseline maximum; missing or unusable
+measurements report `RU002`.
 
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with

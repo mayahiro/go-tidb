@@ -97,6 +97,7 @@ go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -be
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
 ```
 
 These benchmarks are offline and exclude SQL execution, network calls, TiDB
@@ -110,7 +111,10 @@ database access. The ServerRU benchmark compares one and 10,000 samples for one
 fingerprint so retained bytes and allocation count can be checked independently
 of sample count. The baseline benchmark compares one and 10,000 persisted
 fingerprint aggregates; its memory must scale with fingerprint count because
-the output itself contains one entry per fingerprint.
+the output itself contains one entry per fingerprint. The comparison benchmark
+uses matching one- and 10,000-fingerprint baseline/current sets and includes
+validation plus deterministic merge, but excludes JSON decoding and report
+encoding.
 
 ## TiDB Cloud Starter integration tests
 

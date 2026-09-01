@@ -188,6 +188,7 @@ execution records rather than a prebuilt diagnostic array:
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 The command performs no database access. See the [observation
@@ -204,9 +205,7 @@ samples, collection errors, and summed ServerRU separate. `RUN003` reports a
 collection or temporary connection-release failure and is not suppressible
 because capture integrity requires review. The text and JSON reports also
 include deterministic per-fingerprint count, sample, error, total, mean,
-minimum, and maximum statistics. Individual
-RU samples are not retained, and these descriptive values do not apply a
-regression threshold.
+minimum, and maximum statistics. Individual RU samples are not retained.
 
 Persist the same fingerprint aggregates as a deterministic versioned reference
 without connecting to a database:
@@ -215,9 +214,15 @@ without connecting to a database:
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-The command writes one JSON value to standard output and fails when no
-successful ServerRU sample exists or capture integrity is reduced by a
-collection error. It does not compare or enforce a threshold yet.
+The command writes one JSON value to standard output and requires at least five
+successful samples, complete measurement coverage, and no collection error for
+every measured fingerprint. `tidbgo analyze --baseline` then requires the same
+measured fingerprint set and current-capture quality. It reports non-suppressible
+`RU001` when the current mean exceeds both 130% of the baseline mean and the
+observed baseline maximum. Missing fingerprints, collection errors, incomplete
+coverage, or fewer than five current samples produce non-suppressible `RU002`.
+See the [observation guide](observability.md#structured-runtime-capture) for
+the complete fixed policy and output contract.
 
 ## Suppress an accepted diagnostic
 

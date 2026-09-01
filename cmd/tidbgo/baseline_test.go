@@ -14,15 +14,19 @@ import (
 func TestApplicationBaselineWritesVersionedServerRUStatistics(t *testing.T) {
 	t.Parallel()
 
-	second := runtimeCommandRecord(1, "s1:second")
-	second.ServerRU = &runtimecapture.ServerRU{Known: true, Value: 2, AuxiliaryStatements: 1}
-	first := runtimeCommandRecord(2, "q1:first")
-	first.ServerRU = &runtimecapture.ServerRU{Known: true, Value: 1.25, AuxiliaryStatements: 1}
-	result := runApplicationWithInput(t, runtimeCaptureInput(t, second, first), "baseline")
+	records := append(
+		runtimeServerRURecords("s1:second", 2, 2, 2, 2, 2),
+		runtimeServerRURecords("q1:first", 1.25, 1.25, 1.25, 1.25, 1.25)...,
+	)
+	for index := range records {
+		records[index].Sequence = uint64(index + 1)
+		records[index].ScopeID = uint64(index + 1)
+	}
+	result := runApplicationWithInput(t, runtimeCaptureInput(t, records...), "baseline")
 	if got, want := result.Status(), cli.StatusSuccess; got != want {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
-	const want = `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:first","count":1,"samples":1,"total":1.25,"mean":1.25,"min":1.25,"max":1.25},{"fingerprint":"s1:second","count":1,"samples":1,"total":2,"mean":2,"min":2,"max":2}]}` + "\n"
+	const want = `{"version":1,"server_ru_by_fingerprint":[{"fingerprint":"q1:first","count":5,"samples":5,"total":6.25,"mean":1.25,"min":1.25,"max":1.25},{"fingerprint":"s1:second","count":5,"samples":5,"total":10,"mean":2,"min":2,"max":2}]}` + "\n"
 	if got := string(result.Stdout()); got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
@@ -35,9 +39,8 @@ func TestApplicationBaselineReadsExplicitFile(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
-	record := runtimeCommandRecord(1, "q1:first")
-	record.ServerRU = &runtimecapture.ServerRU{Known: true, Value: 1, AuxiliaryStatements: 1}
-	if err := os.WriteFile(filepath.Join(directory, "runtime.jsonl"), runtimeCaptureInput(t, record), 0o600); err != nil {
+	records := runtimeServerRURecords("q1:first", 1, 1, 1, 1, 1)
+	if err := os.WriteFile(filepath.Join(directory, "runtime.jsonl"), runtimeCaptureInput(t, records...), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	result := runApplicationAt(t, directory, nil, "baseline", "runtime.jsonl")
@@ -57,7 +60,7 @@ func TestApplicationBaselineRejectsIncompleteCapture(t *testing.T) {
 		{
 			name:  "no samples",
 			input: runtimeCaptureInput(t, runtimeCommandRecord(1, "q1:first")),
-			want:  "at least one successful sample",
+			want:  "at least 5 successful samples",
 		},
 		{
 			name: "collection error",
@@ -67,6 +70,22 @@ func TestApplicationBaselineRejectsIncompleteCapture(t *testing.T) {
 				return runtimeCaptureInput(t, record)
 			}(),
 			want: "ServerRU collection errors: 1",
+		},
+		{
+			name:  "insufficient samples",
+			input: runtimeCaptureInput(t, runtimeServerRURecords("q1:first", 1, 1, 1, 1)...),
+			want:  "at least 5 samples",
+		},
+		{
+			name: "incomplete measurement coverage",
+			input: func() []byte {
+				records := runtimeServerRURecords("q1:first", 1, 1, 1, 1)
+				unsampled := runtimeCommandRecord(5, "q1:first")
+				unsampled.ScopeID = 5
+				records = append(records, unsampled)
+				return runtimeCaptureInput(t, records...)
+			}(),
+			want: "complete measurement coverage",
 		},
 		{
 			name:  "invalid artifact",

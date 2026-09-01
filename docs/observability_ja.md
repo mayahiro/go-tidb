@@ -236,11 +236,53 @@ collection errorはbaseline作成を失敗させるため、常に0となるfiel
 
 CLIはruntime inputをstreaming処理して個別sampleを保持せず、standard outputへの書き込み以外にDB accessを行いません
 
-成功ServerRU sampleがない場合、いずれかのfingerprintにcollectionまたはconnection release errorがある場合、runtime artifactが不正な場合はbaseline作成に失敗します
+baseline作成では全measured fingerprintの完全なcoverageである `count == samples`、5件以上の成功sample、collectionまたはconnection release errorなしを必須とします
 
-sampleされていないcaptured statementは `count` に残り、`samples` が実際のmeasurement coverageを表します
+runtime artifactが不正な場合も失敗します
 
-baseline作成時点ではregression thresholdを適用しません
+artifactの作成自体はcurrent measurementとの比較を行いません
+
+保存したreferenceとcurrent runtime captureを比較できます
+
+```sh
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+```
+
+runtime artifactがstandard inputを引き続き使用できるよう、baseline optionにはfile pathが必要です
+
+比較はofflineかつdeterministicです
+
+baselineとcurrent captureは同じmeasured fingerprint setを持つ必要があります
+
+current coverageも完全かつerrorなしで、fingerprintごとに5件以上の成功sampleが必要です
+
+metricはstatement単位meanであるため、両側のcoverageが完全であればstatement countが異なっても比較できます
+
+collectionを1回も試行していないfingerprintはこのsetの対象外となるため、measurement workload全体で `CollectServerRU` を一貫して有効化してください
+
+比較可能なfingerprintのeffective limitは次の値です
+
+```text
+max(baseline mean * 1.30, baseline maximum)
+```
+
+current meanがこのlimitを厳密に超えた場合だけ `RU001` regressionになります
+
+同値はpassします
+
+baselineで観測した最大値を実測noise floorとし、低RU queryの有意な相対増加を隠す固定absolute RU allowanceは設けません
+
+新規または欠落fingerprint、collection error、不完全なcoverage、current sampleが5件未満の場合はregression結果を主張せず `RU002` になります
+
+どちらのdiagnosticもsuppressできないerrorで、check exit status `1` になります
+
+text出力はfingerprintごとの `server_ru_comparison` lineと比較summaryを含みます
+
+JSON出力は固定policy、summary、sort済みentry、status、measurement coverage、比較したmean、baselineで観測した最大値、effective limitを持つ `server_ru_comparison` を追加します
+
+entry statusは `pass`、`regression`、`missing_baseline`、`missing_current`、`collection_error`、`incomplete_coverage`、`insufficient_samples` のいずれかです
+
+この値はTiDB statement ServerRUでありbilling RUではありません
 
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
 
@@ -250,6 +292,7 @@ derived contextを使ってgo-tidbから実行したstatementだけを記録し�
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 ```
 

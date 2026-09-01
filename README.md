@@ -420,6 +420,7 @@ registration:
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 The analyzer applies `QRY002` through `QRY005` to captured query shapes and
@@ -436,16 +437,23 @@ and auxiliary statement counts, samples, errors, and summed ServerRU separate.
 For each fingerprint that attempted collection, the analyzer also reports the
 captured statement count and successful-sample total, mean, minimum, and
 maximum without retaining individual samples.
-Save those aggregates as a deterministic versioned baseline when the capture
-contains at least one successful sample and no collection errors:
+Save those aggregates as a deterministic versioned baseline when every
+measured fingerprint has complete measurement coverage, at least five
+successful samples, and no collection errors:
 
 ```sh
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
 The command is offline, writes exactly one JSON value to standard output, and
-does not retain individual samples. A saved baseline is reference data for the
-separate comparison step; creating it does not apply a regression threshold.
+does not retain individual samples. Compare a current capture offline with
+`tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json`.
+Every measured fingerprint must exist on both sides, current collection must
+also be complete and error-free, and each side must have at least five samples.
+A current per-statement mean is an `RU001` regression only when it exceeds both
+130% of the baseline mean and the maximum value observed in the baseline.
+Missing fingerprints or unusable measurements produce `RU002`. Both are
+non-suppressible errors; equality with the effective limit passes.
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
 for scope, cost, writer-error, retention, and optional one-operation `Debug`
@@ -565,6 +573,7 @@ or connecting to a database:
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 The command aggregates captured statements, applies `QRY002` through `QRY005`
@@ -573,8 +582,10 @@ scope. `--schema` adds offline `QRY006` and `QRY007` index checks. See the
 [statement observation guide](docs/observability.md#structured-runtime-capture).
 
 `tidbgo baseline` emits a versioned, fingerprint-sorted ServerRU reference and
-fails when the capture has no successful ServerRU sample or contains a
-collection error. Threshold comparison is not yet applied by this command.
+requires complete error-free coverage with at least five samples per measured
+fingerprint. `tidbgo analyze --baseline` applies the fixed offline regression
+policy described in the [statement observation
+guide](docs/observability.md#structured-runtime-capture).
 
 ```sh
 tidbgo baseline runtime.jsonl > server-ru-baseline.json

@@ -440,6 +440,7 @@ DB接続とqueryごとの登録なしでoffline解析できます
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 analyzerはcaptured query shapeへ `QRY002` から `QRY005` を適用し、N+1 SELECT候補をreportします
@@ -456,7 +457,7 @@ artifactと `tidbgo analyze` はtargetとdiagnosticのduration、go-tidbとauxil
 
 collectionを試行したfingerprintごとにcaptured statement数、成功sampleのtotal、mean、min、maxも個別sampleを保持せずreportします
 
-成功sampleが1件以上ありcollection errorがないcaptureでは、これらのaggregateをdeterministicなversion付きbaselineとして保存できます
+全measured fingerprintが完全に計測され、成功sampleが5件以上あり、collection errorがないcaptureでは、これらのaggregateをdeterministicなversion付きbaselineとして保存できます
 
 ```sh
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
@@ -464,7 +465,15 @@ tidbgo baseline runtime.jsonl > server-ru-baseline.json
 
 このcommandはofflineで動作し、standard outputへexactly one JSON valueを書き込み、個別sampleを保持しません
 
-保存したbaselineは独立した比較stepのreference dataであり、作成時点ではregression thresholdを適用しません
+`tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json` でcurrent captureとoffline比較できます
+
+全measured fingerprintが両方に存在し、current collectionも完全かつerrorなしで、両側に5件以上のsampleが必要です
+
+currentのstatement単位meanがbaseline meanの130%とbaselineで観測した最大値の両方を超えた場合だけ `RU001` regressionになります
+
+fingerprintの欠落または利用不能な計測は `RU002` になります
+
+どちらもsuppressできないerrorで、effective limitと同値の場合はpassします
 
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 
@@ -589,6 +598,7 @@ application queryの登録とDB接続なしでstructured runtime artifactを解�
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 このcommandはcaptured statementを集約し、記録済みquery shapeへ `QRY002` から `QRY005` を適用し、observer scopeごとのN+1 SELECT候補をreportします
@@ -597,9 +607,9 @@ tidbgo analyze runtime.jsonl --schema schema.sql
 
 詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
 
-`tidbgo baseline` はversion付きでfingerprint順のServerRU referenceを出力し、成功ServerRU sampleがない場合またはcollection errorがある場合は失敗します
+`tidbgo baseline` はversion付きでfingerprint順のServerRU referenceを出力し、measured fingerprintごとに5件以上の完全かつerrorなしの計測を必須とします
 
-このcommandはthreshold比較をまだ適用しません
+`tidbgo analyze --baseline` は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)に記載した固定offline regression policyを適用します
 
 ```sh
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
