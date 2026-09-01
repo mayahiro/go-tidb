@@ -178,6 +178,8 @@ recordにはformat version、captureとscopeのidentity、bind valueを含まな
 
 model rowを返す `All`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
 
+LIMITとOFFSETのbind valueは除外したまま、offline ruleがzero LIMITを区別できるよう指定の有無と正数かどうかだけをshapeへ記録します
+
 `Count` と `Exists` はmodel row projection shapeを表明せず、bind valueを含まない安定したstatement fingerprintを記録します
 
 Raw SQLはopaqueとして記録します
@@ -213,6 +215,7 @@ derived contextを使ってgo-tidbから実行したstatementだけを記録し�
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 ```
 
@@ -220,7 +223,15 @@ CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析�
 
 正確なaggregate statisticsに必要な異なるcapture、scope、fingerprint、batch identityは保持します
 
-analyzerはcapture件数とduration、compiler TopN fallback、同一scope内でpreload以外のSELECT fingerprintが繰り返された場合のN+1候補をreportします
+analyzerは異なるcaptured query diagnosticごとに `QRY002` から `QRY005` を1回適用し、同一scope内でpreload以外のSELECT fingerprintが繰り返された場合のN+1候補をreportします
+
+`--schema` はofflineのTiDB `CREATE TABLE` snapshotをparseし、各captured query shapeへ `QRY006` と `QRY007` を適用します
+
+DB接続は行いません
+
+statisticsは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
+
+`Count`、`Exists`、raw SQL、collection preload statement、mutationはcompleteなmodel row query shapeを表明しないため、これらのquery shape ruleの対象外です
 
 反復は証拠であり確定ではなく、retryまたは意図した反復lookupはapplication reviewが必要な場合があります
 

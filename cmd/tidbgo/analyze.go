@@ -11,11 +11,13 @@ import (
 
 	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/internal/runtimecapture"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 const (
 	analyzeInputID    = "runtime-input"
 	analyzeJSONID     = "runtime-json"
+	analyzeSchemaID   = "runtime-schema"
 	analyzeSuppressID = "runtime-suppress"
 )
 
@@ -27,6 +29,12 @@ func analyzeCommand() *cli.Command {
 			cli.Flag(analyzeJSONID).
 				Long("json").
 				Help("Write the runtime analysis as JSON"),
+		).
+		Option(
+			cli.ValueOption(analyzeSchemaID).
+				Long("schema").
+				Parser(cli.StringParser()).
+				Help("Check captured query index shapes against a TiDB SQL schema snapshot"),
 		).
 		Option(
 			cli.ValueOption(analyzeSuppressID).
@@ -44,11 +52,15 @@ func analyzeCommand() *cli.Command {
 }
 
 func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
+	options, diagnostic := analyzeOptions(context, invocation)
+	if diagnostic != nil {
+		return cli.Outcome{}, diagnostic
+	}
 	reader, closeInput, diagnostic := openAnalyzeInput(context, invocation)
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
 	}
-	analysis, err := runtimecapture.AnalyzeReader(reader)
+	analysis, err := runtimecapture.AnalyzeReader(reader, options...)
 	if closeErr := closeInput(); err == nil && closeErr != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "close runtime capture input: "+closeErr.Error())
 	}
@@ -75,6 +87,30 @@ func runAnalyze(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 		return cli.NewOutcome(exitCheckFailure), nil
 	}
 	return cli.Success(), nil
+}
+
+func analyzeOptions(context *cli.Context, invocation *cli.Invocation) ([]runtimecapture.AnalysisOption, *cli.Diagnostic) {
+	input, present := cli.ValueAs[string](invocation, analyzeSchemaID)
+	if !present {
+		return nil, nil
+	}
+	path := input
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(context.CurrentDirectory(), path)
+	}
+	schemaSQL, err := os.ReadFile(path)
+	if err != nil {
+		return nil, cli.NewDiagnostic(
+			cli.CodeIOError,
+			fmt.Sprintf("read schema snapshot %q: %s", input, checkInputOpenErrorReason(err)),
+		).WithTarget(cli.OptionTarget(analyzeSchemaID))
+	}
+	catalog, err := physicalschema.Parse(string(schemaSQL))
+	if err != nil {
+		return nil, cli.NewDiagnostic(cli.CodeInvalidValue, "parse schema snapshot: "+err.Error()).
+			WithTarget(cli.OptionTarget(analyzeSchemaID))
+	}
+	return []runtimecapture.AnalysisOption{runtimecapture.WithSchema(catalog)}, nil
 }
 
 func parsedAnalyzeSuppressions(invocation *cli.Invocation) []check.Suppression {

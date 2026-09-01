@@ -22,12 +22,16 @@ type Query struct {
 	IndexAccesses    []IndexAccess    `json:"index_accesses"`
 }
 
-// Bound describes whether a LIMIT or OFFSET is present and retains its value
-// for diagnostics. Fingerprints intentionally encode only presence because
-// the value remains a bind argument in generated SQL.
+// Bound describes whether a LIMIT or OFFSET is present and whether its value
+// is positive. Value is retained only inside the originating process so a
+// builder diagnostic can describe an exact offset. Runtime artifacts preserve
+// Positive but never serialize the bind value. Fingerprints intentionally
+// encode only presence because the value remains a bind argument in generated
+// SQL.
 type Bound struct {
-	Set   bool  `json:"set"`
-	Value int64 `json:"-"`
+	Set      bool  `json:"set"`
+	Positive bool  `json:"positive"`
+	Value    int64 `json:"-"`
 }
 
 // PredicateOperator identifies one logical or scalar predicate operation.

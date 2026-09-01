@@ -11,16 +11,16 @@ import (
 
 const (
 	codeInvalidQuery          = "QRY001"
-	codeOffsetPagination      = "QRY002"
-	codeUnorderedPagination   = "QRY003"
-	codeLeadingWildcardFilter = "QRY004"
-	codeRelationTopNFallback  = "QRY005"
+	codeOffsetPagination      = querycheck.CodeOffsetPagination
+	codeUnorderedPagination   = querycheck.CodeUnorderedPagination
+	codeLeadingWildcardFilter = querycheck.CodeLeadingWildcardFilter
+	codeRelationTopNFallback  = querycheck.CodeRelationTopNFallback
 	codeIndexCheckUnavailable = querycheck.CodeIndexCheckUnavailable
 	codeMissingIndexPrefix    = querycheck.CodeMissingIndexPrefix
 
-	paginationReference   = "https://docs.pingcap.com/developer/dev-guide-paginate-results/"
-	likeReference         = "https://docs.pingcap.com/tidb/stable/string-functions/#like"
-	relationTopNReference = "https://docs.pingcap.com/tidb/stable/topn-limit-push-down/"
+	paginationReference   = querycheck.PaginationReference
+	likeReference         = querycheck.LikeReference
+	relationTopNReference = querycheck.RelationTopNReference
 )
 
 // Diagnostics checks the current SELECT builder without accessing a database
@@ -48,10 +48,9 @@ func (q *SelectQuery[T]) DiagnosticsWithSchema(catalog *physicalschema.Catalog) 
 }
 
 func (q *SelectQuery[T]) diagnostics(catalog *physicalschema.Catalog, includeSchema bool) []check.Diagnostic {
-	diagnostics := make([]check.Diagnostic, 0)
 	compiled, err := q.compile()
 	if err != nil {
-		return appendInvalidQueryDiagnostic(diagnostics, err)
+		return appendInvalidQueryDiagnostic(nil, err)
 	}
 
 	selection := &q.selection
@@ -59,11 +58,11 @@ func (q *SelectQuery[T]) diagnostics(catalog *physicalschema.Catalog, includeSch
 	returnsRows := !selection.pagination.limitSet || selection.pagination.limit > 0
 	descriptor, err := model.DescribeType(compiled.statement.scanPlan.modelType)
 	if err != nil {
-		return appendInvalidQueryDiagnostic(diagnostics, err)
+		return appendInvalidQueryDiagnostic(nil, err)
 	}
 	relationTopN, err := analyzeRelationTopN(descriptor, selection)
 	if err != nil {
-		return appendInvalidQueryDiagnostic(diagnostics, err)
+		return appendInvalidQueryDiagnostic(nil, err)
 	}
 	relationTopNFallback := returnsRows && relationTopN.candidate && !relationTopN.optimized
 	diagnosticCount := leadingWildcardDiagnosticCount(selection.predicates)
@@ -76,7 +75,7 @@ func (q *SelectQuery[T]) diagnostics(catalog *physicalschema.Catalog, includeSch
 	if relationTopNFallback {
 		diagnosticCount++
 	}
-	diagnostics = make([]check.Diagnostic, 0, diagnosticCount)
+	diagnostics := make([]check.Diagnostic, 0, diagnosticCount)
 	if returnsRows && selection.pagination.offsetSet && selection.pagination.offset > 0 {
 		diagnostics = append(diagnostics, check.Diagnostic{
 			Code:         codeOffsetPagination,
@@ -125,17 +124,6 @@ func (q *SelectQuery[T]) diagnostics(catalog *physicalschema.Catalog, includeSch
 	return append(diagnostics, querycheck.IndexDiagnostics(shape, catalog)...)
 }
 
-func appendInvalidQueryDiagnostic(diagnostics []check.Diagnostic, err error) []check.Diagnostic {
-	return append(diagnostics, check.Diagnostic{
-		Code:         codeInvalidQuery,
-		Severity:     check.SeverityError,
-		Title:        "Invalid SELECT query",
-		Message:      err.Error(),
-		Suggestion:   "Fix the model metadata or query structure before executing this builder",
-		Suppressible: false,
-	})
-}
-
 func leadingWildcardDiagnosticCount(predicates []predicate) int {
 	count := 0
 	for index := range predicates {
@@ -173,4 +161,15 @@ func appendLeadingWildcardDiagnostics(diagnostics []check.Diagnostic, predicates
 		}
 	}
 	return diagnostics
+}
+
+func appendInvalidQueryDiagnostic(diagnostics []check.Diagnostic, err error) []check.Diagnostic {
+	return append(diagnostics, check.Diagnostic{
+		Code:         codeInvalidQuery,
+		Severity:     check.SeverityError,
+		Title:        "Invalid SELECT query",
+		Message:      err.Error(),
+		Suggestion:   "Fix the model metadata or query structure before executing this builder",
+		Suppressible: false,
+	})
 }

@@ -23,14 +23,22 @@ func buildSelectQueryShape(
 	}
 
 	shape := queryshape.Query{
-		Model:       descriptor.Name(),
-		Table:       descriptor.TableName(),
-		Projection:  append([]string(nil), compiled.statement.scanPlan.columns...),
-		Predicates:  predicates,
-		Order:       order,
-		SeekAfter:   selection.seekAfter != nil,
-		Limit:       queryshape.Bound{Set: selection.pagination.limitSet, Value: selection.pagination.limit},
-		Offset:      queryshape.Bound{Set: selection.pagination.offsetSet, Value: selection.pagination.offset},
+		Model:      descriptor.Name(),
+		Table:      descriptor.TableName(),
+		Projection: append([]string(nil), compiled.statement.scanPlan.columns...),
+		Predicates: predicates,
+		Order:      order,
+		SeekAfter:  selection.seekAfter != nil,
+		Limit: queryshape.Bound{
+			Set:      selection.pagination.limitSet,
+			Positive: selection.pagination.limit > 0,
+			Value:    selection.pagination.limit,
+		},
+		Offset: queryshape.Bound{
+			Set:      selection.pagination.offsetSet,
+			Positive: selection.pagination.offset > 0,
+			Value:    selection.pagination.offset,
+		},
 		WithDeleted: selection.withDeleted,
 		Preloads:    buildQueryShapePreloads(compiled.preloads, ""),
 		Compiler:    buildQueryShapeCompilerDecision(relationTopN),

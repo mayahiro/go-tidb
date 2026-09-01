@@ -7,7 +7,7 @@ import (
 )
 
 func TestDecodeAcceptsJSONLinesAndReturnsNonNilEmpty(t *testing.T) {
-	record := `{"version":1,"capture_id":"capture","scope_id":1,"sequence":1,"operation":"SELECT","source":"raw","fingerprint":"s1:test","sql":"SELECT 1","argument_count":0,"started_at":"2026-08-31T00:00:00Z","duration_ns":1,"rows_returned_known":true,"rows_affected_known":false}`
+	record := `{"version":2,"capture_id":"capture","scope_id":1,"sequence":1,"operation":"SELECT","source":"raw","fingerprint":"s1:test","sql":"SELECT 1","argument_count":0,"started_at":"2026-08-31T00:00:00Z","duration_ns":1,"rows_returned_known":true,"rows_affected_known":false}`
 	records, err := Decode(strings.NewReader(record + "\n" + record))
 	if err != nil || len(records) != 2 {
 		t.Fatalf("Decode() = %#v, %v, want two records", records, err)
@@ -26,9 +26,9 @@ func TestDecodeRejectsInvalidArtifact(t *testing.T) {
 	}{
 		{name: "malformed", input: `{`, want: "decode runtime capture record 1"},
 		{name: "unknown field", input: `{"version":1,"unknown":true}`, want: "unknown field"},
-		{name: "version", input: `{"version":2}`, want: "version is 2, want 1"},
-		{name: "scope", input: `{"version":1,"capture_id":"capture","operation":"SELECT","fingerprint":"s1:test"}`, want: "positive scope_id"},
-		{name: "batch", input: `{"version":1,"capture_id":"capture","scope_id":1,"sequence":1,"operation":"INSERT","fingerprint":"s1:test","batch":{"group":1,"index":2,"count":1,"rows":1,"total_rows":1}}`, want: "invalid batch position"},
+		{name: "version", input: `{"version":1}`, want: "version is 1, want 2"},
+		{name: "scope", input: `{"version":2,"capture_id":"capture","operation":"SELECT","fingerprint":"s1:test"}`, want: "positive scope_id"},
+		{name: "batch", input: `{"version":2,"capture_id":"capture","scope_id":1,"sequence":1,"operation":"INSERT","fingerprint":"s1:test","batch":{"group":1,"index":2,"count":1,"rows":1,"total_rows":1}}`, want: "invalid batch position"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

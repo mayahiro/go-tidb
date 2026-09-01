@@ -92,7 +92,9 @@ check with a pre-parsed catalog:
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnostics$' -benchmem -count=5
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsWithSchema$' -benchmem -count=5
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison$' -benchmem -count=5
+go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 ```
 
 These benchmarks are offline and exclude SQL execution, network calls, TiDB
@@ -100,6 +102,9 @@ optimization, and actual RU consumption. The schema-aware benchmark includes
 QueryShape construction and physical index-prefix matching. Fingerprinting is
 lazy when evidence is not needed and has its own benchmark. The comparison
 benchmark uses the same builder for both diagnostic paths.
+The neutral query-check benchmark excludes builder compilation. The runtime
+benchmark analyzes 100 captured typed-query records without JSON decoding or
+database access.
 
 ## TiDB Cloud Starter integration tests
 

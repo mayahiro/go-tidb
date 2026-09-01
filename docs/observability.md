@@ -171,7 +171,9 @@ template, operation, terminal, model or Relation identity when known, start
 time, target-statement duration, returned or affected row count, error, and
 automatic bulk or preload batch position. Model-row `All`, `First`, and `Only`
 records and typed plan records also carry the bind-free query shape and
-compiler rewrite or fallback decision. `Count` and `Exists` retain a stable
+compiler rewrite or fallback decision. LIMIT and OFFSET bind values remain
+excluded; the shape records only whether each bound is present and positive so
+offline rules can distinguish a zero LIMIT. `Count` and `Exists` retain a stable
 bind-free statement fingerprint without claiming the model-row projection
 shape. Raw SQL is marked as opaque. Collection preloads and automatically split
 bulk mutations are recorded from the actual execution path, so
@@ -207,6 +209,7 @@ Analyze a completed artifact without a database connection:
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 ```
 
@@ -214,13 +217,21 @@ The CLI streams statement records instead of retaining the complete artifact
 in memory. Exact aggregate statistics still retain the distinct capture,
 scope, fingerprint, and batch identities needed by the report.
 
-The analyzer reports captured counts and durations, compiler TopN fallbacks,
-and repeated non-preload SELECT fingerprints within one scope as possible N+1
-queries. Repetition is evidence rather than proof; retries and intentionally
-repeated lookups require application review. Failed SELECT attempts are
-included because they still consume statements. Every suppression names an
-exact code and records a non-empty reason. Preload batch splits are excluded
-from the N+1 rule.
+The analyzer applies `QRY002` through `QRY005` once per distinct captured
+query diagnostic and reports repeated non-preload SELECT fingerprints within
+one scope as possible N+1 queries. `--schema` parses an offline TiDB `CREATE
+TABLE` snapshot and applies `QRY006` and `QRY007` to each captured query shape.
+It never connects to a database. Statistics distinguish all captured
+statements, statements carrying a query shape, and statements checked against
+the snapshot. `Count`, `Exists`, raw SQL, collection preload statements, and
+mutations do not claim a complete model-row query shape and therefore remain
+outside these query-shape rules.
+
+Repetition is evidence rather than proof; retries and intentionally repeated
+lookups require application review. Failed SELECT attempts are included
+because they still consume statements. Every suppression names an exact code
+and records a non-empty reason. Preload batch splits are excluded from the
+N+1 rule.
 
 Bind values are never written to the runtime artifact. SQL templates can still
 contain literals supplied through raw SQL, and database errors can contain

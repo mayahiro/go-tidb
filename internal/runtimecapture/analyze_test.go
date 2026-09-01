@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mayahiro/go-tidb/internal/querycheck"
 	"github.com/mayahiro/go-tidb/internal/queryshape"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 func TestAnalyzeReportsRepeatedRootSelectAndSkipsPreloadBatches(t *testing.T) {
@@ -69,6 +71,118 @@ func TestAnalyzeReportsCompilerFallbackAndMetadataFailure(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAppliesCapturedQueryPatternDiagnosticsWithoutRegistration(t *testing.T) {
+	record := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:patterns")
+	record.Query = &queryshape.Query{
+		Model:  "Video",
+		Limit:  queryshape.Bound{Set: true, Positive: true},
+		Offset: queryshape.Bound{Set: true, Positive: true},
+		Predicates: []queryshape.Predicate{{
+			Operator: queryshape.PredicateContains,
+			Field:    "Title",
+		}},
+		Compiler: queryshape.CompilerDecision{
+			Rewrite:  queryshape.CompilerRewriteRelationTopNFallback,
+			Relation: "Genres",
+			Reason:   "root order is not the primary key",
+		},
+	}
+
+	analysis := Analyze([]Record{record})
+	wantCodes := []string{
+		querycheck.CodeOffsetPagination,
+		querycheck.CodeUnorderedPagination,
+		codeRelationTopN,
+		querycheck.CodeLeadingWildcardFilter,
+	}
+	if got := diagnosticCodes(analysis); !reflect.DeepEqual(got, wantCodes) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, wantCodes)
+	}
+	if analysis.Statistics.QueryShapeStatements != 1 || analysis.Statistics.SchemaCheckedStatements != 0 {
+		t.Fatalf("statistics = %#v", analysis.Statistics)
+	}
+	for _, diagnostic := range analysis.Diagnostics {
+		if len(diagnostic.Evidence) == 0 || diagnostic.Evidence[0].Message != "Query fingerprint: q1:patterns" {
+			t.Fatalf("diagnostic evidence = %#v", diagnostic.Evidence)
+		}
+	}
+}
+
+func TestAnalyzeDeduplicatesCapturedQueryDiagnosticsByFingerprint(t *testing.T) {
+	first := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:unordered")
+	first.Query = &queryshape.Query{
+		Model: "Video",
+		Limit: queryshape.Bound{Set: true, Positive: true},
+	}
+	second := first
+	second.Sequence = 2
+	second.ScopeID = 2
+
+	analysis := Analyze([]Record{first, second})
+	if got, want := diagnosticCodes(analysis), []string{querycheck.CodeUnorderedPagination}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	if analysis.Statistics.QueryShapeStatements != 2 {
+		t.Fatalf("statistics = %#v", analysis.Statistics)
+	}
+}
+
+func TestAnalyzePatternCacheSeparatesPositiveBoundClassification(t *testing.T) {
+	zero := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:limited")
+	zero.Query = &queryshape.Query{
+		Model: "Video",
+		Limit: queryshape.Bound{Set: true},
+	}
+	positive := zero
+	positive.Sequence = 2
+	positive.ScopeID = 2
+	positiveShape := *zero.Query
+	positiveShape.Limit.Positive = true
+	positive.Query = &positiveShape
+
+	analysis := Analyze([]Record{zero, positive})
+	if got, want := diagnosticCodes(analysis), []string{querycheck.CodeUnorderedPagination}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestAnalyzeAppliesSchemaDiagnosticsToCapturedQueryShapes(t *testing.T) {
+	catalog, err := physicalschema.Parse(`
+CREATE TABLE videos (
+    id BIGINT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    PRIMARY KEY (id)
+);`)
+	if err != nil {
+		t.Fatalf("schema.Parse() error = %v", err)
+	}
+	record := runtimeAnalysisRecord(1, SourceTypedSelect, "q1:index")
+	record.Query = &queryshape.Query{
+		Model: "Video",
+		Table: "videos",
+		Order: []queryshape.OrderTerm{{Column: "id", Direction: queryshape.OrderDescending}},
+		Limit: queryshape.Bound{Set: true, Positive: true},
+		IndexAccesses: []queryshape.IndexAccess{{
+			Kind:            queryshape.IndexAccessRootOrderedLimit,
+			Table:           "videos",
+			EqualityColumns: []string{"tenant_id"},
+			OrderColumns:    []string{"id"},
+		}},
+	}
+
+	withoutSchema := Analyze([]Record{record})
+	if len(withoutSchema.Diagnostics) != 0 || withoutSchema.Statistics.SchemaCheckedStatements != 0 {
+		t.Fatalf("Analyze() without schema = %#v", withoutSchema)
+	}
+	withSchema := Analyze([]Record{record}, WithSchema(catalog))
+	if got, want := diagnosticCodes(withSchema), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	if withSchema.Statistics.QueryShapeStatements != 1 || withSchema.Statistics.SchemaCheckedStatements != 1 {
+		t.Fatalf("statistics = %#v", withSchema.Statistics)
+	}
+}
+
 func TestAnalyzeReaderStreamsValidatedRecords(t *testing.T) {
 	first, err := json.Marshal(runtimeAnalysisRecord(1, SourceTypedSelect, "q1:users"))
 	if err != nil {
@@ -126,6 +240,29 @@ func TestAnalyzeAggregatesServerRUCostAndReportsFailures(t *testing.T) {
 	}
 }
 
+func BenchmarkAnalyzeCapturedQueryShapes(b *testing.B) {
+	shape := &queryshape.Query{
+		Model:  "Video",
+		Limit:  queryshape.Bound{Set: true, Positive: true},
+		Offset: queryshape.Bound{Set: true, Positive: true},
+		Predicates: []queryshape.Predicate{{
+			Operator: queryshape.PredicateContains,
+			Field:    "Title",
+		}},
+	}
+	records := make([]Record, 100)
+	for index := range records {
+		records[index] = runtimeAnalysisRecord(uint64(index+1), SourceTypedSelect, "q1:video-list")
+		records[index].Query = shape
+	}
+	var analysis Analysis
+	b.ReportAllocs()
+	for b.Loop() {
+		analysis = Analyze(records)
+	}
+	runtimeAnalysisSink = analysis
+}
+
 func runtimeAnalysisRecord(sequence uint64, source Source, fingerprint string) Record {
 	return Record{
 		Version:       Version,
@@ -149,3 +286,5 @@ func diagnosticCodes(analysis Analysis) []string {
 	}
 	return result
 }
+
+var runtimeAnalysisSink Analysis

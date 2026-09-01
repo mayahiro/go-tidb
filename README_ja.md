@@ -433,13 +433,20 @@ ctx = orm.WithRuntimeCapture(ctx, capture)
 
 JSON Lines artifactは実際に通過したroot query、collection preload、bulk splitをbind valueなしのfingerprint、duration、row countとともに記録します
 
-model rowを返すSELECTとplan recordにはcompiler decisionも含めます
+model rowを返すSELECTとplan recordにはbind valueなしのquery shapeとcompiler decisionも含めます
 
-DB接続なしでoffline解析できます
+DB接続とqueryごとの登録なしでoffline解析できます
 
 ```sh
 tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
+
+analyzerはcaptured query shapeへ `QRY002` から `QRY005` を適用し、N+1 SELECT候補をreportします
+
+offlineのTiDB `CREATE TABLE` snapshotを渡すと物理indexの `QRY006` と `QRY007` も適用します
+
+coverage counterは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
 
 runtime captureはdefaultで `EXPLAIN` またはその他のdatabase I/Oを追加しません
 
@@ -565,9 +572,12 @@ application queryの登録とDB接続なしでstructured runtime artifactを解�
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-このcommandはcaptured statementを集約し、observer scopeごとのcompiler fallbackとN+1 SELECT候補をreportします
+このcommandはcaptured statementを集約し、記録済みquery shapeへ `QRY002` から `QRY005` を適用し、observer scopeごとのN+1 SELECT候補をreportします
+
+`--schema` はofflineの `QRY006` と `QRY007` index checkを追加します
 
 詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
 

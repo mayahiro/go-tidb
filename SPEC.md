@@ -173,8 +173,8 @@ The currently implemented surface provides:
 - Shared diagnostic data types, immutable active and suppressed reports, and
   exact-code suppression with a required recorded reason
 - The `tidbgo version` command, `tidbgo check` text or JSON report command,
-  offline `tidbgo analyze` runtime-capture command, and offline `tidbgo lint`
-  Go-source command
+  offline `tidbgo analyze` runtime-capture and optional SQL-snapshot index
+  command, and offline `tidbgo lint` Go-source command
 
 ## 4. Planned runtime surface
 
@@ -261,11 +261,16 @@ database access.
 job, or test-operation boundary. It records only go-tidb statements using the
 derived context and requires no query-specific registration or diagnostic
 wrapper. Its versioned JSON Lines artifact excludes bind values and records
-typed query or statement fingerprints, model-row SELECT compiler decisions,
-actual preload and bulk batch positions, statement duration, row counts, and
-errors. `tidbgo analyze` streams that artifact without a database connection
-and reports aggregate execution counts, relation TopN fallbacks, and possible
-runtime N+1 query shapes. `CollectServerRU` optionally adds one same-session
+typed query or statement fingerprints, model-row SELECT query shapes and
+compiler decisions, actual preload and bulk batch positions, statement
+duration, row counts, and errors. Pagination values remain excluded while the
+shape preserves presence and positive classification. `tidbgo analyze` streams
+that artifact without a database connection, applies `QRY002` through `QRY005`
+to captured query shapes, and reports possible runtime N+1 query shapes. Its
+optional `--schema` input parses a TiDB CREATE TABLE snapshot offline and adds
+`QRY006` and `QRY007` index checks without an application-side query registry.
+Coverage counts distinguish all statements, query-shape statements, and
+schema-checked statements. `CollectServerRU` optionally adds one same-session
 diagnostic query for each recognized DML statement. The artifact and analyzer
 separate target duration, diagnostic duration, go-tidb statement count,
 auxiliary statement count, successful samples, collection errors, and summed
@@ -325,7 +330,8 @@ configuration.
   deletion, typed raw SQL, statement observation, and same-session ServerRU
   reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
   SELECT-only `EXPLAIN ANALYZE` with returned-plan diagnostics, observer-only
-  structured runtime capture, and offline runtime N+1 analysis
+  structured runtime capture, automatic captured-query diagnostics,
+  SQL-snapshot index checks, and offline runtime N+1 analysis
 - Implemented: offline struct-first model intent checks, typed SELECT builder
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,

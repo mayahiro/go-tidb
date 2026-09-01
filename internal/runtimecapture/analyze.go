@@ -8,37 +8,57 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/check"
-	"github.com/mayahiro/go-tidb/internal/queryshape"
+	"github.com/mayahiro/go-tidb/internal/querycheck"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 const (
 	codeIncompleteMetadata = "RUN001"
 	codePossibleNPlusOne   = "RUN002"
 	codeServerRUFailure    = "RUN003"
-	codeRelationTopN       = "QRY005"
+	codeRelationTopN       = querycheck.CodeRelationTopNFallback
 )
 
 // Statistics summarizes the captured execution set without claiming database
 // round trips outside go-tidb.
 type Statistics struct {
-	Captures            int     `json:"captures"`
-	Scopes              int     `json:"scopes"`
-	Statements          int     `json:"statements"`
-	AuxiliaryStatements int     `json:"auxiliary_statements"`
-	Fingerprints        int     `json:"fingerprints"`
-	BatchGroups         int     `json:"batch_groups"`
-	SplitBatches        int     `json:"split_batches"`
-	ServerRUSamples     int     `json:"server_ru_samples"`
-	ServerRUErrors      int     `json:"server_ru_errors"`
-	ServerRUTotal       float64 `json:"server_ru_total"`
-	TargetDuration      int64   `json:"target_duration_ns"`
-	DiagnosticDuration  int64   `json:"diagnostic_duration_ns"`
+	Captures                int     `json:"captures"`
+	Scopes                  int     `json:"scopes"`
+	Statements              int     `json:"statements"`
+	AuxiliaryStatements     int     `json:"auxiliary_statements"`
+	Fingerprints            int     `json:"fingerprints"`
+	BatchGroups             int     `json:"batch_groups"`
+	SplitBatches            int     `json:"split_batches"`
+	QueryShapeStatements    int     `json:"query_shape_statements"`
+	SchemaCheckedStatements int     `json:"schema_checked_statements"`
+	ServerRUSamples         int     `json:"server_ru_samples"`
+	ServerRUErrors          int     `json:"server_ru_errors"`
+	ServerRUTotal           float64 `json:"server_ru_total"`
+	TargetDuration          int64   `json:"target_duration_ns"`
+	DiagnosticDuration      int64   `json:"diagnostic_duration_ns"`
 }
 
 // Analysis contains deterministic runtime statistics and diagnostics.
 type Analysis struct {
 	Statistics  Statistics         `json:"statistics"`
 	Diagnostics []check.Diagnostic `json:"diagnostics"`
+}
+
+// AnalysisOption configures offline runtime analysis.
+type AnalysisOption func(*analysisConfiguration)
+
+type analysisConfiguration struct {
+	catalog       *physicalschema.Catalog
+	schemaEnabled bool
+}
+
+// WithSchema enables physical index-prefix diagnostics using a catalog parsed
+// from an offline SQL schema snapshot.
+func WithSchema(catalog *physicalschema.Catalog) AnalysisOption {
+	return func(configuration *analysisConfiguration) {
+		configuration.catalog = catalog
+		configuration.schemaEnabled = true
+	}
 }
 
 type scopeKey struct {
@@ -66,31 +86,50 @@ type batchKey struct {
 	group   uint64
 }
 
-type analyzer struct {
-	analysis       Analysis
-	captures       map[string]struct{}
-	scopes         map[scopeKey]struct{}
-	fingerprints   map[string]struct{}
-	batches        map[batchKey]int
-	repeated       map[repeatedQueryKey]int
-	repeatedGroups []repeatedQueryGroup
-	metadataErrors map[string]struct{}
-	fallbacks      map[string]struct{}
-	serverRUErrors map[string]struct{}
+type queryPatternKey struct {
+	fingerprint    string
+	limitPositive  bool
+	offsetPositive bool
+	offsetValue    int64
+	compilerReason string
 }
 
-func newAnalyzer() *analyzer {
-	return &analyzer{
-		analysis:       Analysis{Diagnostics: make([]check.Diagnostic, 0)},
-		captures:       make(map[string]struct{}),
-		scopes:         make(map[scopeKey]struct{}),
-		fingerprints:   make(map[string]struct{}),
-		batches:        make(map[batchKey]int),
-		repeated:       make(map[repeatedQueryKey]int),
-		repeatedGroups: make([]repeatedQueryGroup, 0),
-		metadataErrors: make(map[string]struct{}),
-		fallbacks:      make(map[string]struct{}),
+type analyzer struct {
+	configuration    analysisConfiguration
+	analysis         Analysis
+	captures         map[string]struct{}
+	scopes           map[scopeKey]struct{}
+	fingerprints     map[string]struct{}
+	batches          map[batchKey]int
+	repeated         map[repeatedQueryKey]int
+	repeatedGroups   []repeatedQueryGroup
+	metadataErrors   map[string]struct{}
+	queryDiagnostics map[string]struct{}
+	queryPatterns    map[queryPatternKey]struct{}
+	schemaPatterns   map[queryPatternKey]struct{}
+	serverRUErrors   map[string]struct{}
+}
+
+func newAnalyzer(options ...AnalysisOption) *analyzer {
+	result := &analyzer{
+		analysis:         Analysis{Diagnostics: make([]check.Diagnostic, 0)},
+		captures:         make(map[string]struct{}),
+		scopes:           make(map[scopeKey]struct{}),
+		fingerprints:     make(map[string]struct{}),
+		batches:          make(map[batchKey]int),
+		repeated:         make(map[repeatedQueryKey]int),
+		repeatedGroups:   make([]repeatedQueryGroup, 0),
+		metadataErrors:   make(map[string]struct{}),
+		queryDiagnostics: make(map[string]struct{}),
+		queryPatterns:    make(map[queryPatternKey]struct{}),
+		schemaPatterns:   make(map[queryPatternKey]struct{}),
 	}
+	for _, option := range options {
+		if option != nil {
+			option(&result.configuration)
+		}
+	}
+	return result
 }
 
 func (analyzer *analyzer) add(record Record) {
@@ -139,10 +178,23 @@ func (analyzer *analyzer) add(record Record) {
 			analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, incompleteMetadataDiagnostic(record))
 		}
 	}
-	if record.Query != nil && record.Query.Compiler.Rewrite == queryshape.CompilerRewriteRelationTopNFallback {
-		if _, exists := analyzer.fallbacks[record.Fingerprint]; !exists {
-			analyzer.fallbacks[record.Fingerprint] = struct{}{}
-			analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, relationTopNFallbackDiagnostic(record))
+	if record.Query != nil {
+		analyzer.analysis.Statistics.QueryShapeStatements++
+		patternKey := runtimeQueryPatternKey(record)
+		if _, exists := analyzer.queryPatterns[patternKey]; !exists {
+			analyzer.queryPatterns[patternKey] = struct{}{}
+			analyzer.appendQueryDiagnostics(record, querycheck.Diagnostics(*record.Query), true)
+		}
+		if analyzer.configuration.schemaEnabled {
+			analyzer.analysis.Statistics.SchemaCheckedStatements++
+			if _, exists := analyzer.schemaPatterns[patternKey]; !exists {
+				analyzer.schemaPatterns[patternKey] = struct{}{}
+				analyzer.appendQueryDiagnostics(
+					record,
+					querycheck.IndexDiagnostics(*record.Query, analyzer.configuration.catalog),
+					false,
+				)
+			}
 		}
 	}
 	if !nPlusOneCandidate(record) {
@@ -168,6 +220,16 @@ func (analyzer *analyzer) add(record Record) {
 	analyzer.repeatedGroups[groupIndex].duration = addDurationSaturated(analyzer.repeatedGroups[groupIndex].duration, record.DurationNS)
 }
 
+func runtimeQueryPatternKey(record Record) queryPatternKey {
+	return queryPatternKey{
+		fingerprint:    record.Fingerprint,
+		limitPositive:  record.Query.Limit.Positive,
+		offsetPositive: record.Query.Offset.Positive,
+		offsetValue:    record.Query.Offset.Value,
+		compilerReason: record.Query.Compiler.Reason,
+	}
+}
+
 func (analyzer *analyzer) finish() Analysis {
 	for _, group := range analyzer.repeatedGroups {
 		if group.count > 1 {
@@ -187,8 +249,8 @@ func (analyzer *analyzer) finish() Analysis {
 }
 
 // Analyze produces offline diagnostics from records without database access.
-func Analyze(records []Record) Analysis {
-	analyzer := newAnalyzer()
+func Analyze(records []Record, options ...AnalysisOption) Analysis {
+	analyzer := newAnalyzer(options...)
 	for index := range records {
 		analyzer.add(records[index])
 	}
@@ -197,14 +259,39 @@ func Analyze(records []Record) Analysis {
 
 // AnalyzeReader streams a versioned runtime artifact into offline analysis
 // without retaining every statement record in memory.
-func AnalyzeReader(reader io.Reader) (Analysis, error) {
-	analyzer := newAnalyzer()
+func AnalyzeReader(reader io.Reader, options ...AnalysisOption) (Analysis, error) {
+	analyzer := newAnalyzer(options...)
 	if err := decodeEach(reader, func(record Record) {
 		analyzer.add(record)
 	}); err != nil {
 		return Analysis{}, err
 	}
 	return analyzer.finish(), nil
+}
+
+func (analyzer *analyzer) appendQueryDiagnostics(record Record, diagnostics []check.Diagnostic, includeFingerprint bool) {
+	for index := range diagnostics {
+		diagnostic := diagnostics[index]
+		key := runtimeQueryDiagnosticKey(record.Fingerprint, diagnostic)
+		if _, exists := analyzer.queryDiagnostics[key]; exists {
+			continue
+		}
+		analyzer.queryDiagnostics[key] = struct{}{}
+		if includeFingerprint {
+			evidence := make([]check.Evidence, 0, len(diagnostic.Evidence)+1)
+			evidence = append(evidence, check.Evidence{Message: "Query fingerprint: " + record.Fingerprint})
+			diagnostic.Evidence = append(evidence, diagnostic.Evidence...)
+		}
+		analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, diagnostic)
+	}
+}
+
+func runtimeQueryDiagnosticKey(fingerprint string, diagnostic check.Diagnostic) string {
+	key := fingerprint + "\x00" + diagnostic.Code + "\x00" + diagnostic.Message
+	for _, evidence := range diagnostic.Evidence {
+		key += "\x00" + evidence.Message
+	}
+	return key
 }
 
 func addDurationSaturated(current, added int64) int64 {
@@ -257,28 +344,6 @@ func serverRUFailureDiagnostic(record Record) check.Diagnostic {
 	}
 }
 
-func relationTopNFallbackDiagnostic(record Record) check.Diagnostic {
-	relation := record.Query.Compiler.Relation
-	message := "Captured SELECT for " + record.Query.Model + " used the relation-filter TopN fallback"
-	if relation != "" {
-		message += " for " + relation
-	}
-	evidence := []check.Evidence{{Message: "Query fingerprint: " + record.Fingerprint}}
-	if reason := record.Query.Compiler.Reason; reason != "" {
-		evidence = append(evidence, check.Evidence{Message: "Relation-first TopN was not applied because " + reason})
-	}
-	return check.Diagnostic{
-		Code:         codeRelationTopN,
-		Severity:     check.SeverityWarning,
-		Title:        "Relation-filter TopN uses the EXISTS fallback",
-		Message:      message,
-		Evidence:     evidence,
-		Suggestion:   "Inspect the captured query with Explain or ExplainAnalyze and verify whether the relation-first rewrite can preserve its semantics",
-		Suppressible: true,
-		Reference:    "https://docs.pingcap.com/tidb/stable/topn-limit-push-down/",
-	}
-}
-
 func possibleNPlusOneDiagnostic(group repeatedQueryGroup) check.Diagnostic {
 	target := "query"
 	if group.model != "" {
@@ -310,13 +375,15 @@ func nonEmptyRuntimeValue(value string) string {
 // FormatStatistics renders one stable human-readable runtime summary line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
+		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d query_shape_statements=%d schema_checked_statements=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
 		statistics.Captures,
 		statistics.Scopes,
 		statistics.Statements,
 		statistics.Fingerprints,
 		statistics.BatchGroups,
 		statistics.SplitBatches,
+		statistics.QueryShapeStatements,
+		statistics.SchemaCheckedStatements,
 		time.Duration(statistics.TargetDuration),
 		statistics.AuxiliaryStatements,
 		time.Duration(statistics.DiagnosticDuration),

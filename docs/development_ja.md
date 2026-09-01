@@ -87,7 +87,9 @@ go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnostics$' -benchmem -count=5
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsWithSchema$' -benchmem -count=5
 go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison$' -benchmem -count=5
+go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 ```
 
 全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
@@ -97,6 +99,10 @@ schema-aware benchmarkはQueryShape構築と物理index prefix照合を含みま
 fingerprintはevidenceが不要な場合に遅延され、独立したbenchmarkで計測します
 
 comparison benchmarkは同じbuilderを両diagnostic pathで使用します
+
+neutral query check benchmarkはbuilder compileを含みません
+
+runtime benchmarkはJSON decodeとDB accessなしで100個のcaptured typed query recordを解析します
 
 ## TiDB Cloud Starter integration test
 

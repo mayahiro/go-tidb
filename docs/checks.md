@@ -185,10 +185,17 @@ execution records rather than a prebuilt diagnostic array:
 
 ```sh
 tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
 The command performs no database access. See the [observation
 guide](observability.md#structured-runtime-capture) for the artifact boundary.
+It automatically applies `QRY002` through `QRY005` to captured typed query
+shapes. `--schema` parses the supplied TiDB `CREATE TABLE` snapshot offline and
+adds `QRY006` and `QRY007`; no application-side query registry is required.
+Statistics report how many captured statements carried query shapes and how
+many were checked against the snapshot. Statements without a complete shape
+remain outside these query-pattern and schema rules.
 When `CollectServerRU` produced samples, runtime statistics keep target and
 diagnostic durations, go-tidb and auxiliary statement counts, successful
 samples, collection errors, and summed ServerRU separate. `RUN003` reports a

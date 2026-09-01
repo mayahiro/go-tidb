@@ -129,7 +129,9 @@ does not replace the application result.
 
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with
-`tidbgo analyze`.
+`tidbgo analyze`. Captured typed query shapes are checked automatically; pass
+`--schema schema.sql` to add offline physical index-prefix checks without a
+database connection or an application-side query registry.
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

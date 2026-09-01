@@ -64,8 +64,8 @@ func TestRuntimeCaptureRecordsTypedQueryWithoutBindValues(t *testing.T) {
 	if record.ServerRU != nil {
 		t.Fatalf("runtime ServerRU = %#v, want nil without CollectServerRU", record.ServerRU)
 	}
-	if !record.Query.Limit.Set || record.Query.Limit.Value != 0 {
-		t.Fatalf("runtime limit = %#v, want presence without value", record.Query.Limit)
+	if !record.Query.Limit.Set || !record.Query.Limit.Positive || record.Query.Limit.Value != 0 {
+		t.Fatalf("runtime limit = %#v, want positive classification without value", record.Query.Limit)
 	}
 	if got, want := record.Query.Projection, []string{"id", "name"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtime projection = %#v, want %#v", got, want)

@@ -413,12 +413,20 @@ ctx = orm.WithRuntimeCapture(ctx, capture)
 Existing ORM calls require no registration, wrapper, or diagnostic call. The
 JSON Lines artifact records actual root queries, collection preloads, and bulk
 splits with bind-free fingerprints, duration, and row counts. Model-row SELECT
-and plan records also include compiler decisions. Analyze the artifact offline
-without a database connection:
+and plan records also include bind-free query shapes and compiler decisions.
+Analyze the artifact offline without a database connection or per-query
+registration:
 
 ```sh
 tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
+
+The analyzer applies `QRY002` through `QRY005` to captured query shapes and
+reports possible N+1 SELECTs. Supplying an offline TiDB `CREATE TABLE` snapshot
+also applies the `QRY006` and `QRY007` physical index checks. Coverage counters
+separate all captured statements from statements that carried a query shape
+and those checked against the snapshot.
 
 Runtime capture does not add `EXPLAIN` or other database I/O by default. Add
 `orm.CollectServerRU()` to `WithRuntimeCapture` only when one extra
@@ -539,11 +547,13 @@ or connecting to a database:
 ```sh
 tidbgo analyze runtime.jsonl
 tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-The command aggregates captured statements and reports compiler fallbacks and
-possible N+1 SELECTs within each observer scope. See the [statement observation
-guide](docs/observability.md#structured-runtime-capture)
+The command aggregates captured statements, applies `QRY002` through `QRY005`
+to recorded query shapes, and reports possible N+1 SELECTs within each observer
+scope. `--schema` adds offline `QRY006` and `QRY007` index checks. See the
+[statement observation guide](docs/observability.md#structured-runtime-capture)
 
 Analyze production Go source for default projections that can be proven wider
 than their local result use:

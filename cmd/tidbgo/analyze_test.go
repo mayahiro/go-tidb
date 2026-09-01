@@ -12,6 +12,7 @@ import (
 	cli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/queryshape"
 	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 )
 
@@ -93,6 +94,161 @@ func TestApplicationAnalyzeReportsServerRUCollectionFailureAndSeparatedCost(t *t
 	}
 }
 
+func TestApplicationAnalyzeAppliesCapturedQueryDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	shape := queryshape.Query{
+		Model:  "Video",
+		Limit:  queryshape.Bound{Set: true, Positive: true},
+		Offset: queryshape.Bound{Set: true, Positive: true},
+		Predicates: []queryshape.Predicate{{
+			Operator: queryshape.PredicateContains,
+			Field:    "Title",
+		}},
+		Compiler: queryshape.CompilerDecision{
+			Rewrite:  queryshape.CompilerRewriteRelationTopNFallback,
+			Relation: "Genres",
+			Reason:   "root order is not the primary key",
+		},
+	}
+	record := runtimeCommandRecord(1, shape.Fingerprint())
+	record.Query = &shape
+	result := runApplicationWithInput(t, runtimeCaptureInput(t, record), "analyze")
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"WARNING[QRY002] OFFSET pagination cost grows with the offset",
+		"WARNING[QRY003] Pagination has no deterministic order",
+		"WARNING[QRY004] LIKE predicate starts with a wildcard",
+		"WARNING[QRY005] Relation-filter TopN uses the EXISTS fallback",
+		"query_shape_statements=1 schema_checked_statements=0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func TestApplicationAnalyzeChecksCapturedIndexesAgainstSchemaSnapshot(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	const schemaSQL = `
+CREATE TABLE videos (
+    id BIGINT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    PRIMARY KEY (id)
+);`
+	if err := os.WriteFile(filepath.Join(directory, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	shape := queryshape.Query{
+		Model: "Video",
+		Table: "videos",
+		Order: []queryshape.OrderTerm{{Column: "id", Direction: queryshape.OrderDescending}},
+		Limit: queryshape.Bound{Set: true, Positive: true},
+		IndexAccesses: []queryshape.IndexAccess{{
+			Kind:            queryshape.IndexAccessRootOrderedLimit,
+			Table:           "videos",
+			EqualityColumns: []string{"tenant_id"},
+			OrderColumns:    []string{"id"},
+		}},
+	}
+	record := runtimeCommandRecord(1, shape.Fingerprint())
+	record.Query = &shape
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, record),
+		"analyze",
+		"--schema",
+		"schema.sql",
+	)
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"WARNING[QRY007] Ordered limited access has no matching index prefix",
+		"Candidate index prefix: videos(tenant_id, id)",
+		"query_shape_statements=1 schema_checked_statements=1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func TestApplicationAnalyzeFailsWhenSchemaCannotDescribeCapturedAccess(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	const schemaSQL = `CREATE TABLE other_videos (id BIGINT NOT NULL, PRIMARY KEY (id));`
+	if err := os.WriteFile(filepath.Join(directory, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	shape := queryshape.Query{
+		Model: "Video",
+		Order: []queryshape.OrderTerm{{Column: "id", Direction: queryshape.OrderDescending}},
+		Limit: queryshape.Bound{Set: true, Positive: true},
+		IndexAccesses: []queryshape.IndexAccess{{
+			Kind:         queryshape.IndexAccessRootOrderedLimit,
+			Table:        "videos",
+			OrderColumns: []string{"id"},
+		}},
+	}
+	record := runtimeCommandRecord(1, shape.Fingerprint())
+	record.Query = &shape
+	result := runApplicationAt(
+		t,
+		directory,
+		runtimeCaptureInput(t, record),
+		"analyze",
+		"--schema",
+		"schema.sql",
+	)
+	if got, want := result.Status(), exitCheckFailure; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	if !strings.Contains(stdout, "ERROR[QRY006] Query index check is unavailable") ||
+		!strings.Contains(stdout, `query access table \"videos\" is absent`) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestApplicationAnalyzeRejectsInvalidSchemaSnapshot(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "schema.sql"), []byte("CREATE TABLE videos ("), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	result := runApplicationAt(t, directory, nil, "analyze", "--schema", "schema.sql")
+	if got, want := result.Status(), exitUsage; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if stderr := string(result.Stderr()); !strings.Contains(stderr, "parse schema snapshot") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestApplicationAnalyzeReportsMissingSchemaWithoutResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	result := runApplicationAt(t, directory, nil, "analyze", "--schema", "missing.sql")
+	if got, want := result.Status(), exitInternalError; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	stderr := string(result.Stderr())
+	if !strings.Contains(stderr, `read schema snapshot "missing.sql": file does not exist`) || strings.Contains(stderr, directory) {
+		t.Fatalf("stderr = %q, want user-supplied path without resolved directory", stderr)
+	}
+}
+
 func TestApplicationAnalyzeRecordsReasonedSuppression(t *testing.T) {
 	t.Parallel()
 
@@ -133,14 +289,14 @@ func TestApplicationAnalyzeReadsExplicitFile(t *testing.T) {
 func TestApplicationAnalyzeRejectsInvalidArtifact(t *testing.T) {
 	t.Parallel()
 
-	result := runApplicationWithInput(t, []byte(`{"version":2}`), "analyze")
+	result := runApplicationWithInput(t, []byte(`{"version":1}`), "analyze")
 	if got, want := result.Status(), exitUsage; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 	if stdout := result.Stdout(); len(stdout) != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if stderr := string(result.Stderr()); !strings.Contains(stderr, "runtime capture version is 2, want 1") {
+	if stderr := string(result.Stderr()); !strings.Contains(stderr, "runtime capture version is 1, want 2") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 }

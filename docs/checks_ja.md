@@ -168,11 +168,20 @@ runtime capture artifactは作成済みdiagnostic arrayではなくexecution rec
 
 ```sh
 tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
 このcommandはDBへ接続しません
 
 artifact boundaryは[observation guide](observability_ja.md#structured-runtime-capture)を参照してください
+
+captured typed query shapeへ `QRY002` から `QRY005` を自動適用します
+
+`--schema` は渡したTiDB `CREATE TABLE` snapshotをofflineでparseし、`QRY006` と `QRY007` を追加するためapplication側のquery registryは不要です
+
+statisticsはquery shapeを持つcaptured statement数とsnapshotでcheckしたstatement数をreportします
+
+completeなshapeを持たないstatementはこれらのquery pattern ruleとschema ruleの対象外です
 
 `CollectServerRU` がsampleを生成した場合、runtime statisticsはtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、成功sample数、collection error数、ServerRU合計を分離します
 

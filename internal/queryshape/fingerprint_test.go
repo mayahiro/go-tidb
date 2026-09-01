@@ -84,8 +84,8 @@ func fingerprintFixture() Query {
 			Direction: OrderDescending,
 		}},
 		SeekAfter: true,
-		Limit:     Bound{Set: true, Value: 100},
-		Offset:    Bound{Set: true, Value: 20},
+		Limit:     Bound{Set: true, Positive: true, Value: 100},
+		Offset:    Bound{Set: true, Positive: true, Value: 20},
 		Preloads: []Preload{{
 			Path:       "User",
 			Relation:   "User",
