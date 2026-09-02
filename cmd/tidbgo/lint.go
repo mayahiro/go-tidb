@@ -11,6 +11,7 @@ import (
 	cli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/diagnosticreport"
 	"github.com/mayahiro/go-tidb/internal/sourcecheck"
 )
 
@@ -58,7 +59,7 @@ func runLint(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, err
 	if err != nil {
 		return cli.Outcome{}, lintInputDiagnostic(input, err)
 	}
-	report, err := check.NewReport(analysis.Diagnostics, parsedLintSuppressions(invocation)...)
+	report, err := diagnosticreport.New(analysis.Diagnostics, parsedLintSuppressions(invocation)...)
 	if err != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error()).
 			WithTarget(cli.OptionTarget(lintSuppressID))
@@ -74,7 +75,7 @@ func runLint(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, err
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "write source analysis: "+err.Error())
 	}
 	if report.HasErrors() {
-		return cli.NewOutcome(exitCheckFailure), nil
+		return cli.NewOutcome(exitDiagnosticFailure), nil
 	}
 	return cli.Success(), nil
 }
@@ -95,11 +96,11 @@ func lintInputDiagnostic(input string, err error) *cli.Diagnostic {
 		WithTarget(cli.ArgumentTarget(lintInputID))
 }
 
-func parsedLintSuppressions(invocation *cli.Invocation) []check.Suppression {
+func parsedLintSuppressions(invocation *cli.Invocation) []diagnosticreport.Suppression {
 	values := invocation.ParsedValues(lintSuppressID)
-	result := make([]check.Suppression, 0, len(values))
+	result := make([]diagnosticreport.Suppression, 0, len(values))
 	for _, value := range values {
-		if suppression, ok := value.Typed().(check.Suppression); ok {
+		if suppression, ok := value.Typed().(diagnosticreport.Suppression); ok {
 			result = append(result, suppression)
 		}
 	}
@@ -107,13 +108,13 @@ func parsedLintSuppressions(invocation *cli.Invocation) []check.Suppression {
 }
 
 type sourceAnalysisJSON struct {
-	Statistics  sourcecheck.Statistics       `json:"statistics"`
-	Diagnostics []check.Diagnostic           `json:"diagnostics"`
-	Suppressed  []check.SuppressedDiagnostic `json:"suppressed"`
-	Summary     check.Summary                `json:"summary"`
+	Statistics  sourcecheck.Statistics                  `json:"statistics"`
+	Diagnostics []check.Diagnostic                      `json:"diagnostics"`
+	Suppressed  []diagnosticreport.SuppressedDiagnostic `json:"suppressed"`
+	Summary     diagnosticreport.Summary                `json:"summary"`
 }
 
-func writeSourceAnalysisJSON(writer io.Writer, statistics sourcecheck.Statistics, report check.Report) error {
+func writeSourceAnalysisJSON(writer io.Writer, statistics sourcecheck.Statistics, report diagnosticreport.Report) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(sourceAnalysisJSON{
@@ -124,7 +125,7 @@ func writeSourceAnalysisJSON(writer io.Writer, statistics sourcecheck.Statistics
 	})
 }
 
-func writeSourceAnalysisText(writer io.Writer, statistics sourcecheck.Statistics, report check.Report) error {
+func writeSourceAnalysisText(writer io.Writer, statistics sourcecheck.Statistics, report diagnosticreport.Report) error {
 	for _, diagnostic := range report.Diagnostics() {
 		if err := writeTextDiagnostic(writer, stringUpper(diagnostic.Severity), diagnostic, ""); err != nil {
 			return err

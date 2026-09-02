@@ -7,18 +7,6 @@ import (
 	"io"
 )
 
-// Decode reads all versioned JSON values from a runtime capture stream.
-func Decode(reader io.Reader) ([]Record, error) {
-	records := make([]Record, 0)
-	err := decodeEach(reader, func(record Record) {
-		records = append(records, record)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return records, nil
-}
-
 func decodeEach(reader io.Reader, visit func(Record)) error {
 	if reader == nil {
 		return fmt.Errorf("runtime capture input is nil")

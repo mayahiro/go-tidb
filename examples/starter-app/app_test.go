@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
 	physicalschema "github.com/mayahiro/go-tidb/schema"
@@ -75,8 +76,21 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 func TestApplicationModelsPassOfflineChecks(t *testing.T) {
 	t.Parallel()
 
-	if diagnostics := CheckModels(); len(diagnostics) != 0 {
-		t.Fatalf("CheckModels() = %#v, want no diagnostics", diagnostics)
+	checks := [][]check.Diagnostic{
+		check.Model[User](),
+		check.Model[Order](),
+		check.Model[Role](),
+		check.Model[UserRole](),
+		check.Model[Clip](),
+		check.Model[ClipGenre](),
+		check.Model[JobLease](),
+		check.Model[Video](),
+		check.Model[WatchLater](),
+	}
+	for index, diagnostics := range checks {
+		if len(diagnostics) != 0 {
+			t.Fatalf("model check %d = %#v, want no diagnostics", index, diagnostics)
+		}
 	}
 }
 
@@ -106,12 +120,13 @@ CREATE TABLE user_roles (
   role_id BIGINT NOT NULL,
   PRIMARY KEY (user_id, role_id)
 );`
-	diagnostics, err := CheckUserSchema(sqlText)
+	catalog, err := physicalschema.Parse(sqlText)
 	if err != nil {
-		t.Fatalf("CheckUserSchema() error = %v", err)
+		t.Fatalf("schema.Parse() error = %v", err)
 	}
+	diagnostics := check.Schema[User](catalog)
 	if len(diagnostics) != 0 {
-		t.Fatalf("CheckUserSchema() = %#v, want no diagnostics", diagnostics)
+		t.Fatalf("check.Schema() = %#v, want no diagnostics", diagnostics)
 	}
 }
 
@@ -158,9 +173,6 @@ func TestApplicationDecimalUsesDatabaseSQLInterfaces(t *testing.T) {
 func TestApplicationBuildsScalarQueryOffline(t *testing.T) {
 	t.Parallel()
 
-	if diagnostics := CheckRecentOrdersQuery(7, 1000); len(diagnostics) != 0 {
-		t.Fatalf("CheckRecentOrdersQuery() = %#v, want none", diagnostics)
-	}
 	sqlText, arguments, err := BuildRecentOrdersQuery(7, 1000)
 	if err != nil {
 		t.Fatalf("BuildRecentOrdersQuery() error = %v", err)
@@ -177,9 +189,6 @@ func TestApplicationBuildsScalarQueryOffline(t *testing.T) {
 func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
 	t.Parallel()
 
-	if diagnostics := CheckRecentClipsInGenreQuery(7); len(diagnostics) != 0 {
-		t.Fatalf("CheckRecentClipsInGenreQuery() = %#v, want none", diagnostics)
-	}
 	sqlText, arguments, err := BuildRecentClipsInGenreQuery(7)
 	if err != nil {
 		t.Fatalf("BuildRecentClipsInGenreQuery() error = %v", err)
@@ -190,36 +199,6 @@ func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
 	}
 	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
-	}
-}
-
-func TestApplicationChecksRelationFirstTopNIndexOffline(t *testing.T) {
-	t.Parallel()
-
-	matching, err := physicalschema.Parse(`CREATE TABLE clip_genres (
-  clip_id BIGINT NOT NULL,
-  genre_id BIGINT NOT NULL,
-  PRIMARY KEY (clip_id, genre_id),
-  KEY clip_genres_genre_clip_key (genre_id, clip_id)
-);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diagnostics := CheckRecentClipsInGenreQueryWithSchema(matching, 7); len(diagnostics) != 0 {
-		t.Fatalf("matching diagnostics = %#v, want none", diagnostics)
-	}
-
-	missing, err := physicalschema.Parse(`CREATE TABLE clip_genres (
-  clip_id BIGINT NOT NULL,
-  genre_id BIGINT NOT NULL,
-  PRIMARY KEY (clip_id, genre_id)
-);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	diagnostics := CheckRecentClipsInGenreQueryWithSchema(missing, 7)
-	if len(diagnostics) != 1 || diagnostics[0].Code != "QRY007" {
-		t.Fatalf("missing diagnostics = %#v, want QRY007", diagnostics)
 	}
 }
 

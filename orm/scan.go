@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
-	"sync"
 	"time"
 
 	"github.com/mayahiro/go-tidb/model"
@@ -59,33 +58,6 @@ func (s *softDeleteTimeScanner) Scan(source any) error {
 	}
 	*s.target = value.Time
 	return nil
-}
-
-var scanPlanCache sync.Map
-
-func scanPlanFor(modelType reflect.Type) (*scanPlan, error) {
-	descriptor, err := model.DescribeType(modelType)
-	if err != nil {
-		return nil, fmt.Errorf("orm: describe row model: %w", err)
-	}
-	base := descriptor.Type()
-	if cached, ok := scanPlanCache.Load(base); ok {
-		result := cached.(scanPlanResult)
-		return result.plan, result.err
-	}
-
-	plan, compileErr := compileScanPlan(descriptor)
-	result, _ := scanPlanCache.LoadOrStore(base, scanPlanResult{plan: plan, err: compileErr})
-	cached := result.(scanPlanResult)
-	return cached.plan, cached.err
-}
-
-func compileScanPlan(descriptor *model.Descriptor) (*scanPlan, error) {
-	fields := baseTableFields(descriptor)
-	if len(fields) == 0 {
-		return nil, fmt.Errorf("orm: row model %s has no base-table fields", descriptor.Name())
-	}
-	return compileScanPlanFields(descriptor, fields)
 }
 
 func compileScanPlanFields(descriptor *model.Descriptor, fields []model.Field) (*scanPlan, error) {

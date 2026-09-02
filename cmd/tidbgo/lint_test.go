@@ -11,6 +11,7 @@ import (
 	cli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/diagnosticreport"
 	"github.com/mayahiro/go-tidb/internal/sourcecheck"
 )
 
@@ -48,10 +49,10 @@ func TestApplicationLintWritesStructuredJSON(t *testing.T) {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
 	var output struct {
-		Statistics  sourcecheck.Statistics `json:"statistics"`
-		Diagnostics []check.Diagnostic     `json:"diagnostics"`
-		Suppressed  []any                  `json:"suppressed"`
-		Summary     check.Summary          `json:"summary"`
+		Statistics  sourcecheck.Statistics   `json:"statistics"`
+		Diagnostics []check.Diagnostic       `json:"diagnostics"`
+		Suppressed  []any                    `json:"suppressed"`
+		Summary     diagnosticreport.Summary `json:"summary"`
 	}
 	if err := json.Unmarshal(result.Stdout(), &output); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v, output = %q", err, result.Stdout())
@@ -143,9 +144,9 @@ func TestApplicationLintReportsMissingPathWithoutResolvedPath(t *testing.T) {
 func TestSourceAnalysisWritersPropagateErrors(t *testing.T) {
 	t.Parallel()
 
-	report, err := check.NewReport([]check.Diagnostic{{Code: "SRC001", Severity: check.SeverityWarning}})
+	report, err := diagnosticreport.New([]check.Diagnostic{{Code: "SRC001", Severity: check.SeverityWarning}})
 	if err != nil {
-		t.Fatalf("check.NewReport() error = %v", err)
+		t.Fatalf("diagnosticreport.New() error = %v", err)
 	}
 	want := errors.New("write failed")
 	writer := failingWriter{err: want}

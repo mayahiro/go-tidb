@@ -48,13 +48,12 @@ func NewRuntimeCapture(writer io.Writer) *RuntimeCapture {
 //
 // Call it once at a request, job, or test-operation boundary and pass the
 // derived context through existing ORM terminals. It preserves an inherited
-// StatementObserver and never enables bind argument capture;
-// IncludeStatementArguments has no effect here. CollectServerRU can explicitly
-// add one same-session diagnostic query for each recognized DML statement. A
-// later WithStatementObserver call also preserves the capture. Installing
-// another RuntimeCapture on the derived context replaces the inherited capture
-// and its options.
-func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ...StatementObserverOption) context.Context {
+// StatementObserver and never captures bind argument values. CollectServerRU
+// can explicitly add one same-session diagnostic query for each recognized DML
+// statement. A later WithStatementObserver call also preserves the capture.
+// Installing another RuntimeCapture on the derived context replaces the
+// inherited capture and its options.
+func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ...RuntimeCaptureOption) context.Context {
 	if capture == nil {
 		return ctx
 	}
@@ -65,16 +64,17 @@ func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ..
 	value.runtimeCapture = capture
 	value.runtimeScope = &statementRuntimeScope{id: capture.nextScope.Add(1)}
 	value.options &^= statementRuntimeCollectServerRU
-	runtimeConfiguration := statementObserverContextValue{}
 	for _, option := range options {
 		if option != nil {
-			option.applyStatementObserver(&runtimeConfiguration)
+			option.applyRuntimeCapture(value)
 		}
 	}
-	if runtimeConfiguration.hasOption(statementObserverCollectServerRU) {
-		value.options |= statementRuntimeCollectServerRU
-	}
 	return context.WithValue(ctx, statementObserverContextKey{}, value)
+}
+
+// RuntimeCaptureOption configures structured runtime capture for one context.
+type RuntimeCaptureOption interface {
+	applyRuntimeCapture(*statementObserverContextValue)
 }
 
 // Err returns the first artifact encoding or writer error observed by capture.

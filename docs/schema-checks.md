@@ -114,11 +114,11 @@ runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
 Invalid model metadata is returned through the existing non-suppressible
 `MOD001` diagnostic before physical compatibility is evaluated.
 
-Warnings, including the structural relation-index warning, are suppressible in
-the shared diagnostic representation through `check.NewReport` or
-`tidbgo check`. Errors represent an executable mapping, insertion, or
-cardinality conflict and are not suppressible. See the [offline diagnostic
-report guide](checks.md).
+Warnings, including the structural relation-index warning, set `Suppressible`
+in the shared diagnostic representation. Application tests own the policy for
+diagnostics returned directly by `check.Schema`. Errors represent an executable
+mapping, insertion, or cardinality conflict and are not suppressible. See the
+[analysis guide](checks.md).
 
 For a composite relation key, the leading index positions may order the mapped
 columns differently because every component is constrained by the generated

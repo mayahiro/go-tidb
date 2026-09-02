@@ -1,10 +1,22 @@
 package runtimecapture
 
 import (
+	"io"
 	"math"
 	"strings"
 	"testing"
 )
+
+func Decode(reader io.Reader) ([]Record, error) {
+	records := make([]Record, 0)
+	err := decodeEach(reader, func(record Record) {
+		records = append(records, record)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
+}
 
 func TestDecodeAcceptsJSONLinesAndReturnsNonNilEmpty(t *testing.T) {
 	record := `{"version":1,"capture_id":"capture","scope_id":1,"sequence":1,"operation":"SELECT","source":"raw","fingerprint":"s1:test","sql":"SELECT 1","argument_count":0,"started_at":"2026-08-31T00:00:00Z","duration_ns":1,"rows_returned_known":true,"rows_affected_known":false}`

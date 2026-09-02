@@ -11,9 +11,9 @@ import (
 var version = "dev"
 
 const (
-	exitCheckFailure  cli.ExitStatus = 1
-	exitUsage         cli.ExitStatus = 2
-	exitInternalError cli.ExitStatus = 5
+	exitDiagnosticFailure cli.ExitStatus = 1
+	exitUsage             cli.ExitStatus = 2
+	exitInternalError     cli.ExitStatus = 5
 
 	versionActionCommand = "version-action"
 )
@@ -43,7 +43,6 @@ func application(toolVersion string) *cli.Command {
 			cli.NewHelpSection("additional-commands", "Additional commands").
 				Entry("version", "Print the tidbgo version"),
 		).
-		Subcommand(checkCommand()).
 		Subcommand(lintCommand()).
 		Subcommand(analyzeCommand()).
 		Subcommand(baselineCommand()).

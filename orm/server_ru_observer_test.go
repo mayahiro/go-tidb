@@ -236,7 +236,10 @@ func TestRuntimeCaptureCollectsServerRUAtScopeBoundary(t *testing.T) {
 	if got := records[0].ServerRU; !got.Known || got.Value != 3.125 || got.AuxiliaryStatements != 1 || got.Error != "" {
 		t.Fatalf("runtime ServerRU = %#v", got)
 	}
-	analysis := runtimecapture.Analyze(records)
+	analysis, err := runtimecapture.AnalyzeReader(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatalf("AnalyzeReader() error = %v", err)
+	}
 	statistics := analysis.Statistics
 	if statistics.Statements != 1 || statistics.AuxiliaryStatements != 1 || statistics.ServerRUSamples != 1 || statistics.ServerRUErrors != 0 || statistics.ServerRUTotal != 3.125 {
 		t.Fatalf("runtime statistics = %#v", statistics)
@@ -270,48 +273,52 @@ func TestServerRUCollectionSharedByObserverAndRuntimeCapture(t *testing.T) {
 	}
 }
 
-func TestDebugAggregatesTargetAndServerRUDiagnosticsSeparately(t *testing.T) {
+func TestRuntimeCaptureAggregatesTargetAndServerRUDiagnosticsSeparately(t *testing.T) {
 	t.Parallel()
 
 	state := &serverRUObserverState{serverRU: `{"ru_consumption":4.25}`}
 	database := openServerRUObserverDB(t, state)
-	report, err := Debug(context.Background(), func(ctx context.Context) error {
-		if _, execErr := RawExec(ctx, database, "UPDATE counters SET value = ? WHERE id = ?", int64(1), int64(7)); execErr != nil {
-			return execErr
-		}
-		_, execErr := RawExec(ctx, database, "DELETE FROM counters WHERE id = ?", int64(8))
-		return execErr
-	}, CollectServerRU())
+	var output bytes.Buffer
+	capture := NewRuntimeCapture(&output)
+	ctx := WithRuntimeCapture(context.Background(), capture, CollectServerRU())
+	if _, err := RawExec(ctx, database, "UPDATE counters SET value = ? WHERE id = ?", int64(1), int64(7)); err != nil {
+		t.Fatalf("first RawExec() error = %v", err)
+	}
+	if _, err := RawExec(ctx, database, "DELETE FROM counters WHERE id = ?", int64(8)); err != nil {
+		t.Fatalf("second RawExec() error = %v", err)
+	}
+	analysis, err := runtimecapture.AnalyzeReader(bytes.NewReader(output.Bytes()))
 	if err != nil {
-		t.Fatalf("Debug() error = %v", err)
+		t.Fatalf("AnalyzeReader() error = %v", err)
 	}
-	if len(report.Statements) != 2 || report.ServerRU == nil || report.ServerRU.AuxiliaryStatements != 2 || report.ServerRU.Samples != 2 || report.ServerRU.Errors != 0 || report.ServerRU.Total != 8.5 {
-		t.Fatalf("Debug() report = %#v", report)
+	statistics := analysis.Statistics
+	if statistics.Statements != 2 || statistics.AuxiliaryStatements != 2 || statistics.ServerRUSamples != 2 || statistics.ServerRUErrors != 0 || statistics.ServerRUTotal != 8.5 {
+		t.Fatalf("runtime statistics = %#v", statistics)
 	}
-	if report.StatementDuration < 0 || report.ServerRU.DiagnosticDuration < 0 || report.Duration < report.StatementDuration || report.Duration < report.ServerRU.DiagnosticDuration {
-		t.Fatalf("Debug() timing = %#v", report)
+	if statistics.TargetDuration < 0 || statistics.DiagnosticDuration < 0 {
+		t.Fatalf("runtime timing = %#v", statistics)
 	}
 }
 
-func TestDebugIsolatesServerRUFromInheritedObserverMutation(t *testing.T) {
+func TestRuntimeCaptureIsolatesServerRUFromInheritedObserverMutation(t *testing.T) {
 	t.Parallel()
 
 	state := &serverRUObserverState{serverRU: `{"ru_consumption":4.25}`}
 	database := openServerRUObserverDB(t, state)
+	var output bytes.Buffer
+	capture := NewRuntimeCapture(&output)
 	ctx := WithStatementObserver(context.Background(), func(event StatementEvent) {
 		if event.ServerRU != nil {
 			event.ServerRU.Value = 999
 		}
 	})
-	report, err := Debug(ctx, func(debugContext context.Context) error {
-		_, execErr := RawExec(debugContext, database, "UPDATE counters SET value = ?", int64(1))
-		return execErr
-	}, CollectServerRU())
-	if err != nil {
-		t.Fatalf("Debug() error = %v", err)
+	ctx = WithRuntimeCapture(ctx, capture, CollectServerRU())
+	if _, err := RawExec(ctx, database, "UPDATE counters SET value = ?", int64(1)); err != nil {
+		t.Fatalf("RawExec() error = %v", err)
 	}
-	if len(report.Statements) != 1 || report.Statements[0].ServerRU == nil || report.Statements[0].ServerRU.Value != 4.25 || report.ServerRU == nil || report.ServerRU.Total != 4.25 {
-		t.Fatalf("Debug() report = %#v", report)
+	records := decodeRuntimeCaptureForTest(t, &output)
+	if len(records) != 1 || records[0].ServerRU == nil || records[0].ServerRU.Value != 4.25 {
+		t.Fatalf("runtime records = %#v", records)
 	}
 }
 

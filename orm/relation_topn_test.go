@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/queryshape"
 	"github.com/mayahiro/go-tidb/model"
 )
 
@@ -168,83 +168,83 @@ func TestRelationFirstTopNFallsBackWhenUniquenessIsUnproven(t *testing.T) {
 	}
 }
 
-func TestRelationTopNDiagnosticsReportsFallbackReasons(t *testing.T) {
+func TestRelationTopNQueryShapeRecordsFallbackReasons(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name   string
-		query  interface{ Diagnostics() []check.Diagnostic }
+		shape  func(testing.TB) queryshape.Query
 		reason string
 	}{
 		{
 			name: "unproven uniqueness",
-			query: Query[relationTopNUnprovenVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNUnprovenVideo]().
 				Where(Has("Links", Equal("GenreID", "private-genre"))).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "does not prove at most one matching row",
 		},
 		{
 			name: "different order",
-			query: Query[relationTopNVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNVideo]().
 				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
 				OrderBy(Desc("Title")).
-				Limit(20),
+				Limit(20)),
 			reason: "ORDER BY does not exactly match",
 		},
 		{
 			name: "logical group",
-			query: Query[relationTopNVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNVideo]().
 				Where(And(Has("VideoGenres", Equal("GenreID", int64(7))), Equal("Title", "published"))).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "nested in a logical group",
 		},
 		{
 			name: "multiple collection predicates",
-			query: Query[relationTopNVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNVideo]().
 				Where(
 					Has("VideoGenres", Equal("GenreID", int64(7))),
 					Has("VideoGenres", Equal("GenreID", int64(8))),
 				).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "more than one collection Has",
 		},
 		{
 			name: "seek cursor",
-			query: Query[relationTopNVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNVideo]().
 				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
 				OrderBy(Desc("ID")).
 				SeekAfter(int64(100)).
-				Limit(20),
+				Limit(20)),
 			reason: "uses SeekAfter",
 		},
 		{
 			name: "root predicate",
-			query: Query[relationTopNVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNVideo]().
 				Where(
 					Has("VideoGenres", Equal("GenreID", int64(7))),
 					Equal("Title", "private-title"),
 				).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "root predicate",
 		},
 		{
 			name: "root soft delete scope",
-			query: Query[relationTopNSoftVideo]().
+			shape: relationTopNShapeForTest(Query[relationTopNSoftVideo]().
 				Where(Has("Links", Equal("GenreID", int64(7)))).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "root default soft-delete scope",
 		},
 		{
 			name: "many to many",
-			query: Query[preloadUser]().
+			shape: relationTopNShapeForTest(Query[preloadUser]().
 				Where(Has("Roles", Equal("Name", "private-role"))).
 				OrderBy(Desc("ID")).
-				Limit(20),
+				Limit(20)),
 			reason: "many-to-many junction",
 		},
 	}
@@ -252,48 +252,63 @@ func TestRelationTopNDiagnosticsReportsFallbackReasons(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			diagnostics := tt.query.Diagnostics()
-			if len(diagnostics) != 1 {
-				t.Fatalf("Diagnostics() = %#v, want one", diagnostics)
+			compiler := tt.shape(t).Compiler
+			if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || !strings.Contains(compiler.Reason, tt.reason) {
+				t.Fatalf("compiler decision = %#v, want fallback reason %q", compiler, tt.reason)
 			}
-			diagnostic := diagnostics[0]
-			if diagnostic.Code != codeRelationTopNFallback || diagnostic.Severity != check.SeverityWarning || !diagnostic.Suppressible {
-				t.Fatalf("diagnostic = %#v, want suppressible QRY005 warning", diagnostic)
-			}
-			if len(diagnostic.Evidence) != 1 || !strings.Contains(diagnostic.Evidence[0].Message, tt.reason) {
-				t.Fatalf("evidence = %#v, want reason %q", diagnostic.Evidence, tt.reason)
-			}
-			if strings.Contains(diagnostic.Message, "private-") || strings.Contains(diagnostic.Evidence[0].Message, "private-") {
-				t.Fatalf("diagnostic exposed bind value: %#v", diagnostic)
-			}
-			if diagnostic.Reference != relationTopNReference {
-				t.Fatalf("reference = %q, want %q", diagnostic.Reference, relationTopNReference)
+			if strings.Contains(compiler.Reason, "private-") {
+				t.Fatalf("compiler reason exposed bind value: %#v", compiler)
 			}
 		})
 	}
 }
 
-func TestRelationTopNDiagnosticsAcceptsOptimizedAndNonPaginatedQueries(t *testing.T) {
+func TestRelationTopNQueryShapeDistinguishesOptimizedAndNonPaginatedQueries(t *testing.T) {
 	t.Parallel()
 
-	queries := map[string]interface{ Diagnostics() []check.Diagnostic }{
-		"optimized": relationTopNBenchmarkQuery(),
-		"optimized with deleted": Query[relationTopNSoftVideo]().
-			Where(Has("Links", Equal("GenreID", int64(7)))).
-			OrderBy(Desc("ID")).
-			Limit(20).
-			WithDeleted(),
-		"no limit": Query[relationTopNUnprovenVideo]().
-			Where(Has("Links", Equal("GenreID", int64(7)))).
-			OrderBy(Desc("ID")),
-		"zero limit": Query[relationTopNUnprovenVideo]().
-			Where(Has("Links", Equal("GenreID", int64(7)))).
-			OrderBy(Desc("ID")).
-			Limit(0),
+	tests := []struct {
+		name  string
+		shape func(testing.TB) queryshape.Query
+		want  queryshape.CompilerRewrite
+	}{
+		{name: "optimized", shape: relationTopNShapeForTest(relationTopNBenchmarkQuery()), want: queryshape.CompilerRewriteRelationTopN},
+		{
+			name: "optimized with deleted",
+			shape: relationTopNShapeForTest(Query[relationTopNSoftVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID")).
+				Limit(20).
+				WithDeleted()),
+			want: queryshape.CompilerRewriteRelationTopN,
+		},
+		{
+			name: "no limit",
+			shape: relationTopNShapeForTest(Query[relationTopNUnprovenVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID"))),
+			want: queryshape.CompilerRewriteNone,
+		},
+		{
+			name: "zero limit",
+			shape: relationTopNShapeForTest(Query[relationTopNUnprovenVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID")).
+				Limit(0)),
+			want: queryshape.CompilerRewriteNone,
+		},
 	}
-	for name, query := range queries {
-		if diagnostics := query.Diagnostics(); len(diagnostics) != 0 {
-			t.Fatalf("%s Diagnostics() = %#v, want none", name, diagnostics)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.shape(t).Compiler.Rewrite; got != tt.want {
+				t.Fatalf("compiler rewrite = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func relationTopNShapeForTest[T any](query *SelectQuery[T]) func(testing.TB) queryshape.Query {
+	return func(t testing.TB) queryshape.Query {
+		return queryShapeForTest(t, query)
 	}
 }

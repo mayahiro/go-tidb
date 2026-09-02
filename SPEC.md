@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-01
+- Last updated: 2026-09-02
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -99,8 +99,8 @@ The following decisions apply throughout v0.1:
 13. Raw SQL is an explicit escape hatch without typed relation hydration or
     static query-AST diagnostics. Returned columns may still use model-aware
     scanning.
-14. Offline checks are selected explicitly by application code. Diagnostic
-    reporting performs no source scan, generated registration, configuration
+14. Offline model and schema checks are selected explicitly by application
+    code. They perform no source scan, generated registration, configuration
     discovery, or database access.
 15. Go-source lint is an independent opt-in command. It parses production
     source without loading or executing application packages and reports
@@ -143,9 +143,6 @@ The currently implemented surface provides:
   single-row `Insert`, full or selected-field primary-key update,
   predicate-bounded assignment and same-column increment, primary-key or
   predicate delete, and affected-row results
-- Exact offline statement counts for automatically split bulk insert and
-  upsert, plus static minimum and provable-maximum statement bounds for `All`
-  with collection preloads
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
@@ -153,9 +150,9 @@ The currently implemented surface provides:
 - Context-scoped statement observation and an automatic-color logger with
   argument values excluded by default, explicit bind-value capture, and
   explicit same-session ServerRU collection
-- Operation-scoped debug reports that aggregate completed root, relation,
-  split-bulk, raw, and transaction statement events, with optional ServerRU
-  diagnostic cost kept separate from target cost
+- Structured runtime capture of completed root, relation, split-bulk, raw, and
+  transaction statement events without per-query wrappers, with optional
+  ServerRU diagnostic cost kept separate from target cost
 - SELECT-only execution-plan inspection using TiDB's default row-format
   `EXPLAIN` output
 - Explicit SELECT execution with TiDB's default row-format `EXPLAIN ANALYZE`
@@ -172,12 +169,11 @@ The currently implemented surface provides:
   columns, required database-only columns, Relation target identity,
   many-to-many junction pair uniqueness and insert shape, and deterministic
   collection-relation index prefixes
-- Shared diagnostic data types, immutable active and suppressed reports, and
-  exact-code suppression with a required recorded reason
-- The `tidbgo version` command, `tidbgo check` text or JSON report command,
-  offline `tidbgo analyze` runtime-capture and optional SQL-snapshot index
-  command, deterministic versioned `tidbgo baseline` ServerRU reference
-  command, and offline `tidbgo lint` Go-source command
+- Shared diagnostic data types and offline model and schema checks
+- The `tidbgo version` command, offline `tidbgo analyze` runtime-capture and
+  optional SQL-snapshot index command, deterministic versioned
+  `tidbgo baseline` ServerRU reference command, and offline `tidbgo lint`
+  Go-source command
 
 ## 4. Planned runtime surface
 
@@ -221,33 +217,23 @@ will not automatically execute down migrations.
 The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
 an optional source location, and an optional reference. Offline model checks
-currently use `MOD001` through `MOD007`. Offline typed SELECT checks currently
-use `QRY001` through `QRY007` and never include bind values. Offline physical
-schema compatibility checks use `CMP001` through `CMP014`.
+use `MOD001` through `MOD007`, offline physical schema compatibility checks use
+`CMP001` through `CMP014`, and executed typed-query analysis uses `QRY002`
+through `QRY007` without bind values.
 
-The implemented offline checks cover executable model metadata, ignored and
-likely misplaced tags, primary-key and custom-scalar capabilities, invalid
-typed SELECTs, OFFSET pagination, unordered explicit pagination, leading
-wildcard predicates, relation-filtered TopN fallback, directional model and
-SQL-snapshot compatibility, schema-aware ordered-LIMIT index-prefix coverage,
-and Relation target and junction correctness. Schema-aware query checks attach
-a versioned bind-free fingerprint and do not predict optimizer selection. They
-also warn when deterministic
-`has_many` or `many_to_many` lookups have no structural source-key index
-prefix. They do not require source generation, configuration, or a database
-connection. Terminal-specific unbounded-query detection and raw SQL are not
-inferred from a reusable query builder.
+The implemented offline model and schema checks cover executable model
+metadata, ignored and likely misplaced tags, primary-key and custom-scalar
+capabilities, directional model and SQL-snapshot compatibility, Relation target
+and junction correctness, and deterministic collection-relation index-prefix
+coverage. Application tests call `check.Model` and `check.Schema` directly and
+own their pass/fail policy.
 
-`check.NewReport` applies one fixed policy: active errors fail, while warnings
-and info remain successful. A suppression matches every suppressible
-diagnostic with one exact code, requires a non-empty reason, and remains in the
-report with that reason. Duplicate codes, unused suppressions, and attempts to
-suppress non-suppressible diagnostics are rejected.
-
-`tidbgo check` reads one JSON diagnostic array from standard input or one
-explicit file. It emits deterministic text by default or the complete report
-with `--json`, returns status `1` for active errors, and performs no check
-discovery or database access.
+`tidbgo analyze` and `tidbgo lint` apply one internal reporting policy: active
+errors fail, while warnings and information remain successful. A suppression
+matches every suppressible diagnostic with one exact code, requires a non-empty
+reason, and remains in the output with that reason. Duplicate codes, unused
+suppressions, and attempts to suppress non-suppressible diagnostics are
+rejected.
 
 `tidbgo lint` scans one production Go file or a directory recursively and
 defaults to the current directory. It follows the current build context and
@@ -340,12 +326,12 @@ configuration.
 - Implemented: offline struct metadata, query construction and execution,
   deterministic relation loading, transactions, CRUD, bulk mutations, soft
   deletion, typed raw SQL, statement observation, and same-session ServerRU
-  reading, operation debug reports, SELECT-only `EXPLAIN`, and explicit
+  reading, SELECT-only `EXPLAIN`, and explicit
   SELECT-only `EXPLAIN ANALYZE` with returned-plan diagnostics, observer-only
   structured runtime capture, automatic captured-query diagnostics,
   SQL-snapshot index checks, offline runtime N+1 analysis, and versioned
   ServerRU baseline generation
-- Implemented: offline struct-first model intent checks, typed SELECT builder
+- Implemented: offline struct-first model intent checks, executed typed-query
   diagnostics, TiDB CREATE TABLE snapshot parsing, directional Go-model
   compatibility checks, Relation target identity, pure-junction correctness,
   deterministic collection-relation index-prefix checks, and conservative

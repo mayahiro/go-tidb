@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -27,7 +29,7 @@ func TestRuntimeCaptureRecordsTypedQueryWithoutBindValues(t *testing.T) {
 	parent := WithStatementObserver(context.Background(), func(event StatementEvent) {
 		parentEvent = event
 	}, IncludeStatementArguments())
-	ctx := WithRuntimeCapture(parent, capture, IncludeStatementArguments())
+	ctx := WithRuntimeCapture(parent, capture)
 
 	values, err := Query[scanModel]().
 		Select("ID", "Name").
@@ -75,7 +77,7 @@ func TestRuntimeCaptureRecordsTypedQueryWithoutBindValues(t *testing.T) {
 	}
 }
 
-func TestRuntimeCaptureRecordsPreloadExecutionWithoutApplicationEstimate(t *testing.T) {
+func TestRuntimeCaptureRecordsPreloadExecution(t *testing.T) {
 	state := &preloadTestState{
 		responses: []*preloadTestResponse{
 			{
@@ -119,7 +121,7 @@ func TestRuntimeCaptureRecordsPreloadExecutionWithoutApplicationEstimate(t *test
 	}
 }
 
-func TestRuntimeCaptureRecordsAutomaticBulkSplitWithoutStatementCountCall(t *testing.T) {
+func TestRuntimeCaptureRecordsAutomaticBulkSplit(t *testing.T) {
 	values := make([]bulkMutationModel, maxMutationParameters/2+1)
 	for index := range values {
 		values[index] = bulkMutationModel{ID: int64(index + 1), Value: int64(index + 10)}
@@ -188,25 +190,6 @@ func TestRuntimeCaptureWriterFailureDoesNotReplaceExecutionResult(t *testing.T) 
 	}
 	if err := capture.Err(); !errors.Is(err, want) {
 		t.Fatalf("RuntimeCapture.Err() = %v, want %v", err, want)
-	}
-}
-
-func TestDebugPreservesInheritedRuntimeCapture(t *testing.T) {
-	var output bytes.Buffer
-	capture := NewRuntimeCapture(&output)
-	ctx := WithRuntimeCapture(context.Background(), capture)
-	executor := &recordingExecExecutor{result: mutationResult{rowsAffected: 1}}
-
-	_, err := Debug(ctx, func(debugContext context.Context) error {
-		_, execErr := RawExec(debugContext, executor, "DELETE FROM counters WHERE id = ?", int64(7))
-		return execErr
-	})
-	if err != nil {
-		t.Fatalf("Debug() error = %v", err)
-	}
-	records := decodeRuntimeCaptureForTest(t, &output)
-	if len(records) != 1 || records[0].Source != runtimecapture.SourceRaw || records[0].ScopeID != 1 {
-		t.Fatalf("runtime records = %#v", records)
 	}
 }
 
@@ -344,11 +327,19 @@ func BenchmarkSelectQueryAll100RowsWithRuntimeCapture(b *testing.B) {
 
 func decodeRuntimeCaptureForTest(t testing.TB, output *bytes.Buffer) []runtimecapture.Record {
 	t.Helper()
-	records, err := runtimecapture.Decode(bytes.NewReader(output.Bytes()))
-	if err != nil {
-		t.Fatalf("runtimecapture.Decode() error = %v\nartifact: %s", err, output.String())
+	records := make([]runtimecapture.Record, 0)
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	for {
+		var record runtimecapture.Record
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			return records
+		}
+		if err != nil {
+			t.Fatalf("decode runtime capture record: %v\nartifact: %s", err, output.String())
+		}
+		records = append(records, record)
 	}
-	return records
 }
 
 type runtimeCaptureFailingWriter struct {

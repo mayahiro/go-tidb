@@ -27,7 +27,6 @@ Run the current command directly from the checkout:
 
 ```sh
 go run ./cmd/tidbgo version
-go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
 go run ./cmd/tidbgo lint ./examples/starter-app
 ```
 
@@ -43,11 +42,11 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `orm`: offline query and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
-- `check`: shared diagnostic data types, reasoned reports and suppression, and
-  offline model, query, and physical schema checks
+- `check`: shared diagnostic data types and offline model and physical schema
+  checks
 - `migrate`: reserved boundary for standalone migration tooling
 - `cmd/tidbgo`: CLI entry point
-- `internal`: non-public logging and redaction support
+- `internal`: non-public compiler, analysis, logging, and redaction support
 - `examples`: runnable public API examples
 - `integration`: independent module for actual TiDB Cloud Starter verification
 
@@ -83,15 +82,13 @@ consume no actual RU. `BenchmarkParse` includes lexical and catalog
 construction work. `BenchmarkSchema` reuses a parsed catalog and cached model
 metadata.
 
-## Query diagnostic client benchmarks
+## Query analysis client benchmarks
 
-Measure the existing builder-only checks and the schema-aware index-prefix
-check with a pre-parsed catalog:
+Measure query-shape compilation, neutral query checks, schema-aware
+index-prefix checks, runtime artifact analysis, and ServerRU comparison:
 
 ```sh
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnostics$' -benchmem -count=5
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsWithSchema$' -benchmem -count=5
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryDiagnosticsSchemaComparison$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryShapeIndexDiagnostics$' -benchmem -count=5
 go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
@@ -149,22 +146,11 @@ terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 `AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
 rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
-ServerRU reads, plus operation debug reports spanning root and preload SELECTs
+ServerRU reads, plus statement observation spanning root and preload SELECTs
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
-
-## Debug report client benchmark
-
-Measure the client-side cost of grouping two completed statement events:
-
-```sh
-go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
-```
-
-This benchmark uses a local mutation executor. It excludes the MySQL driver,
-network calls, TiDB execution, and actual RU consumption
 
 ## EXPLAIN client benchmark
 

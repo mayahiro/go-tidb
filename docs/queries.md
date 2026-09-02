@@ -35,36 +35,23 @@ field in struct declaration order. It never uses `SELECT *`. `Select` accepts
 Go field names, not physical column names, and preserves the requested scan
 order. Computed fields are available only through aliased `Raw[T]` results.
 
-## Check a query shape offline
+## Analyze executed query shapes
 
-Call `Diagnostics` on the same builder to apply static query-shape checks:
+RuntimeCapture records the bind-free QueryShape of executed typed queries
+after it is installed once at a request, job, or analysis-test boundary.
+`tidbgo analyze` applies query-pattern rules offline without application-owned
+query registration:
 
-```go
-diagnostics := query.Diagnostics()
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-`Diagnostics` applies the same validation as `Build`, performs no database
-I/O, and does not execute custom `driver.Valuer` implementations. Diagnostics
-never include predicate or cursor values.
-
-When a parsed physical snapshot is available, apply the same checks and the
-high-confidence index-prefix check in one call:
-
-```go
-catalog, err := schema.Parse(schemaSQL)
-if err != nil {
-    return err
-}
-diagnostics := query.DiagnosticsWithSchema(catalog)
-```
-
-`DiagnosticsWithSchema` remains fully offline. When it emits `QRY006` or
-`QRY007`, it records a versioned query fingerprint as evidence without
-including bind or pagination values.
+The schema-aware form records a versioned query fingerprint as evidence
+without including bind or pagination values.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
-| `QRY001` | error | Model metadata or the SELECT builder is invalid |
 | `QRY002` | warning | A positive OFFSET skips rows and its cost grows as the offset grows |
 | `QRY003` | warning | An explicit positive LIMIT has no ORDER BY |
 | `QRY004` | warning | `Contains` or `HasSuffix` builds a LIKE pattern with a leading wildcard |
@@ -72,14 +59,14 @@ including bind or pagination values.
 | `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
 | `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
-`QRY001` and `QRY006` are not suppressible because the query or its requested
-schema-aware check cannot be completed. The other diagnostics describe valid
-query shapes and set `Suppressible` to true. TiDB's
+`QRY006` is not suppressible because the requested schema-aware check cannot
+be completed. The other diagnostics describe valid query shapes and set
+`Suppressible` to true. TiDB's
 [pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
 recommends ordering paginated results and notes the increasing compute cost of
 larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
-Reasoned report and suppression behavior is documented in the [offline
-diagnostic report guide](checks.md).
+Reasoned report and suppression behavior is documented in the [analysis
+guide](checks.md).
 
 `Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
 matching behavior is defined by TiDB's
@@ -102,10 +89,8 @@ specific physical plan because statistics, data distribution, collation, and
 optimizer behavior remain connected concerns. Use `Explain` or
 `ExplainAnalyze` to verify the actual access path before changing an index.
 
-The same builder can be used with `All`, `First`, `Only`, `Exists`, `Count`, or
-plan terminals, so this method checks only state explicitly stored on the
-builder. It does not report terminal-implied limits or an unbounded `All` call.
-Raw SQL is outside the typed query AST and is not inspected.
+Runtime rules inspect the QueryShape attached to the executed statement. Raw
+SQL is outside the typed query AST and is not inspected.
 
 The `q1:` fingerprint identifies the bind-free logical and compiler shape. It
 changes with projection, predicate structure, ordering, preload, or compiler
@@ -472,33 +457,8 @@ statements: the parent, the Orders SELECT, and the Roles SELECT.
 `Preload("Orders.User")` executes two: the parent and an Orders SELECT with User
 joined inline.
 
-Use `EstimateAllStatements` only when a dedicated test or offline tool needs
-statement-count bounds for this exact `All` builder:
-
-```go
-query := orm.Query[User]().
-    Preload("Orders").
-    Limit(10_000)
-
-estimate, err := query.EstimateAllStatements()
-```
-
-`estimate.Minimum` includes the root SELECT and is one once a valid execution
-starts. `estimate.Maximum` is meaningful when `MaximumKnown` is true, and
-`estimate.Exact()` reports whether the two bounds are equal. A positive root
-`Limit` bounds direct keyed preload batches. An unrestricted root collection
-adds at most one complete-source statement. Empty results, NULL keys, and
-duplicate keys can reduce the actual count. A collection can contain an
-unbounded number of targets, so a further nested collection makes the maximum
-unknown unless the parent row bound is already zero. An unbounded constrained
-root collection is unknown for the same reason. The estimate performs no I/O,
-calls no custom `driver.Valuer`, and excludes logging, diagnostics, EXPLAIN,
-and ServerRU queries. It models `All` only; `First` and `Only` replace the
-builder limit and are not covered by this method.
-
-Production repositories do not need a parallel estimate wrapper. Runtime
-capture records the actual root and preload statements automatically after one
-observer is installed at the request or job boundary.
+Runtime capture records actual root, inline, preload, and split-batch statement
+behavior after it is installed once at a request or job boundary.
 
 A keyed pure many-to-many SELECT reads the junction source key first as
 internal bookkeeping, then every mapped scalar target field:
@@ -543,7 +503,7 @@ executes as one statement and does not need a cross-statement snapshot.
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, `EstimateAllStatements`, `Explain`, `ExplainAnalyze`, direct and pure
+`Count`, `Explain`, `ExplainAnalyze`, direct and pure
 many-to-many relation predicates, and nested direct or pure many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.

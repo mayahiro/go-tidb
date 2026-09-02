@@ -98,10 +98,6 @@ type statementObserverContextValue struct {
 	runtimeScope   *statementRuntimeScope
 }
 
-func (value statementObserverContextValue) hasOption(option statementObserverContextOptions) bool {
-	return value.options&option != 0
-}
-
 type statementRuntimeScope struct {
 	id       uint64
 	sequence atomic.Uint64
@@ -150,6 +146,17 @@ func (collectServerRUOption) applyStatementObserver(value *statementObserverCont
 	value.options |= statementObserverCollectServerRU
 }
 
+func (collectServerRUOption) applyRuntimeCapture(value *statementObserverContextValue) {
+	value.options |= statementRuntimeCollectServerRU
+}
+
+// ServerRUOption is the shared option returned by CollectServerRU for statement
+// observation and structured runtime capture.
+type ServerRUOption interface {
+	StatementObserverOption
+	RuntimeCaptureOption
+}
+
 // CollectServerRU enables high-cost same-session ServerRU collection for
 // recognized DML statements.
 //
@@ -157,8 +164,8 @@ func (collectServerRUOption) applyStatementObserver(value *statementObserverCont
 // @@tidb_last_query_info round trip. A *sql.DB executor is pinned internally
 // for the target statement and its diagnostic query. The target result is
 // never replaced by a collection failure. The option can configure
-// WithStatementObserver, WithRuntimeCapture, or Debug.
-func CollectServerRU() StatementObserverOption {
+// WithStatementObserver or WithRuntimeCapture.
+func CollectServerRU() ServerRUOption {
 	return collectServerRUOption{}
 }
 

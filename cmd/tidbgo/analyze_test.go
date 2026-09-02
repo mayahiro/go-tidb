@@ -12,7 +12,7 @@ import (
 
 	cli "github.com/mayahiro/nagicli-go"
 
-	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/diagnosticreport"
 	"github.com/mayahiro/go-tidb/internal/queryshape"
 	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 )
@@ -130,7 +130,7 @@ func TestApplicationAnalyzeFailsOnServerRURegression(t *testing.T) {
 		"--baseline",
 		"baseline.json",
 	)
-	if got, want := result.Status(), exitCheckFailure; got != want {
+	if got, want := result.Status(), exitDiagnosticFailure; got != want {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
 	stdout := string(result.Stdout())
@@ -192,7 +192,7 @@ func TestApplicationAnalyzeFailsWhenServerRUComparisonCoverageChanges(t *testing
 		"--baseline",
 		"baseline.json",
 	)
-	if got, want := result.Status(), exitCheckFailure; got != want {
+	if got, want := result.Status(), exitDiagnosticFailure; got != want {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
 	stdout := string(result.Stdout())
@@ -393,7 +393,7 @@ func TestApplicationAnalyzeFailsWhenSchemaCannotDescribeCapturedAccess(t *testin
 		"--schema",
 		"schema.sql",
 	)
-	if got, want := result.Status(), exitCheckFailure; got != want {
+	if got, want := result.Status(), exitDiagnosticFailure; got != want {
 		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
 	}
 	stdout := string(result.Stdout())
@@ -502,10 +502,13 @@ func TestApplicationAnalyzeReportsMissingFileWithoutResolvedPath(t *testing.T) {
 func TestRuntimeAnalysisWritersPropagateErrors(t *testing.T) {
 	t.Parallel()
 
-	analysis := runtimecapture.Analyze(nil)
-	report, err := check.NewReport(analysis.Diagnostics)
+	analysis, err := runtimecapture.AnalyzeReader(strings.NewReader(""))
 	if err != nil {
-		t.Fatalf("check.NewReport() error = %v", err)
+		t.Fatalf("AnalyzeReader() error = %v", err)
+	}
+	report, err := diagnosticreport.New(analysis.Diagnostics)
+	if err != nil {
+		t.Fatalf("diagnosticreport.New() error = %v", err)
 	}
 	want := errors.New("write failed")
 	writer := failingWriter{err: want}

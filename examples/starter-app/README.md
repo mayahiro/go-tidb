@@ -22,9 +22,8 @@ It demonstrates the current struct-first foundation:
 - Ordinary pointers and slices for direct and many-to-many relations
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
-- Offline query-shape diagnostics without exposing bind values
-- Offline query-to-index diagnostics with a stable bind-free fingerprint
-- Application-owned diagnostic JSON and deterministic `tidbgo check` reports
+- Executed query-shape and query-to-index diagnostics through RuntimeCapture
+  and `tidbgo analyze`, without bind values
 - Offline source projection analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
@@ -36,15 +35,13 @@ It demonstrates the current struct-first foundation:
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
-- Offline exact bulk statement counts and bounded `All` preload statement
-  estimates
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
 - Context-scoped statement logging with automatic terminal colors and no bind
   argument values
-- Operation-scoped debug reports that aggregate root and relation statements
-  without additional database calls
+- Structured runtime capture of actual root, relation, and split-bulk
+  statements without per-query wrappers
 - SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit SELECT execution with TiDB runtime-plan inspection and diagnostics
   over the returned rows without another database call
@@ -75,13 +72,12 @@ The report includes recognized query and uncertainty counts even when no
 projection warning is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
-connection, and `CheckRecentOrdersQuery` applies static query-shape diagnostics
-to the same builder. `BuildRecentClipsInGenreQuery` demonstrates natural
+connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows;
-`CheckRecentClipsInGenreQuery` reports an `EXISTS` fallback if that shape stops
-being eligible, and `CheckRecentClipsInGenreQueryWithSchema` verifies the
-association prefix `(genre_id, clip_id)` against a parsed snapshot.
+compiler filters and limits `clip_genres` before loading root rows. When the
+connected form is captured, `tidbgo analyze --schema` reports an `EXISTS`
+fallback or a missing association index prefix without another application
+wrapper.
 `FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
@@ -162,18 +158,12 @@ diagnostics := runtimePlan.Diagnostics()
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
 its TiDB-reported ServerRU immediately afterward when a single manual sample is
 more appropriate.
-`CheckModels` explicitly lists the application-owned model types and returns
-their diagnostics without source generation, configuration, or a database
-connection.
-The [`cmd/check`](cmd/check) example parses a self-contained association schema
-snapshot and combines model, query, and query-index diagnostics into one JSON
-array that can be piped directly to `tidbgo check`.
-`CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
-checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability,
-required database-only columns, relation targets, the pure junction, and
-collection lookup index prefixes entirely offline. The snapshot includes the
-declared `orders`, `roles`, and `user_roles` relation tables. The omitted
-database-managed `created_at` column is accepted because it has a default.
+The example tests call `check.Model` for each application-owned model and call
+`check.Schema` with a self-contained TiDB `CREATE TABLE` snapshot. These checks
+cover mapped tables, columns, primary keys, `AUTO_RANDOM`, nullability, required
+database-only columns, relation targets, the pure junction, and collection
+lookup index prefixes entirely offline. The omitted database-managed
+`created_at` column is accepted because it has a default.
 
 Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
@@ -186,5 +176,5 @@ writes and raw SQL. The [statement observation guide](../../docs/observability.m
 documents query logging and custom observers.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
-The [offline diagnostic report guide](../../docs/checks.md) documents CLI
-input, fixed exit statuses, and reason-carrying suppression.
+The [analysis guide](../../docs/checks.md) documents each evidence boundary,
+CLI exit statuses, and reason-carrying suppression for `analyze` and `lint`.

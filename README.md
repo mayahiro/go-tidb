@@ -7,26 +7,26 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
-[Offline checks](docs/checks.md) | [Statement observation](docs/observability.md) |
+[Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
 [Development](docs/development.md)
 
 ## Available features
 
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction
-- Reasoned diagnostic suppression and deterministic text or JSON CLI reports
+- Reasoned suppression and deterministic text or JSON reports for runtime and
+  source analysis
 - Offline Go-source projection analysis with explicit coverage statistics
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
 - Single and automatically split bulk insert and upsert
-- Offline statement-count planning for bulk writes and `All` preloads
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Context-scoped statement observation with automatic terminal colors
-- Observer-only structured runtime capture and offline N+1 analysis
-- Operation-scoped debug reports for multi-statement ORM calls
+- Observer-only structured runtime capture of actual root, preload, and
+  split-bulk statements, with offline N+1 analysis
 - SELECT-only TiDB execution-plan inspection through the typed query builder
 - Explicit SELECT execution with actual TiDB runtime-plan inspection and
   diagnostics over the returned rows
@@ -56,7 +56,7 @@ connection.
 go get github.com/mayahiro/go-tidb
 ```
 
-Install the `tidbgo` command separately when CLI checks are needed:
+Install the `tidbgo` command separately when analysis commands are needed:
 
 ```sh
 go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
@@ -195,26 +195,18 @@ query := orm.Query[Order]().
     Limit(100)
 
 sqlText, arguments, err := query.Build()
-diagnostics := query.Diagnostics()
-schemaDiagnostics := query.DiagnosticsWithSchema(catalog)
 ```
 
 `Build` does not access a database or execute custom `driver.Valuer`
 implementations. Values remain separate bind arguments, and physical
 identifiers come only from validated model metadata.
 
-`Diagnostics` is also offline. It converts build failures to `QRY001` and
-reports valid OFFSET pagination, unordered explicit pagination,
-leading-wildcard predicates, and relation-filtered TopN shapes that cannot use
-the relation-first compiler as `QRY002` through `QRY005` without including bind
-values.
-
-`DiagnosticsWithSchema` adds `QRY006` when the supplied parsed snapshot cannot
-describe an analyzed access and `QRY007` when a positive-LIMIT ordered access
-has no matching default-usable direct-column index prefix. It remains offline.
-Emitted schema-aware diagnostics include a stable bind-free query fingerprint
-as evidence. Index presence does not predict the optimizer's selected plan;
-verify it with `Explain` or `ExplainAnalyze`.
+Runtime capture applies `QRY002` through `QRY005` automatically to executed
+typed query shapes. Passing an offline schema snapshot to `tidbgo analyze`
+adds `QRY006` and `QRY007` index checks. Unexecuted builders currently receive
+only `Build` validation; source-wide query-pattern analysis remains planned.
+Index presence does not predict the optimizer's selected plan, so verify it
+with `Explain` or `ExplainAnalyze`.
 
 Execute the same query only when an existing executor is passed explicitly:
 
@@ -246,10 +238,10 @@ admins, err := orm.Query[User]().
 `EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
 predicates in a positive conjunctive context. For a narrow, metadata-proven
 `has_many` + root-primary-key order + positive-limit shape, it instead applies
-the target filter and Limit before loading root rows. `QRY005` explains why an
-ordered, limited collection filter falls back to `EXISTS`, while `QRY007`
-reports a missing association index prefix when a schema snapshot is supplied.
-Pass target
+the target filter and Limit before loading root rows. Runtime analysis emits
+`QRY005` when an executed ordered, limited collection filter falls back to
+`EXISTS`, while schema-aware runtime analysis emits `QRY007` for a missing
+association index prefix. Pass target
 predicates to require a matching related row, or omit them for existence only.
 Relation and target field names are exported Go field names. `Build` validates
 and compiles them entirely offline. See the [scalar query
@@ -288,12 +280,6 @@ when multiple statements must share one transaction snapshot, or use the
 `*sql.Tx` supplied to a `Transaction` callback.
 `PreloadWithDeleted` includes logically deleted targets for only the requested
 relation path. Arbitrary relation-specific predicates remain unavailable.
-
-`EstimateAllStatements` validates the same builder offline and returns the
-minimum statement count plus a maximum when the query shape proves one. It
-includes the root SELECT and collection preloads but no diagnostic or ServerRU
-queries. Inline joins add no statements. The maximum remains unknown when an
-unbounded keyed collection or nested collection cardinality cannot be proven.
 
 ## Mutations and raw SQL
 
@@ -335,10 +321,8 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 
 `InsertMany(values)` and `UpsertMany(values)` accept either `[]Model` or
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
-limit, while `Build` continues to represent one executable statement.
-`StatementCount` remains available for tests and offline capacity tooling, but
-normal application operations do not need a parallel diagnostic wrapper.
-Runtime capture records the actual split automatically.
+limit, while `Build` continues to represent one executable statement. Runtime
+capture records the actual split automatically.
 Pass a `*sql.Tx`, created directly or supplied to a `Transaction` callback,
 when every batch must be atomic. `Transaction` uses default `database/sql`
 options and does not retry its callback. Every typed mutation supports offline
@@ -456,8 +440,7 @@ Missing fingerprints or unusable measurements produce `RU002`. Both are
 non-suppressible errors; equality with the effective limit passes.
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
-for scope, cost, writer-error, retention, and optional one-operation `Debug`
-details.
+for scope, cost, writer-error, and retention details.
 
 ## TiDB diagnostics
 
@@ -544,28 +527,6 @@ guide](docs/observability.md#serverru) for the complete boundary.
 
 ## CLI
 
-Report an application-owned JSON diagnostic array from standard input or one
-explicit file:
-
-```sh
-go run ./examples/starter-app/cmd/check | tidbgo check
-tidbgo check diagnostics.json --json
-```
-
-Active errors return status `1`; warnings and info do not fail the command.
-Suppressions require an exact code and reason, remain visible in the report,
-and reject non-suppressible or unused entries:
-
-```sh
-go run ./examples/starter-app/cmd/check | \
-  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
-```
-
-The application check command explicitly selects model types, query builders,
-and schema snapshots. `tidbgo check` performs no source scan, code generation,
-configuration discovery, or database access. See the [offline diagnostic
-report guide](docs/checks.md)
-
 Analyze a structured runtime artifact without registering application queries
 or connecting to a database:
 
@@ -604,8 +565,8 @@ execute application code, load packages, connect to a database, or modify
 source. `SRC001` is emitted only when every use of an `All`, `First`, or `Only`
 result is understood within the same function. Returned, passed, aliased,
 preloaded, or otherwise uncertain flows are counted as `uncertain` and are not
-guessed. Every report includes coverage statistics. See the [offline
-diagnostic report guide](docs/checks.md#go-source-projection-analysis)
+guessed. Every report includes coverage statistics. See the [analysis
+guide](docs/checks.md#go-source-analysis)
 
 Print version information with:
 
@@ -624,8 +585,6 @@ build time.
 - Typed builders keep values separate from SQL text as bind arguments
 - Model-derived identifiers are validated before being written into SQL
 - The built-in statement logger excludes argument values by default
-- Debug reports exclude argument values by default but retain SQL templates and
-  errors
 - Runtime capture excludes bind values but retains SQL templates and errors;
   protect the artifact destination and retention
 - Enabling `IncludeStatementArguments` can expose credentials, tokens, or
@@ -649,6 +608,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
+- `QRY002` through `QRY007` currently analyze executed typed queries captured
+  by RuntimeCapture. Source lint does not yet apply them to unexecuted builders.
 - No database connection constructor, bundled protocol driver, migration
   application API, or live-schema introspection API is available yet.
 

@@ -12,6 +12,16 @@ import (
 	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
+const codeRelationTopN = querycheck.CodeRelationTopNFallback
+
+func Analyze(records []Record, options ...AnalysisOption) Analysis {
+	analyzer := newAnalyzer(options...)
+	for index := range records {
+		analyzer.add(records[index])
+	}
+	return analyzer.finish()
+}
+
 func TestAnalyzeReportsRepeatedRootSelectAndSkipsPreloadBatches(t *testing.T) {
 	records := []Record{
 		runtimeAnalysisRecord(1, SourceTypedSelect, "q1:users"),

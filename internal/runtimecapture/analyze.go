@@ -18,7 +18,6 @@ const (
 	codeIncompleteMetadata = "RUN001"
 	codePossibleNPlusOne   = "RUN002"
 	codeServerRUFailure    = "RUN003"
-	codeRelationTopN       = querycheck.CodeRelationTopNFallback
 )
 
 // Statistics summarizes the captured execution set without claiming database
@@ -319,15 +318,6 @@ func (analyzer *analyzer) finish() Analysis {
 		}
 	}
 	return analyzer.analysis
-}
-
-// Analyze produces offline diagnostics from records without database access.
-func Analyze(records []Record, options ...AnalysisOption) Analysis {
-	analyzer := newAnalyzer(options...)
-	for index := range records {
-		analyzer.add(records[index])
-	}
-	return analyzer.finish()
 }
 
 // AnalyzeReader streams a versioned runtime artifact into offline analysis

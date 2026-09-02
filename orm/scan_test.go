@@ -4,10 +4,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mayahiro/go-tidb/model"
 )
 
 var (
@@ -53,9 +56,9 @@ func (row scanValuesRow) Scan(destinations ...any) error {
 func TestRowDecoderScansMappedFieldsInDescriptorOrder(t *testing.T) {
 	t.Parallel()
 
-	plan, err := scanPlanFor(reflect.TypeFor[scanModel]())
+	plan, err := scanPlanForTest(reflect.TypeFor[scanModel]())
 	if err != nil {
-		t.Fatalf("scanPlanFor() error = %v", err)
+		t.Fatalf("scanPlanForTest() error = %v", err)
 	}
 	if got, want := plan.columns, []string{"id", "name", "nickname", "amount", "created_at"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("columns = %#v, want %#v", got, want)
@@ -95,22 +98,6 @@ func TestRowDecoderScansMappedFieldsInDescriptorOrder(t *testing.T) {
 	}
 }
 
-func TestScanPlanIsCachedByNonPointerModelType(t *testing.T) {
-	t.Parallel()
-
-	valuePlan, err := scanPlanFor(reflect.TypeFor[scanModel]())
-	if err != nil {
-		t.Fatalf("scanPlanFor(value) error = %v", err)
-	}
-	pointerPlan, err := scanPlanFor(reflect.TypeFor[*scanModel]())
-	if err != nil {
-		t.Fatalf("scanPlanFor(pointer) error = %v", err)
-	}
-	if valuePlan != pointerPlan {
-		t.Fatal("value and pointer model types returned different scan plans")
-	}
-}
-
 type writeOnlyValue struct {
 	text string
 }
@@ -126,18 +113,18 @@ type writeOnlyModel struct {
 func TestScanPlanRejectsWriteOnlyCustomFields(t *testing.T) {
 	t.Parallel()
 
-	_, err := scanPlanFor(reflect.TypeFor[writeOnlyModel]())
+	_, err := scanPlanForTest(reflect.TypeFor[writeOnlyModel]())
 	if err == nil || !strings.Contains(err.Error(), "writeOnlyModel.Value cannot be read") {
-		t.Fatalf("scanPlanFor() error = %v", err)
+		t.Fatalf("scanPlanForTest() error = %v", err)
 	}
 }
 
 func TestRowDecoderRejectsInvalidInputsAndWrapsScanErrors(t *testing.T) {
 	t.Parallel()
 
-	plan, err := scanPlanFor(reflect.TypeFor[scanModel]())
+	plan, err := scanPlanForTest(reflect.TypeFor[scanModel]())
 	if err != nil {
-		t.Fatalf("scanPlanFor() error = %v", err)
+		t.Fatalf("scanPlanForTest() error = %v", err)
 	}
 	decoder := plan.newDecoder()
 	validRow := scanValuesRow{scan: func([]any) error { return nil }}
@@ -164,4 +151,16 @@ func TestRowDecoderRejectsInvalidInputsAndWrapsScanErrors(t *testing.T) {
 			t.Fatalf("destination %d retained target = %#v", index, destination)
 		}
 	}
+}
+
+func scanPlanForTest(modelType reflect.Type) (*scanPlan, error) {
+	descriptor, err := model.DescribeType(modelType)
+	if err != nil {
+		return nil, fmt.Errorf("orm: describe row model: %w", err)
+	}
+	fields := baseTableFields(descriptor)
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("orm: row model %s has no base-table fields", descriptor.Name())
+	}
+	return compileScanPlanFields(descriptor, fields)
 }

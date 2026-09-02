@@ -611,8 +611,8 @@ func TestTiDBCloudStarter(t *testing.T) {
 	t.Run("statement observation", func(t *testing.T) {
 		testStatementObservation(t, ctx, database, dsn)
 	})
-	t.Run("debug report", func(t *testing.T) {
-		testDebugReport(t, ctx, database, dsn)
+	t.Run("statement observer", func(t *testing.T) {
+		testStatementObserver(t, ctx, database, dsn)
 	})
 	t.Run("same-session ServerRU", func(t *testing.T) {
 		testServerRU(t, ctx, database, dsn)
@@ -1332,9 +1332,6 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
 		OrderBy(orm.Desc("ID")).
 		Limit(20)
-	if diagnostics := query.Diagnostics(); len(diagnostics) != 0 {
-		t.Fatalf("relation TopN diagnostics = %#v, want none", diagnostics)
-	}
 	sqlText, _, err := query.Build()
 	if err != nil {
 		t.Fatalf("build relation TopN query: %v", err)
@@ -1887,43 +1884,41 @@ func testStatementObservation(t *testing.T, ctx context.Context, database *sql.D
 	}
 }
 
-func testDebugReport(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
+func testStatementObserver(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
 	t.Helper()
 
-	var user starterUser
-	report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-		var queryErr error
-		user, queryErr = orm.Query[starterUser]().
-			Select("ID", "Email").
-			Preload("Orders").
-			Where(orm.Equal("ID", int64(1))).
-			Only(debugContext, database)
-		return queryErr
+	events := make([]orm.StatementEvent, 0, 2)
+	observedContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+		events = append(events, event)
 	})
+	startedAt := time.Now()
+	user, err := orm.Query[starterUser]().
+		Select("ID", "Email").
+		Preload("Orders").
+		Where(orm.Equal("ID", int64(1))).
+		Only(observedContext, database)
+	duration := time.Since(startedAt)
 	if err != nil {
-		fatalDatabaseError(t, dsn, "debug a user and orders preload", err)
+		fatalDatabaseError(t, dsn, "observe a user and orders preload", err)
 	}
 	if user.ID != 1 || len(user.Orders) != 2 {
-		t.Fatalf("debug report result = %#v", user)
+		t.Fatalf("observed query result = %#v", user)
 	}
-	if report.StartedAt.IsZero() || report.Duration <= 0 || report.StatementDuration <= 0 || report.Duration < report.StatementDuration {
-		t.Fatalf("debug report timing = %#v", report)
+	if len(events) != 2 {
+		t.Fatalf("observed statement count = %d, want 2: %#v", len(events), events)
 	}
-	if len(report.Statements) != 2 {
-		t.Fatalf("debug report statement count = %d, want 2: %#v", len(report.Statements), report.Statements)
-	}
-	if !strings.Contains(report.Statements[0].SQL, "FROM `tidbgo_it_users`") || !strings.Contains(report.Statements[1].SQL, "FROM `tidbgo_it_orders`") {
-		t.Fatalf("debug report SQL = %q, %q", report.Statements[0].SQL, report.Statements[1].SQL)
+	if !strings.Contains(events[0].SQL, "FROM `tidbgo_it_users`") || !strings.Contains(events[1].SQL, "FROM `tidbgo_it_orders`") {
+		t.Fatalf("observed SQL = %q, %q", events[0].SQL, events[1].SQL)
 	}
 	var statementDuration time.Duration
-	for index, event := range report.Statements {
+	for index, event := range events {
 		statementDuration += event.Duration
 		if event.Operation != orm.StatementSelect || event.ArgumentCount == 0 || event.Arguments != nil || event.Error != nil {
-			t.Fatalf("debug report statement %d = %#v", index, event)
+			t.Fatalf("observed statement %d = %#v", index, event)
 		}
 	}
-	if report.StatementDuration != statementDuration {
-		t.Fatalf("debug report statement duration = %s, want %s", report.StatementDuration, statementDuration)
+	if duration <= 0 || statementDuration <= 0 || duration < statementDuration {
+		t.Fatalf("observed timing duration = %s, statement duration = %s", duration, statementDuration)
 	}
 }
 

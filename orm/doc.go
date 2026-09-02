@@ -3,19 +3,14 @@
 //
 // Query.Build compiles SQL offline. All, First, Only, Exists, and Count perform
 // I/O only through an explicitly supplied database/sql executor. Has compiles
-// relation existence conditions without implicit loading. Diagnostics checks
-// a typed builder offline, while DiagnosticsWithSchema also compares clear
-// ordered LIMIT accesses with a parsed physical index snapshot.
-// EstimateAllStatements bounds the root and collection statements for an All
-// terminal without database access.
+// relation existence conditions without implicit loading.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and pure many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
 // collections loaded once and constrained collections loaded in bounded
 // parameter batches. Insert, automatically bounded InsertMany, Upsert,
 // UpsertMany, Update, UpdateWhere, Delete, and DeleteWhere provide typed model
-// writes. Bulk StatementCount methods expose the exact automatic split count
-// offline. Set and Increment provide safe conditional-update assignments.
+// writes. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many
 // junction writes. Transaction groups application-defined work using a
 // concrete *sql.Tx without retrying it. Raw provides model-aware result
@@ -25,11 +20,10 @@
 // actual typed queries, preloads, and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an
 // explicit high-cost observer option that pins pooled statements as needed and
-// keeps diagnostic cost separate from target cost. Debug groups every statement
-// completed by one application operation without adding database I/O by
-// default. Explain inspects the TiDB execution plan of a typed SELECT
-// without executing it, and ExplainAnalyze explicitly executes that SELECT to
-// collect runtime plan data. ExplainAnalyzePlan.Diagnostics checks the returned
+// keeps diagnostic cost separate from target cost. Explain inspects the TiDB
+// execution plan of a typed SELECT without executing it, and ExplainAnalyze
+// explicitly executes that SELECT to collect runtime plan data.
+// ExplainAnalyzePlan.Diagnostics checks the returned
 // plan without another database statement. LastServerRU reads TiDB's ServerRU
 // for one completed DML statement from the same *sql.Conn or active *sql.Tx.
 // The package intentionally does not expose runtime DDL operations.

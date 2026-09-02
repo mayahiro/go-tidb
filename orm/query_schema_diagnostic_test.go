@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/querycheck"
 	"github.com/mayahiro/go-tidb/model"
 	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
@@ -17,7 +18,7 @@ type queryIndexModel struct {
 	Title      string
 }
 
-func TestSelectQueryDiagnosticsWithSchemaMatchesRootIndexPrefixes(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsMatchRootIndexPrefixes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -70,28 +71,28 @@ func TestSelectQueryDiagnosticsWithSchemaMatchesRootIndexPrefixes(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			catalog := parseQueryIndexCatalog(t, test.schema)
-			if diagnostics := test.query.DiagnosticsWithSchema(catalog); len(diagnostics) != 0 {
-				t.Fatalf("DiagnosticsWithSchema() = %#v, want none", diagnostics)
+			if diagnostics := queryIndexDiagnosticsForTest(t, test.query, catalog); len(diagnostics) != 0 {
+				t.Fatalf("IndexDiagnostics() = %#v, want none", diagnostics)
 			}
 		})
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaReportsMissingRootIndexPrefix(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsReportMissingRootIndexPrefix(t *testing.T) {
 	t.Parallel()
 
 	catalog := parseQueryIndexCatalog(t, queryIndexSchema("KEY tenant_id_key (tenant_id)"))
-	diagnostics := Query[queryIndexModel]().
+	query := Query[queryIndexModel]().
 		Select("ID", "Title").
 		Where(Equal("TenantID", "private-tenant")).
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(catalog)
+		Limit(20)
+	diagnostics := queryIndexDiagnosticsForTest(t, query, catalog)
 	if len(diagnostics) != 1 {
-		t.Fatalf("DiagnosticsWithSchema() = %#v, want one", diagnostics)
+		t.Fatalf("IndexDiagnostics() = %#v, want one", diagnostics)
 	}
 	diagnostic := diagnostics[0]
-	if diagnostic.Code != codeMissingIndexPrefix || diagnostic.Severity != check.SeverityWarning || !diagnostic.Suppressible {
+	if diagnostic.Code != querycheck.CodeMissingIndexPrefix || diagnostic.Severity != check.SeverityWarning || !diagnostic.Suppressible {
 		t.Fatalf("diagnostic = %#v, want suppressible QRY007 warning", diagnostic)
 	}
 	if !strings.Contains(diagnostic.Message, "query_index_items") || !strings.Contains(diagnostic.Message, "tenant_id, id") {
@@ -105,21 +106,21 @@ func TestSelectQueryDiagnosticsWithSchemaReportsMissingRootIndexPrefix(t *testin
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaRejectsPrefixLengthCoverage(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsRejectPrefixLengthCoverage(t *testing.T) {
 	t.Parallel()
 
 	catalog := parseQueryIndexCatalog(t, queryIndexSchema("KEY tenant_title_prefix_key (tenant_id, title(10))"))
-	diagnostics := Query[queryIndexModel]().
+	query := Query[queryIndexModel]().
 		Where(Equal("TenantID", int64(7))).
 		OrderBy(Desc("Title")).
-		Limit(20).
-		DiagnosticsWithSchema(catalog)
-	if len(diagnostics) != 1 || diagnostics[0].Code != codeMissingIndexPrefix {
-		t.Fatalf("DiagnosticsWithSchema() = %#v, want QRY007", diagnostics)
+		Limit(20)
+	diagnostics := queryIndexDiagnosticsForTest(t, query, catalog)
+	if len(diagnostics) != 1 || diagnostics[0].Code != querycheck.CodeMissingIndexPrefix {
+		t.Fatalf("IndexDiagnostics() = %#v, want QRY007", diagnostics)
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaRejectsIndexesUnavailableForDefaultLookup(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsRejectIndexesUnavailableForDefaultLookup(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -155,15 +156,15 @@ func TestSelectQueryDiagnosticsWithSchemaRejectsIndexesUnavailableForDefaultLook
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			diagnostics := test.query.DiagnosticsWithSchema(parseQueryIndexCatalog(t, queryIndexSchema(test.index)))
-			if len(diagnostics) != 1 || diagnostics[0].Code != codeMissingIndexPrefix {
-				t.Fatalf("DiagnosticsWithSchema() = %#v, want QRY007", diagnostics)
+			diagnostics := queryIndexDiagnosticsForTest(t, test.query, parseQueryIndexCatalog(t, queryIndexSchema(test.index)))
+			if len(diagnostics) != 1 || diagnostics[0].Code != querycheck.CodeMissingIndexPrefix {
+				t.Fatalf("IndexDiagnostics() = %#v, want QRY007", diagnostics)
 			}
 		})
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaChecksRelationTopNAssociationIndex(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsCheckRelationTopNAssociationIndex(t *testing.T) {
 	t.Parallel()
 
 	matching := parseQueryIndexCatalog(t, `CREATE TABLE relation_topn_video_genres (
@@ -172,8 +173,8 @@ func TestSelectQueryDiagnosticsWithSchemaChecksRelationTopNAssociationIndex(t *t
   PRIMARY KEY (video_id, genre_id),
   KEY genre_video_key (genre_id, video_id)
 );`)
-	if diagnostics := relationTopNBenchmarkQuery().DiagnosticsWithSchema(matching); len(diagnostics) != 0 {
-		t.Fatalf("matching DiagnosticsWithSchema() = %#v, want none", diagnostics)
+	if diagnostics := queryIndexDiagnosticsForTest(t, relationTopNBenchmarkQuery(), matching); len(diagnostics) != 0 {
+		t.Fatalf("matching IndexDiagnostics() = %#v, want none", diagnostics)
 	}
 
 	missing := parseQueryIndexCatalog(t, `CREATE TABLE relation_topn_video_genres (
@@ -181,9 +182,9 @@ func TestSelectQueryDiagnosticsWithSchemaChecksRelationTopNAssociationIndex(t *t
   genre_id BIGINT NOT NULL,
   PRIMARY KEY (video_id, genre_id)
 );`)
-	diagnostics := relationTopNBenchmarkQuery().DiagnosticsWithSchema(missing)
-	if len(diagnostics) != 1 || diagnostics[0].Code != codeMissingIndexPrefix {
-		t.Fatalf("missing DiagnosticsWithSchema() = %#v, want QRY007", diagnostics)
+	diagnostics := queryIndexDiagnosticsForTest(t, relationTopNBenchmarkQuery(), missing)
+	if len(diagnostics) != 1 || diagnostics[0].Code != querycheck.CodeMissingIndexPrefix {
+		t.Fatalf("missing IndexDiagnostics() = %#v, want QRY007", diagnostics)
 	}
 	if !strings.Contains(diagnostics[0].Message, "relation-first TopN for relationTopNVideo.VideoGenres") ||
 		!strings.Contains(queryDiagnosticEvidence(diagnostics[0]), "relation_topn_video_genres(genre_id, video_id)") {
@@ -191,7 +192,7 @@ func TestSelectQueryDiagnosticsWithSchemaChecksRelationTopNAssociationIndex(t *t
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaIncludesDefaultSoftDeleteFilter(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsIncludeDefaultSoftDeleteFilter(t *testing.T) {
 	t.Parallel()
 
 	root := parseQueryIndexCatalog(t, `CREATE TABLE relation_topn_soft_videos (
@@ -199,10 +200,10 @@ func TestSelectQueryDiagnosticsWithSchemaIncludesDefaultSoftDeleteFilter(t *test
   deleted_at DATETIME NULL,
   KEY deleted_id_key (deleted_at, id)
 );`)
-	if diagnostics := Query[relationTopNSoftVideo]().
+	rootQuery := Query[relationTopNSoftVideo]().
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(root); len(diagnostics) != 0 {
+		Limit(20)
+	if diagnostics := queryIndexDiagnosticsForTest(t, rootQuery, root); len(diagnostics) != 0 {
 		t.Fatalf("root soft-delete diagnostics = %#v, want none", diagnostics)
 	}
 
@@ -213,18 +214,18 @@ func TestSelectQueryDiagnosticsWithSchemaIncludesDefaultSoftDeleteFilter(t *test
   PRIMARY KEY (video_id, genre_id),
   KEY genre_deleted_video_key (genre_id, deleted_at, video_id)
 );`)
-	diagnostics := Query[relationTopNSoftVideo]().
+	relationQuery := Query[relationTopNSoftVideo]().
 		WithDeleted().
 		Where(Has("Links", Equal("GenreID", int64(7)))).
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(relation)
+		Limit(20)
+	diagnostics := queryIndexDiagnosticsForTest(t, relationQuery, relation)
 	if len(diagnostics) != 0 {
 		t.Fatalf("relation soft-delete diagnostics = %#v, want none", diagnostics)
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaReportsUnavailableSchemaInput(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsReportUnavailableSchemaInput(t *testing.T) {
 	t.Parallel()
 
 	query := Query[queryIndexModel]().OrderBy(Desc("ID")).Limit(20)
@@ -241,9 +242,9 @@ func TestSelectQueryDiagnosticsWithSchemaReportsUnavailableSchemaInput(t *testin
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			diagnostics := query.DiagnosticsWithSchema(test.catalog)
-			if len(diagnostics) != 1 || diagnostics[0].Code != codeIndexCheckUnavailable || diagnostics[0].Severity != check.SeverityError || diagnostics[0].Suppressible {
-				t.Fatalf("DiagnosticsWithSchema() = %#v, want non-suppressible QRY006", diagnostics)
+			diagnostics := queryIndexDiagnosticsForTest(t, query, test.catalog)
+			if len(diagnostics) != 1 || diagnostics[0].Code != querycheck.CodeIndexCheckUnavailable || diagnostics[0].Severity != check.SeverityError || diagnostics[0].Suppressible {
+				t.Fatalf("IndexDiagnostics() = %#v, want non-suppressible QRY006", diagnostics)
 			}
 			if !strings.Contains(diagnostics[0].Message, test.message) {
 				t.Fatalf("message = %q, want substring %q", diagnostics[0].Message, test.message)
@@ -252,7 +253,7 @@ func TestSelectQueryDiagnosticsWithSchemaReportsUnavailableSchemaInput(t *testin
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaSkipsAmbiguousIndexShapes(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsSkipAmbiguousIndexShapes(t *testing.T) {
 	t.Parallel()
 
 	catalog := parseQueryIndexCatalog(t, queryIndexSchema("KEY tenant_id_key (tenant_id)"))
@@ -278,8 +279,8 @@ func TestSelectQueryDiagnosticsWithSchemaSkipsAmbiguousIndexShapes(t *testing.T)
 		name, query := name, query
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if diagnostics := query.DiagnosticsWithSchema(catalog); len(diagnostics) != 0 {
-				t.Fatalf("DiagnosticsWithSchema() = %#v, want none", diagnostics)
+			if diagnostics := queryIndexDiagnosticsForTest(t, query, catalog); len(diagnostics) != 0 {
+				t.Fatalf("IndexDiagnostics() = %#v, want none", diagnostics)
 			}
 		})
 	}
@@ -289,18 +290,18 @@ func TestSelectQueryFingerprintExcludesBindAndPaginationValues(t *testing.T) {
 	t.Parallel()
 
 	catalog := parseQueryIndexCatalog(t, queryIndexSchema("KEY tenant_id_key (tenant_id)"))
-	first := Query[queryIndexModel]().
+	firstQuery := Query[queryIndexModel]().
 		Select("ID").
 		Where(Equal("TenantID", "private-first")).
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(catalog)
-	second := Query[queryIndexModel]().
+		Limit(20)
+	first := queryIndexDiagnosticsForTest(t, firstQuery, catalog)
+	secondQuery := Query[queryIndexModel]().
 		Select("ID").
 		Where(Equal("TenantID", "private-second")).
 		OrderBy(Desc("ID")).
-		Limit(200).
-		DiagnosticsWithSchema(catalog)
+		Limit(200)
+	second := queryIndexDiagnosticsForTest(t, secondQuery, catalog)
 	if len(first) != 1 || len(second) != 1 {
 		t.Fatalf("diagnostics = %#v, %#v", first, second)
 	}
@@ -308,27 +309,18 @@ func TestSelectQueryFingerprintExcludesBindAndPaginationValues(t *testing.T) {
 		t.Fatalf("fingerprints = %q, %q, want equal", got, want)
 	}
 
-	differentProjection := Query[queryIndexModel]().
+	differentProjectionQuery := Query[queryIndexModel]().
 		Select("ID", "Title").
 		Where(Equal("TenantID", "private-third")).
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(catalog)
+		Limit(20)
+	differentProjection := queryIndexDiagnosticsForTest(t, differentProjectionQuery, catalog)
 	if got, notWant := queryDiagnosticFingerprint(differentProjection[0]), queryDiagnosticFingerprint(first[0]); got == notWant {
 		t.Fatalf("fingerprint = %q, want projection-sensitive value", got)
 	}
 }
 
-func TestSelectQueryDiagnosticsWithSchemaReturnsBuildFailureOnly(t *testing.T) {
-	t.Parallel()
-
-	diagnostics := Query[queryIndexModel]().Select("Missing").DiagnosticsWithSchema(nil)
-	if len(diagnostics) != 1 || diagnostics[0].Code != codeInvalidQuery {
-		t.Fatalf("DiagnosticsWithSchema() = %#v, want QRY001 only", diagnostics)
-	}
-}
-
-func TestSelectQueryDiagnosticsWithSchemaDoesNotExecuteDriverValuer(t *testing.T) {
+func TestSelectQueryShapeIndexDiagnosticsDoNotExecuteDriverValuer(t *testing.T) {
 	t.Parallel()
 
 	catalog := parseQueryIndexCatalog(t, `CREATE TABLE valuer_predicate_model (
@@ -338,42 +330,26 @@ func TestSelectQueryDiagnosticsWithSchemaDoesNotExecuteDriverValuer(t *testing.T
 );`)
 	calls := 0
 	value := observedValuer{calls: &calls, text: "private-value"}
-	diagnostics := Query[valuerPredicateModel]().
+	query := Query[valuerPredicateModel]().
 		Select("ID").
 		Where(Equal("Value", value)).
 		OrderBy(Desc("ID")).
-		Limit(20).
-		DiagnosticsWithSchema(catalog)
+		Limit(20)
+	diagnostics := queryIndexDiagnosticsForTest(t, query, catalog)
 	if len(diagnostics) != 0 {
-		t.Fatalf("DiagnosticsWithSchema() = %#v, want none", diagnostics)
+		t.Fatalf("IndexDiagnostics() = %#v, want none", diagnostics)
 	}
 	if calls != 0 {
 		t.Fatalf("driver.Valuer calls = %d, want 0", calls)
 	}
 }
 
-func BenchmarkSelectQueryDiagnosticsWithSchema(b *testing.B) {
+func BenchmarkSelectQueryShapeIndexDiagnostics(b *testing.B) {
 	query, catalog := querySchemaDiagnosticBenchmarkFixture(b)
 	b.ReportAllocs()
 	for b.Loop() {
-		queryDiagnosticSink = query.DiagnosticsWithSchema(catalog)
+		queryDiagnosticSink = queryIndexDiagnosticsForTest(b, query, catalog)
 	}
-}
-
-func BenchmarkSelectQueryDiagnosticsSchemaComparison(b *testing.B) {
-	query, catalog := querySchemaDiagnosticBenchmarkFixture(b)
-	b.Run("BuilderOnly", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			queryDiagnosticSink = query.Diagnostics()
-		}
-	})
-	b.Run("WithSchema", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			queryDiagnosticSink = query.DiagnosticsWithSchema(catalog)
-		}
-	})
 }
 
 func querySchemaDiagnosticBenchmarkFixture(b *testing.B) (*SelectQuery[queryIndexModel], *physicalschema.Catalog) {
@@ -407,6 +383,11 @@ func parseQueryIndexCatalog(t testing.TB, sqlText string) *physicalschema.Catalo
 		t.Fatalf("schema.Parse() error = %v", err)
 	}
 	return catalog
+}
+
+func queryIndexDiagnosticsForTest[T any](t testing.TB, query *SelectQuery[T], catalog *physicalschema.Catalog) []check.Diagnostic {
+	t.Helper()
+	return querycheck.IndexDiagnostics(queryShapeForTest(t, query), catalog)
 }
 
 func queryDiagnosticEvidence(diagnostic check.Diagnostic) string {

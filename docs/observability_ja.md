@@ -96,59 +96,6 @@ custom observerは短時間でreturnし、contextを共有する場合はconcurr
 
 `WithStatementObserver` へnilを渡すと継承した通常observerを無効化しますが、`RuntimeCapture` は無効化しません
 
-## Operation debug report
-
-`Debug` で1 application operation内に完了した全statementをまとめます
-
-```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
-```
-
-callback内のoperationには `debugContext` を使う必要があります
-
-`Statements` はobserver delivery順のnon-nil sliceであり、そのcontextを使ったroot query、collection preload、自動分割bulk mutation、raw statement、transaction lifecycle eventを含みます
-
-各entryはcustom observerと同じ `StatementEvent` です
-
-`Duration` はobserver処理を含むcallback全体、`StatementDuration` はcaptured event durationの合計です
-
-statementを並行実行した場合は `StatementDuration` がcallback durationを超えることがあります
-
-callbackは `debugContext` を使うgoroutineの完了を待つ必要があり、return後に完了したeventはreportへ含みません
-
-callback errorは変更せず、完了済みstatementのreportとともに返します
-
-`Debug` はdefaultでは既存eventだけを収集し、database call、`EXPLAIN`、implicit transactionを追加しません
-
-`ctx` に既存observerがある場合は同じeventを引き続き受け取ります
-
-reportのbind argumentはdefaultで除外し、必要な場合だけ独立して有効化します
-
-```go
-report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
-```
-
-recognized DML statementごとにsame-session diagnostic queryを追加する場合だけ `CollectServerRU` を渡します
-
-```go
-report, err := orm.Debug(ctx, operation, orm.CollectServerRU())
-```
-
-`report.StatementDuration` はtarget statementの合計のままです
-
-collectionを要求した場合は `report.ServerRU` がnon-nilとなり、diagnostic duration、auxiliary statement count、成功sample数、collection error数、ServerRU合計を分離して返します
-
-argument valueにはsecret、personal data、大きなpayloadが含まれ得ます
-
-default modeでもSQL templateとerrorを保持するため、statement logと同じ出力先とretention controlを適用してください
-
 ## Structured runtime capture
 
 application codeでqueryごとの登録を行わず実行statementを解析する場合は1個の `RuntimeCapture` を再利用します
@@ -162,7 +109,7 @@ ctx = orm.WithRuntimeCapture(ctx, capture)
 
 既存ORM terminalにはderived contextをそのまま渡します
 
-query、repository、`Debug` callback、`StatementCount`、`EstimateAllStatements`、artifact変換のwrapperは不要です
+query、repository、statement count、artifact変換のwrapperは不要です
 
 captureはconcurrentなscope間で再利用でき、`WithRuntimeCapture` の呼び出しごとにoffline N+1解析用の異なるscopeを割り当てます
 
@@ -194,7 +141,7 @@ captureはdefaultで追加database I/Oを行わず、`EXPLAIN` を実行しま�
 
 runtime artifactはbind valueを保持しません
 
-`WithRuntimeCapture` へ `IncludeStatementArguments` を渡しても効果はなく、このsensitive dataが明示的に必要な場合だけ `WithStatementObserver` または `Debug` で使います
+`IncludeStatementArguments` はstatement observer用optionであり `WithRuntimeCapture` には渡せません
 
 recognized DML statementごとの追加round tripを意図して受け入れる場合は同じscope boundaryで高costなServerRU収集を有効にします
 
@@ -453,7 +400,7 @@ bind value由来のpredicate rangeを含み得るため、完全な `OperatorInf
 
 access object、model、Relation、schema identifierはdevelopment metadataとして扱ってください
 
-結果はapplicationが所有するdiagnostic arrayへ追加し、offline checkと同じreportおよびsuppression policyで `tidbgo check` へ渡せます
+返されたdiagnosticはapplicationが所有する値であり、testから直接検査できます
 
 TiDBの `estRows`、`actRows`、pseudo statistics、execution info fieldについては[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)と[EXPLAIN walkthrough](https://docs.pingcap.com/tidb/stable/explain-walkthrough/)を参照してください
 
@@ -469,7 +416,7 @@ TiDBの[EXPLAIN ANALYZE statement reference](https://docs.pingcap.com/ja/tidb/st
 
 ## ServerRU
 
-`CollectServerRU` は `WithStatementObserver`、`WithRuntimeCapture`、`Debug` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
+`CollectServerRU` は `WithStatementObserver` または `WithRuntimeCapture` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
 
 `EXPLAIN`、transaction lifecycle event、分類できないraw `EXEC` はsampleしません
 

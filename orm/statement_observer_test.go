@@ -25,9 +25,9 @@ func TestStatementObserverRecordsSelectAfterRowsFinish(t *testing.T) {
 		events = append(events, event)
 	})
 
-	rows, err := queryTextRows(ctx, database, "scanModel", "SELECT id, name FROM scan_model WHERE name = ?", []any{"Ada"})
+	rows, err := queryTextRowsWithMetadata(ctx, database, "scanModel", "SELECT id, name FROM scan_model WHERE name = ?", []any{"Ada"}, statementRuntimeMetadata{})
 	if err != nil {
-		t.Fatalf("queryTextRows() error = %v", err)
+		t.Fatalf("queryTextRowsWithMetadata() error = %v", err)
 	}
 	if len(events) != 0 {
 		t.Fatalf("events before rows finish = %#v, want none", events)

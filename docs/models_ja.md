@@ -229,9 +229,11 @@ runtimeがmodelをcompileできないため、`MOD001` はsuppressibleではあ�
 
 他のdiagnosticは有効または無視される宣言を対象とし、`Suppressible` をtrueにします
 
-reason付きsuppressionは `check.NewReport` または `tidbgo check` で適用します
+`check.Model` が直接返すdiagnosticの判定policyはapplication testが所有します
 
-詳細は[Offline diagnostic report guide](checks_ja.md)を参照してください
+CLIのsuppressionは `tidbgo analyze` と `tidbgo lint` が生成するdiagnosticだけを対象にします
+
+詳細は[解析guide](checks_ja.md)を参照してください
 
 `MOD004` はmapping behaviorを変更しません
 

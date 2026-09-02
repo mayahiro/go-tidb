@@ -20,7 +20,7 @@ func (noOpScanRow) Scan(...any) error { return nil }
 var scanBenchmarkSink scanBenchmarkModel
 
 func BenchmarkRowDecoderScan(b *testing.B) {
-	plan, err := scanPlanFor(reflect.TypeFor[scanBenchmarkModel]())
+	plan, err := scanPlanForTest(reflect.TypeFor[scanBenchmarkModel]())
 	if err != nil {
 		b.Fatal(err)
 	}

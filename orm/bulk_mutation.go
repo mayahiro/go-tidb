@@ -103,17 +103,6 @@ func (plan bulkMutationPlan) validatePointerElements() error {
 	return nil
 }
 
-func (plan bulkMutationPlan) statementCount() (int, error) {
-	if plan.noOp {
-		return 0, nil
-	}
-	rowsPerStatement, err := plan.rowsPerStatement()
-	if err != nil {
-		return 0, err
-	}
-	return bulkStatementCount(plan.values.Len(), rowsPerStatement), nil
-}
-
 func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (int64, error) {
 	if plan.noOp {
 		return 0, nil

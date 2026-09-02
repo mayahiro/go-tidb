@@ -92,59 +92,6 @@ so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited ordinary observer without
 disabling `RuntimeCapture`.
 
-## Operation debug reports
-
-Use `Debug` to group every statement completed by one application operation:
-
-```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
-```
-
-The callback must execute the operation with `debugContext`. `Statements` is a
-non-nil slice in observer delivery order and includes root queries, collection
-preloads, automatically split bulk mutations, raw statements, and transaction
-lifecycle events when those paths use that context. Each entry is the same
-`StatementEvent` shape used by custom observers.
-
-`Duration` measures the complete callback including observer work.
-`StatementDuration` is the sum of captured event durations and can exceed the
-callback duration when statements execute concurrently. The callback must wait
-for any goroutines that use `debugContext`; events completed after it returns
-are outside the report. A callback error is returned unchanged with the report
-of statements that already completed.
-
-`Debug` only collects existing events by default. It adds no database calls,
-`EXPLAIN`, or implicit transaction. An observer already present on `ctx`
-continues to receive the events. Bind arguments are excluded from the report by
-default and can be enabled independently with `IncludeStatementArguments`:
-
-```go
-report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
-```
-
-Pass `CollectServerRU` only when the callback should add a same-session
-diagnostic query after each recognized DML statement:
-
-```go
-report, err := orm.Debug(ctx, operation, orm.CollectServerRU())
-```
-
-`report.StatementDuration` remains the target-statement total.
-`report.ServerRU` is non-nil when collection was requested and separately
-reports diagnostic duration, auxiliary statement count, successful sample
-count, collection-error count, and the summed ServerRU value.
-
-Argument values can contain secrets, personal data, or large payloads. The
-report stores SQL templates and errors even in the default mode, so apply the
-same output and retention controls as statement logging.
-
 ## Structured runtime capture
 
 Use one reusable `RuntimeCapture` when executed statements should be analyzed
@@ -158,8 +105,8 @@ ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
 Continue passing the derived context to existing ORM terminals. No query,
-repository, `Debug` callback, `StatementCount`, `EstimateAllStatements`, or
-artifact-conversion wrapper is required. Reuse the capture across concurrent
+repository, statement-count, or artifact-conversion wrapper is required. Reuse
+the capture across concurrent
 scopes; `WithRuntimeCapture` assigns each call a distinct scope used by offline
 N+1 analysis. It also preserves an inherited ordinary `StatementObserver`.
 The ordinary observer and capture can be installed in either order. Installing
@@ -186,10 +133,8 @@ never runs `EXPLAIN`. It records only statements executed through go-tidb with
 the derived context; direct `database/sql` and other ORM calls remain outside
 its coverage.
 
-Runtime artifacts never contain bind values. Passing
-`IncludeStatementArguments` to `WithRuntimeCapture` has no effect; use it only
-with `WithStatementObserver` or `Debug` when that sensitive data is explicitly
-required.
+Runtime artifacts never contain bind values. `IncludeStatementArguments` is a
+statement-observer option and cannot be passed to `WithRuntimeCapture`.
 
 Enable high-cost ServerRU collection at the same scope boundary when the extra
 round trip per recognized DML statement is intentional:
@@ -421,9 +366,8 @@ The diagnostic evidence includes operator identifiers, access objects,
 resolved physical tables, models and relation paths when available, row counts,
 and recognized disk values. It does not copy full `OperatorInfo`, which can
 contain predicate ranges derived from bind values. Treat access-object, model,
-relation, and schema identifiers as development metadata. The result can be
-appended to an application-owned diagnostic array and passed to `tidbgo check`
-for the same reporting and suppression policy as offline checks.
+relation, and schema identifiers as development metadata. The returned
+diagnostics are application-owned values that tests can inspect directly.
 
 TiDB documents `estRows`, `actRows`, pseudo statistics, and execution-info
 fields in its [execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)
@@ -441,7 +385,7 @@ reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
 
 `CollectServerRU` automatically samples recognized SELECT, INSERT, UPSERT,
 UPDATE, and DELETE operations when passed to `WithStatementObserver`,
-`WithRuntimeCapture`, or `Debug`. It does not sample `EXPLAIN`, transaction
+or `WithRuntimeCapture`. It does not sample `EXPLAIN`, transaction
 lifecycle events, or unclassified `EXEC` raw SQL.
 
 For `*sql.DB`, go-tidb temporarily pins one connection before the target call,

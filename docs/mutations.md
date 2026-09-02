@@ -36,25 +36,8 @@ reported with its zero-based row index before execution. An empty slice is a
 no-op. `InsertMany` does not populate individual generated IDs because one
 `sql.Result` does not expose every generated value.
 
-Dedicated tests and offline capacity tooling can inspect the exact planned
-split count without building SQL or opening a connection:
-
-```go
-statementCount, err := orm.InsertMany(orders).StatementCount()
-```
-
-`StatementCount` applies model-metadata validation, selected-field validation
-for `UpsertMany`, and the same placeholder calculation as execution. It does
-not inspect element values or call custom `driver.Valuer` methods, so its cost
-does not grow with a pointer slice merely to find nil elements. `Build` and
-`Exec` retain value validation. An empty slice returns zero. The count
-describes the successful execution path; an invalid value, executor, driver
-conversion, or database error can stop `Exec` before every planned statement
-is attempted.
-
-Production code does not need a matching statement-count wrapper. Runtime
-capture records each attempted batch and its group, position, row count, and
-total planned count automatically after one observer is installed at the
+Runtime capture records each attempted batch and its group, position, row
+count, and total planned count automatically after it is installed once at the
 request or job boundary.
 
 `Exec` deterministically splits values only when one statement would exceed
@@ -93,9 +76,8 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 
 `UpsertMany` has the same automatic placeholder-bound batching, affected-count
 aggregation, empty-slice behavior, and transaction boundary as `InsertMany`.
-Its `StatementCount` method returns the exact planned UPSERT count and validates
-the selected update fields offline for dedicated tests and tooling. It is not a
-required companion to an application upsert operation.
+RuntimeCapture records every batch that actually executes, including its
+position, row range, and total batch count.
 
 Neither `Upsert` nor `UpsertMany` changes generated `AUTO_RANDOM` fields. A
 single `sql.Result` cannot reliably distinguish an insert from a conflict on a

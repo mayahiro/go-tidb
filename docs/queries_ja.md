@@ -39,35 +39,21 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
-## Query shapeのoffline check
+## 実行済みquery shapeの解析
 
-同じbuilderへstatic query-shape checkを適用する場合は `Diagnostics` を呼び出します
+request、job、analysis testのboundaryでRuntimeCaptureを1回設定すると、実行されたtyped queryのbind-free QueryShapeを記録します
 
-```go
-diagnostics := query.Diagnostics()
+`tidbgo analyze` はapplication所有のquery登録なしでquery-pattern ruleをoffline適用します
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-`Diagnostics` は `Build` と同じvalidationを行い、DB I/Oとcustom `driver.Valuer` の実行を行いません
-
-diagnosticへpredicateまたはcursorのvalueを含めません
-
-parse済みの物理schema snapshotがある場合は、同じcheckと確度の高いindex prefix checkを1回で適用できます
-
-```go
-catalog, err := schema.Parse(schemaSQL)
-if err != nil {
-    return err
-}
-diagnostics := query.DiagnosticsWithSchema(catalog)
-```
-
-`DiagnosticsWithSchema` も完全offlineです
-
-`QRY006` または `QRY007` を出力する場合は、bind valueとpagination valueを含まないversion付きquery fingerprintをevidenceへ記録します
+schema-aware形式はbind valueとpagination valueを含まないversion付きquery fingerprintをevidenceへ記録します
 
 | Code | Severity | 意味 |
 | --- | --- | --- |
-| `QRY001` | error | model metadataまたはSELECT builderが不正 |
 | `QRY002` | warning | positive OFFSETがrowをskipし、offsetの増加に伴ってcostが増える |
 | `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
 | `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
@@ -75,11 +61,11 @@ diagnostics := query.DiagnosticsWithSchema(catalog)
 | `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
 | `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
-queryまたは要求されたschema-aware checkを完了できないため、`QRY001` と `QRY006` はsuppressibleではありません
+要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
 
-reason付きreportとsuppressionの挙動は[Offline diagnostic report guide](checks_ja.md)を参照してください
+reason付きreportとsuppressionの挙動は[解析guide](checks_ja.md)を参照してください
 
 TiDBの[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)はpaginated resultのorderを推奨し、offsetが大きくなるほどcompute resourceを消費すると説明しています
 
@@ -107,9 +93,7 @@ statistics、data distribution、collation、optimizer behaviorはconnected conc
 
 実際のaccess pathは `Explain` または `ExplainAnalyze` で確認します
 
-同じbuilderを `All`、`First`、`Only`、`Exists`、`Count`、plan terminalで使用できるため、このmethodはbuilderへ明示的に保存されたstateだけをcheckします
-
-terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
+runtime ruleは実行statementへ付加されたQueryShapeを解析します
 
 Raw SQLはtyped query ASTの外にあるため解析しません
 
@@ -506,35 +490,7 @@ key batchのsplitがなければ `Preload("Orders").Preload("Roles")` はparent�
 
 `Preload("Orders.User")` はparentと、Userをinline joinしたOrders SELECTの2 statementを実行します
 
-専用testまたはoffline toolがこの `All` builderのstatement数範囲を必要とする場合だけ `EstimateAllStatements` を呼び出します
-
-```go
-query := orm.Query[User]().
-    Preload("Orders").
-    Limit(10_000)
-
-estimate, err := query.EstimateAllStatements()
-```
-
-`estimate.Minimum` はroot SELECTを含み、有効な実行を開始した場合は1です
-
-`estimate.Maximum` は `MaximumKnown` がtrueの場合だけ意味を持ち、`estimate.Exact()` は両方の境界が等しいかを返します
-
-positive root `Limit` はdirect keyed preload batch数の上限となり、無制限のroot collectionはcomplete source statementを最大1個追加します
-
-empty result、NULL key、duplicate keyによって実際の件数は少なくなる場合があります
-
-1個のcollectionは上限のないtarget数を持ち得るため、その先にnested collectionがある場合はparent row上限が0と確定していない限り最大値をunknownとします
-
-上限のないconstrained root collectionも同じ理由でunknownです
-
-production repositoryへ並行するestimate wrapperは不要です
-
-requestまたはjob境界へobserverを1回設定するとruntime captureが実際のrootとpreload statementを自動的に記録します
-
-この予測はI/Oとcustom `driver.Valuer` 実行を行わず、logging、diagnostic、EXPLAIN、ServerRU queryを含めません
-
-`All` だけを対象とし、builderのLimitを置き換える `First` と `Only` は対象外です
+requestまたはjob境界へruntime captureを1回設定すると、実際のroot、inline、preload、split batchのstatement behaviorを自動的に記録します
 
 key batchを使うpure many-to-many SELECTは内部bookkeeping用のjunction source keyを先に選択し、その後にmapped target scalar fieldを全て選択します
 
@@ -583,7 +539,7 @@ inline to-one Relationだけを含むpreloadは1 statementで実行するため�
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`EstimateAllStatements`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
 
 `IDs` は延期しています
 

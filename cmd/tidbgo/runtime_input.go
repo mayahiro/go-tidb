@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,8 +23,19 @@ func openRuntimeCaptureInput(context *cli.Context, invocation *cli.Invocation, a
 	if err != nil {
 		return nil, nil, cli.NewDiagnostic(
 			cli.CodeIOError,
-			fmt.Sprintf("open runtime capture input %q: %s", input, checkInputOpenErrorReason(err)),
+			fmt.Sprintf("open runtime capture input %q: %s", input, inputOpenErrorReason(err)),
 		).WithTarget(cli.ArgumentTarget(argumentID))
 	}
 	return file, file.Close, nil
+}
+
+func inputOpenErrorReason(err error) string {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "file does not exist"
+	case errors.Is(err, os.ErrPermission):
+		return "permission denied"
+	default:
+		return "open failed"
+	}
 }

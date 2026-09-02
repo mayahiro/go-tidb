@@ -215,9 +215,9 @@ registry.
 
 `MOD001` is not suppressible because the runtime cannot compile the model.
 The other diagnostics describe valid or ignored declarations and set
-`Suppressible` to true. Apply reason-carrying suppressions through
-`check.NewReport` or `tidbgo check`; see the [offline diagnostic report
-guide](checks.md).
+`Suppressible` to true. Application tests own the policy for diagnostics
+returned directly by `check.Model`. CLI suppressions apply only to diagnostics
+produced by `tidbgo analyze` and `tidbgo lint`; see the [analysis guide](checks.md).
 
 `MOD004` never changes mapping behavior. The first tag value remains a column
 name. The rule warns only when that value differs from the inferred column and

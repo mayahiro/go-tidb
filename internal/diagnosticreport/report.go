@@ -1,9 +1,11 @@
-package check
+// Package diagnosticreport applies the CLI's diagnostic suppression and exit policy.
+package diagnosticreport
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/mayahiro/go-tidb/check"
 )
 
 // Suppression allows all suppressible diagnostics with one exact code and
@@ -14,20 +16,19 @@ type Suppression struct {
 }
 
 // Allow constructs a reason-carrying diagnostic suppression.
-// NewReport validates the code, reason, and matching diagnostics.
 func Allow(code, reason string) Suppression {
 	return Suppression{Code: code, Reason: reason}
 }
 
 // SuppressedDiagnostic records one diagnostic removed from the active result
-// together with the application-provided reason.
+// together with the supplied reason.
 type SuppressedDiagnostic struct {
-	Diagnostic Diagnostic `json:"diagnostic"`
-	Reason     string     `json:"reason"`
+	Diagnostic check.Diagnostic `json:"diagnostic"`
+	Reason     string           `json:"reason"`
 }
 
-// Summary counts active diagnostics by severity and diagnostics suppressed
-// with an explicit reason.
+// Summary counts active diagnostics by severity and explicitly suppressed
+// diagnostics.
 type Summary struct {
 	Errors     int `json:"errors"`
 	Warnings   int `json:"warnings"`
@@ -37,20 +38,14 @@ type Summary struct {
 
 // Report is an immutable aggregation of active and explicitly suppressed
 // diagnostics.
-//
-// The default policy fails only when active error diagnostics remain.
 type Report struct {
-	diagnostics []Diagnostic
+	diagnostics []check.Diagnostic
 	suppressed  []SuppressedDiagnostic
 	summary     Summary
 }
 
-// NewReport validates diagnostics and applies exact-code suppressions.
-//
-// Every suppression must have a non-empty reason, match at least one
-// diagnostic, and target only diagnostics that declare themselves
-// suppressible. Repeating a suppression code is rejected.
-func NewReport(diagnostics []Diagnostic, suppressions ...Suppression) (Report, error) {
+// New validates diagnostics and applies exact-code suppressions.
+func New(diagnostics []check.Diagnostic, suppressions ...Suppression) (Report, error) {
 	type suppressionState struct {
 		code   string
 		reason string
@@ -63,13 +58,13 @@ func NewReport(diagnostics []Diagnostic, suppressions ...Suppression) (Report, e
 		code := strings.TrimSpace(suppression.Code)
 		reason := strings.TrimSpace(suppression.Reason)
 		if code == "" {
-			return Report{}, fmt.Errorf("check: suppression %d requires a diagnostic code", index)
+			return Report{}, fmt.Errorf("diagnostic report: suppression %d requires a diagnostic code", index)
 		}
 		if reason == "" {
-			return Report{}, fmt.Errorf("check: suppression for %s requires a reason", code)
+			return Report{}, fmt.Errorf("diagnostic report: suppression for %s requires a reason", code)
 		}
 		if _, exists := byCode[code]; exists {
-			return Report{}, fmt.Errorf("check: suppression for %s is repeated", code)
+			return Report{}, fmt.Errorf("diagnostic report: suppression for %s is repeated", code)
 		}
 		states[index] = suppressionState{code: code, reason: reason}
 		byCode[code] = index
@@ -78,13 +73,13 @@ func NewReport(diagnostics []Diagnostic, suppressions ...Suppression) (Report, e
 	suppressedCount := 0
 	evidenceCount := 0
 	for index, diagnostic := range diagnostics {
-		if err := validateReportDiagnostic(diagnostic); err != nil {
-			return Report{}, fmt.Errorf("check: diagnostic %d: %w", index, err)
+		if err := validateDiagnostic(diagnostic); err != nil {
+			return Report{}, fmt.Errorf("diagnostic report: diagnostic %d: %w", index, err)
 		}
 		evidenceCount += len(diagnostic.Evidence)
 		if stateIndex, exists := byCode[diagnostic.Code]; exists {
 			if !diagnostic.Suppressible {
-				return Report{}, fmt.Errorf("check: diagnostic %s is not suppressible", diagnostic.Code)
+				return Report{}, fmt.Errorf("diagnostic report: diagnostic %s is not suppressible", diagnostic.Code)
 			}
 			states[stateIndex].used = true
 			suppressedCount++
@@ -92,11 +87,11 @@ func NewReport(diagnostics []Diagnostic, suppressions ...Suppression) (Report, e
 	}
 	for _, state := range states {
 		if !state.used {
-			return Report{}, fmt.Errorf("check: suppression for %s does not match a diagnostic", state.code)
+			return Report{}, fmt.Errorf("diagnostic report: suppression for %s does not match a diagnostic", state.code)
 		}
 	}
 
-	active := make([]Diagnostic, 0, len(diagnostics)-suppressedCount)
+	active := make([]check.Diagnostic, 0, len(diagnostics)-suppressedCount)
 	suppressed := make([]SuppressedDiagnostic, 0, suppressedCount)
 	cloner := newDiagnosticCloner(evidenceCount)
 	summary := Summary{Suppressed: suppressedCount}
@@ -112,27 +107,23 @@ func NewReport(diagnostics []Diagnostic, suppressions ...Suppression) (Report, e
 		active = append(active, cloned)
 		incrementSummary(&summary, diagnostic.Severity)
 	}
-	return Report{
-		diagnostics: active,
-		suppressed:  suppressed,
-		summary:     summary,
-	}, nil
+	return Report{diagnostics: active, suppressed: suppressed, summary: summary}, nil
 }
 
 // Diagnostics returns an owned copy of active diagnostics.
-func (r Report) Diagnostics() []Diagnostic {
-	return cloneDiagnostics(r.diagnostics)
+func (report Report) Diagnostics() []check.Diagnostic {
+	return cloneDiagnostics(report.diagnostics)
 }
 
 // Suppressed returns an owned copy of explicitly suppressed diagnostics.
-func (r Report) Suppressed() []SuppressedDiagnostic {
-	result := make([]SuppressedDiagnostic, len(r.suppressed))
+func (report Report) Suppressed() []SuppressedDiagnostic {
+	result := make([]SuppressedDiagnostic, len(report.suppressed))
 	evidenceCount := 0
-	for _, suppressed := range r.suppressed {
+	for _, suppressed := range report.suppressed {
 		evidenceCount += len(suppressed.Diagnostic.Evidence)
 	}
 	cloner := newDiagnosticCloner(evidenceCount)
-	for index, suppressed := range r.suppressed {
+	for index, suppressed := range report.suppressed {
 		result[index] = SuppressedDiagnostic{
 			Diagnostic: cloner.clone(suppressed.Diagnostic),
 			Reason:     suppressed.Reason,
@@ -142,30 +133,16 @@ func (r Report) Suppressed() []SuppressedDiagnostic {
 }
 
 // Summary returns active severity counts and the suppressed count.
-func (r Report) Summary() Summary {
-	return r.summary
+func (report Report) Summary() Summary {
+	return report.summary
 }
 
-// HasErrors reports whether the default policy should fail.
-func (r Report) HasErrors() bool {
-	return r.summary.Errors != 0
+// HasErrors reports whether active error diagnostics remain.
+func (report Report) HasErrors() bool {
+	return report.summary.Errors != 0
 }
 
-// MarshalJSON emits stable non-null arrays for active and suppressed
-// diagnostics.
-func (r Report) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Diagnostics []Diagnostic           `json:"diagnostics"`
-		Suppressed  []SuppressedDiagnostic `json:"suppressed"`
-		Summary     Summary                `json:"summary"`
-	}{
-		Diagnostics: nonNilDiagnostics(r.diagnostics),
-		Suppressed:  nonNilSuppressed(r.suppressed),
-		Summary:     r.summary,
-	})
-}
-
-func validateReportDiagnostic(diagnostic Diagnostic) error {
+func validateDiagnostic(diagnostic check.Diagnostic) error {
 	code := strings.TrimSpace(diagnostic.Code)
 	if code == "" {
 		return fmt.Errorf("requires a code")
@@ -174,26 +151,26 @@ func validateReportDiagnostic(diagnostic Diagnostic) error {
 		return fmt.Errorf("diagnostic code %q has surrounding whitespace", diagnostic.Code)
 	}
 	switch diagnostic.Severity {
-	case SeverityError, SeverityWarning, SeverityInfo:
+	case check.SeverityError, check.SeverityWarning, check.SeverityInfo:
 		return nil
 	default:
 		return fmt.Errorf("%s has invalid severity %q", diagnostic.Code, diagnostic.Severity)
 	}
 }
 
-func incrementSummary(summary *Summary, severity Severity) {
+func incrementSummary(summary *Summary, severity check.Severity) {
 	switch severity {
-	case SeverityError:
+	case check.SeverityError:
 		summary.Errors++
-	case SeverityWarning:
+	case check.SeverityWarning:
 		summary.Warnings++
-	case SeverityInfo:
+	case check.SeverityInfo:
 		summary.Info++
 	}
 }
 
-func cloneDiagnostics(diagnostics []Diagnostic) []Diagnostic {
-	result := make([]Diagnostic, len(diagnostics))
+func cloneDiagnostics(diagnostics []check.Diagnostic) []check.Diagnostic {
+	result := make([]check.Diagnostic, len(diagnostics))
 	evidenceCount := 0
 	for _, diagnostic := range diagnostics {
 		evidenceCount += len(diagnostic.Evidence)
@@ -206,37 +183,23 @@ func cloneDiagnostics(diagnostics []Diagnostic) []Diagnostic {
 }
 
 type diagnosticCloner struct {
-	evidence []Evidence
+	evidence []check.Evidence
 	offset   int
 }
 
 func newDiagnosticCloner(evidenceCount int) diagnosticCloner {
-	return diagnosticCloner{evidence: make([]Evidence, evidenceCount)}
+	return diagnosticCloner{evidence: make([]check.Evidence, evidenceCount)}
 }
 
-func (c *diagnosticCloner) clone(diagnostic Diagnostic) Diagnostic {
+func (cloner *diagnosticCloner) clone(diagnostic check.Diagnostic) check.Diagnostic {
 	count := len(diagnostic.Evidence)
 	if count == 0 {
 		diagnostic.Evidence = nil
 		return diagnostic
 	}
-	end := c.offset + count
-	copy(c.evidence[c.offset:end], diagnostic.Evidence)
-	diagnostic.Evidence = c.evidence[c.offset:end:end]
-	c.offset = end
+	end := cloner.offset + count
+	copy(cloner.evidence[cloner.offset:end], diagnostic.Evidence)
+	diagnostic.Evidence = cloner.evidence[cloner.offset:end:end]
+	cloner.offset = end
 	return diagnostic
-}
-
-func nonNilDiagnostics(diagnostics []Diagnostic) []Diagnostic {
-	if diagnostics == nil {
-		return make([]Diagnostic, 0)
-	}
-	return diagnostics
-}
-
-func nonNilSuppressed(suppressed []SuppressedDiagnostic) []SuppressedDiagnostic {
-	if suppressed == nil {
-		return make([]SuppressedDiagnostic, 0)
-	}
-	return suppressed
 }

@@ -122,16 +122,8 @@ func queryRows(ctx context.Context, executor QueryExecutor, compiled compiledSel
 	)
 }
 
-func queryTextRows(ctx context.Context, executor QueryExecutor, modelName, query string, arguments []any) (queryResultRows, error) {
-	return queryTextRowsWithMetadata(ctx, executor, modelName, query, arguments, statementRuntimeMetadata{})
-}
-
 func queryTextRowsWithMetadata(ctx context.Context, executor QueryExecutor, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
 	return queryTextRowsOperationWithMetadata(ctx, executor, StatementSelect, modelName, query, arguments, metadata)
-}
-
-func queryTextRowsOperation(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any) (queryResultRows, error) {
-	return queryTextRowsOperationWithMetadata(ctx, executor, operation, modelName, query, arguments, statementRuntimeMetadata{})
 }
 
 func queryTextRowsOperationWithMetadata(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
