@@ -43,7 +43,7 @@ func BenchmarkSoftDeleteSelectBuildWithDeleted(b *testing.B) {
 }
 
 func BenchmarkSoftDeleteRowDecoderScanNull(b *testing.B) {
-	plan, err := scanPlanFor(reflect.TypeFor[softDeleteVideo]())
+	plan, err := scanPlanForTest(reflect.TypeFor[softDeleteVideo]())
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -150,7 +150,7 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 		statement: &selectStatement{
 			sql:            query.String(),
 			scanPlan:       base.scanPlan,
-			qualifier:      base.qualifier,
+			qualifier:      qualifier,
 			inlinePreloads: base.inlinePreloads,
 		},
 		arguments: predicates.arguments,

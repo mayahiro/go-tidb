@@ -39,31 +39,33 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
-## Query shapeのoffline check
+## 実行済みquery shapeの解析
 
-同じbuilderへstatic query-shape checkを適用する場合は `Diagnostics` を呼び出します
+request、job、analysis testのboundaryでRuntimeCaptureを1回設定すると、実行されたtyped queryのbind-free QueryShapeを記録します
 
-```go
-diagnostics := query.Diagnostics()
+`tidbgo analyze` はapplication所有のquery登録なしでquery-pattern ruleをoffline適用します
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-`Diagnostics` は `Build` と同じvalidationを行い、DB I/Oとcustom `driver.Valuer` の実行を行いません
-
-diagnosticへpredicateまたはcursorのvalueを含めません
+schema-aware形式はbind valueとpagination valueを含まないversion付きquery fingerprintをevidenceへ記録します
 
 | Code | Severity | 意味 |
 | --- | --- | --- |
-| `QRY001` | error | model metadataまたはSELECT builderが不正 |
 | `QRY002` | warning | positive OFFSETがrowをskipし、offsetの増加に伴ってcostが増える |
 | `QRY003` | warning | 明示的なpositive LIMITにORDER BYがない |
 | `QRY004` | warning | `Contains` または `HasSuffix` がleading wildcard付きLIKE patternを生成する |
 | `QRY005` | warning | orderedかつlimitedなcollection `Has` が `EXISTS` fallbackを使用する |
+| `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
+| `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
-queryをcompileできないため、`QRY001` はsuppressibleではありません
+要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
 
-reason付きreportとsuppressionの挙動は[Offline diagnostic report guide](checks_ja.md)を参照してください
+reason付きreportとsuppressionの挙動は[解析guide](checks_ja.md)を参照してください
 
 TiDBの[pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)はpaginated resultのorderを推奨し、offsetが大きくなるほどcompute resourceを消費すると説明しています
 
@@ -71,15 +73,33 @@ applicationでstable cursorを保持できる場合は `SeekAfter` を優先し�
 
 `Contains` と `HasSuffix` は意図的にpatternを `%` で開始し、そのmatching behaviorはTiDBの[`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like)に従います
 
-index、statistics、collation、optimizer behaviorはconnected concernであるため、static checkは特定のphysical planを断定しません
+schema-aware ruleは1個のindex候補を構造的に決定できる場合だけ適用します
+
+root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcompilerが生成したassociation accessを対象にします
+
+activeなdefault soft-delete scopeがある場合は、生成される `IS NULL` のcolumnもequality prefixへ含めます
+
+equality columnはleading prefix内で任意の順序を使用でき、その後にordered columnが続く必要があります
+
+expressionまたはprefix length付きindexはこのcoverageを証明しません
+
+equality filterがsimple unique key全体を制約する場合は最大1 rowだけをorderするため、追加のorder columnがなくてもruleを満たします
+
+partial、invisible、FULLTEXT、SPATIAL indexはこのruleでdefault利用可能なunconditional lookupを証明しません
+
+最初のruleは `Or`、`Not`、range filter、mixed order direction、fallback `EXISTS` accessを意図的に診断しません
+
+statistics、data distribution、collation、optimizer behaviorはconnected concernとして残るため、特定のphysical planを断定しません
 
 実際のaccess pathは `Explain` または `ExplainAnalyze` で確認します
 
-同じbuilderを `All`、`First`、`Only`、`Exists`、`Count`、plan terminalで使用できるため、このmethodはbuilderへ明示的に保存されたstateだけをcheckします
-
-terminalが暗黙に適用するlimitとunboundedな `All` callは報告しません
+runtime ruleは実行statementへ付加されたQueryShapeを解析します
 
 Raw SQLはtyped query ASTの外にあるため解析しません
+
+`q1:` fingerprintはbind valueを除いたlogical shapeとcompiler shapeを識別します
+
+projection、predicate structure、order、preload、compiler rewriteが変わるとfingerprintも変わり、compiler decisionが変わらない範囲でbind valueまたは `Limit` と `Offset` の値だけが変わる場合は同じSQL placeholder shapeとして同じfingerprintを維持します
 
 `QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
 
@@ -331,7 +351,11 @@ collection preload statementはparent keyを必要とするため含みません
 
 field、runtime boundary、TiDB固有の注意事項は[Statement observation](observability_ja.md#select-explain)を参照してください
 
-`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `[]orm.ExplainAnalyzeRow` として返すexplicit opt-in terminalです
+`ExplainAnalyze` はcompleteなroot SELECTを実行し、TiDBのruntime planを `orm.ExplainAnalyzePlan` として返すexplicit opt-in terminalです
+
+`Diagnostics` methodは追加のdatabase statementを実行せず、返されたrowから保守的なruntime plan warningを検査します
+
+`ExplainAnalyze` はmappingを一意に判断できるcompiler-owned access aliasをphysical table、Go model、rootからのRelation pathへ解決します
 
 queryを変更するとplanも変わるためprotective `LIMIT` を自動追加しません
 
@@ -465,6 +489,8 @@ inline Relationはstatementを追加しません
 key batchのsplitがなければ `Preload("Orders").Preload("Roles")` はparent、Orders SELECT、Roles SELECTの3 statementを実行します
 
 `Preload("Orders.User")` はparentと、Userをinline joinしたOrders SELECTの2 statementを実行します
+
+requestまたはjob境界へruntime captureを1回設定すると、実際のroot、inline、preload、split batchのstatement behaviorを自動的に記録します
 
 key batchを使うpure many-to-many SELECTは内部bookkeeping用のjunction source keyを先に選択し、その後にmapped target scalar fieldを全て選択します
 

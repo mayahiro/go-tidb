@@ -1,107 +1,149 @@
-# Offline diagnostic report
+# 解析とdiagnostic
 
-[English](checks.md)
+go-tidbはapplicationへqueryごとのdiagnostic登録を要求せず、必要なevidenceによってcheck経路を分けます
 
-`go-tidb` はdiagnosticの生成とreportを分離します
+| Evidence | APIまたはcommand | DB access |
+| --- | --- | --- |
+| Go model metadata | `check.Model[T]` | なし |
+| SQL snapshot compatibility | `check.Schema[T]` | なし |
+| Go sourceのprojection利用 | `tidbgo lint` | なし |
+| 実行されたquery shapeとstatement behavior | RuntimeCaptureと `tidbgo analyze` | ServerRU収集を有効にしない限りcaptureはapplication statementだけを実行 |
+| TiDB optimizer estimate | `SelectQuery.Explain` | あり |
+| TiDB runtime plan | `SelectQuery.ExplainAnalyze` と `ExplainAnalyzePlan.Diagnostics` | あり、SELECTも実行 |
 
-application codeがmodel type、query builder、SQL schema snapshotを明示的に選択し、`check.Report` と `tidbgo check` がDB接続なしで1個の固定result policyを適用します
+## Modelとschemaのcheck
 
-この境界にはgenerated registry、source scan、project YAML、live schema inspectionが不要です
-
-## Diagnosticの生成
-
-applicationが所有するcheck commandでdiagnosticを集約します
-
-```go
-diagnostics := make([]check.Diagnostic, 0)
-diagnostics = append(diagnostics, check.Model[User]()...)
-diagnostics = append(diagnostics, recentOrdersQuery.Diagnostics()...)
-diagnostics = append(diagnostics, check.Schema[User](catalog)...)
-
-err := json.NewEncoder(os.Stdout).Encode(diagnostics)
-```
-
-`tidbgo check` のJSON inputは `check.Diagnostic` objectのarrayを1個だけ含みます
-
-modelとqueryを明示的に登録する実行例は[`examples/starter-app/cmd/check`](../examples/starter-app/cmd/check)を参照してください
-
-## CLIによるreport
-
-standard inputからarrayを読み取ります
-
-```sh
-go run ./cmd/check | tidbgo check
-```
-
-独立したartifactを使用する場合は1個のinput fileを渡します
-
-```sh
-tidbgo check diagnostics.json
-```
-
-inputを省略するか `-` を指定するとstandard inputを使用します
-
-defaultのtext reportはdiagnosticの順序を維持し、suppressed diagnosticとreasonを表示した後、activeなerror、warning、info、suppressedの件数を出力します
-
-structured reportには `--json` を使用します
-
-```sh
-go run ./cmd/check | tidbgo check --json
-```
-
-exit policyは固定です
-
-| Status | 意味 |
-| ---: | --- |
-| `0` | activeなerror diagnosticが残っていない |
-| `1` | activeなerror diagnosticが1個以上残っている |
-| `2` | command argument、diagnostic JSON、suppression inputが不正 |
-| `5` | inputのread、outputのwrite、内部operationを完了できない |
-
-warningとinfoは成功statusを変更しません
-
-## 許容したdiagnosticのsuppression
-
-suppressionは1個のexact diagnostic codeを指定し、空ではないreasonを必須とします
-
-```sh
-go run ./cmd/check | \
-  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
-```
-
-異なるcodeには `--suppress` を繰り返し指定できます
-
-1個のsuppressionはinput array内でexact codeが一致する全suppressible diagnosticへ適用します
-
-suppressed diagnostic全体とreasonはreportへ残ります
-
-duplicate suppression code、使用されなかったsuppression、空のreason、`Suppressible` がfalseのdiagnosticを対象とするsuppressionはerrorになります
-
-CLI processを必要としない場合は同じpolicyをGoから直接適用できます
+application所有のmodel typeとschema snapshotは通常のGo testで確認します
 
 ```go
-report, err := check.NewReport(
-    diagnostics,
-    check.Allow("MOD005", "read-only model does not use key mutations"),
-)
+func TestUserMapping(t *testing.T) {
+    if diagnostics := check.Model[User](); len(diagnostics) != 0 {
+        t.Fatalf("model diagnostics: %#v", diagnostics)
+    }
+
+    sqlText, err := os.ReadFile("testdata/schema.sql")
+    if err != nil {
+        t.Fatal(err)
+    }
+    catalog, err := schema.Parse(string(sqlText))
+    if err != nil {
+        t.Fatal(err)
+    }
+    if diagnostics := check.Schema[User](catalog); len(diagnostics) != 0 {
+        t.Fatalf("schema diagnostics: %#v", diagnostics)
+    }
+}
+```
+
+どちらもofflineで動作し `[]check.Diagnostic` を返します
+
+`check.Model` は `MOD001` から `MOD007` でmodel intentとtagを検証します
+
+`check.Schema` は `CMP001` から `CMP014` で方向付きcompatibility ruleを適用します
+
+## 実行済みqueryのdiagnostic
+
+request、job、analysis testのboundaryでRuntimeCaptureを1回設定し、既存のORM callへderived contextを渡します
+
+```go
+capture := orm.NewRuntimeCapture(writer)
+ctx = orm.WithRuntimeCapture(ctx, capture)
+
+if err := runOperation(ctx); err != nil {
+    return err
+}
+if err := capture.Err(); err != nil {
+    return err
+}
+```
+
+生成されたJSON Lines artifactをofflineで解析します
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
+```
+
+captured statementがtyped QueryShapeを持つ場合、analyzerは次のquery ruleを自動適用します
+
+| Code | 内容 |
+| --- | --- |
+| `QRY002` | positive OFFSETがpageを返す前にrowをskipする |
+| `QRY003` | positive LIMITにdeterministicなorderがない |
+| `QRY004` | LIKE predicateがwildcardから始まる |
+| `QRY005` | Relation filter付きTopNがEXISTS fallbackを使った |
+| `QRY006` | 渡したschemaが解析対象のindex accessを表現できない |
+| `QRY007` | ordered limited accessに一致するindex prefixがない |
+
+`QRY006` と `QRY007` には `--schema` が必要です
+
+fingerprintとQueryShapeはbind valueを除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
+
+runtime解析はmetadata不足、runtime N+1 SELECT候補、ServerRU収集failure、ServerRU baseline regressionもreportします
+
+capture scope、artifact security、ServerRU cost、baseline比較は[Statement observation](observability_ja.md)を参照してください
+
+## Go source解析
+
+applicationをcompileまたは実行せずsourceを解析します
+
+```sh
+tidbgo lint .
+tidbgo lint . --json
+```
+
+現在のsource ruleは `SRC001` です
+
+1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
+
+repository return、alias、model method、解決できないflowは明示的にuncertainとします
+
+source解析は未実行builderへまだ `QRY002` から `QRY007` を適用しません
+
+query-pattern解析をsource解析へ移す間の一時的なcoverage gapを許容し、application所有のquery registryは要求しません
+
+## Runtime plan diagnostic
+
+`Explain` はroot SELECTを実行せずTiDBへestimate planを要求します
+
+`ExplainAnalyze` はroot SELECTを実行して `orm.ExplainAnalyzePlan` を返します
+
+planの `Diagnostics` は追加のDB callなしで、不完全なstatistics、大きなestimate divergence、大規模full scan、positive disk useを `PLN001` から `PLN004` でreportします
+
+```go
+plan, err := query.ExplainAnalyze(ctx, connection)
 if err != nil {
     return err
 }
-if report.HasErrors() {
-    return errors.New("go-tidb checks failed")
-}
+diagnostics := plan.Diagnostics()
 ```
 
-`Report.Diagnostics()` はactive diagnostic、`Report.Suppressed()` は記録されたsuppression、`Report.Summary()` は固定された件数を返します
+planの選択はdata distributionとstatisticsに依存するため、plan diagnosticと実測ServerRU baselineはstatic ruleを補完しますが将来のplanを保証しません
 
-## Securityとdata boundary
+## Suppressionとexit status
 
-現在のmodel checkとquery checkはbind valueを含まず、schema checkは渡されたsnapshotだけを使用します
+`tidbgo analyze` と `tidbgo lint` はreason付きsuppressionを繰り返し受け付けます
 
-diagnostic messageにはmodel名、schema identifier、source path、parser errorが含まれる場合があります
+```sh
+tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
+tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
+```
 
-diagnostic JSONとreportはdevelopment artifactとして扱い、出力先と保存期間を管理してください
+codeは現在のresultに存在し、diagnostic側がsuppressibleである必要があります
 
-text rendererはterminalへuntrusted inputを書き込む前にcontrol characterをescapeします
+未使用、重複、reasonなし、non-suppressibleな指定は拒否します
 
-JSON outputはstructured dataを維持し、valueをSQLへinterpolateしません
+suppressed diagnosticはtextとJSON outputへ残ります
+
+active error diagnosticがある場合はstatus `1`、warningとinfoだけの場合はsuccessです
+
+invalid inputはstatus `2`、I/Oまたはinternal failureはstatus `5` です
+
+## 現在のcoverage境界
+
+- RuntimeCaptureはderived contextを使ってgo-tidbから実行されたstatementだけを対象にする
+- 未実行builderには現在 `QRY002` から `QRY007` を適用しない
+- `tidbgo lint` は現在projection解析だけを実装する
+- `EXPLAIN ANALYZE` はSELECTを実行してRUを消費する
+- ServerRU収集はrecognized DML statementごとにsame-session diagnostic round tripを1回追加する
+- query planとRUは現在のstatistics、data distribution、workloadに依存する

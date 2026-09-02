@@ -42,7 +42,15 @@ func (q *SelectQuery[T]) one(ctx context.Context, executor QueryExecutor, only b
 	if err != nil {
 		return zero, err
 	}
-	rows, err := queryRows(ctx, executor, compiled)
+	selection := q.selection
+	selection.pagination.limit = limit
+	selection.pagination.limitSet = true
+	terminal := "first"
+	if only {
+		terminal = "only"
+	}
+	metadata := runtimeSelectMetadata(ctx, &selection, compiled, terminal)
+	rows, err := queryRows(ctx, executor, compiled, metadata)
 	if err != nil {
 		return zero, err
 	}

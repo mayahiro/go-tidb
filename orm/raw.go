@@ -50,7 +50,8 @@ func (q *RawQuery[T]) All(ctx context.Context, executor QueryExecutor) ([]T, err
 	if err != nil {
 		return nil, err
 	}
-	rows, err := queryTextRows(ctx, executor, descriptor.Name(), q.statement, q.arguments)
+	metadata := runtimeRawMetadata(descriptor.Name(), "all")
+	rows, err := queryTextRowsWithMetadata(ctx, executor, descriptor.Name(), q.statement, q.arguments, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,12 @@ func (q *RawQuery[T]) one(ctx context.Context, executor QueryExecutor, only bool
 	if err != nil {
 		return zero, err
 	}
-	rows, err := queryTextRows(ctx, executor, descriptor.Name(), q.statement, q.arguments)
+	terminal := "first"
+	if only {
+		terminal = "only"
+	}
+	metadata := runtimeRawMetadata(descriptor.Name(), terminal)
+	rows, err := queryTextRowsWithMetadata(ctx, executor, descriptor.Name(), q.statement, q.arguments, metadata)
 	if err != nil {
 		return zero, err
 	}
@@ -170,7 +176,11 @@ func RawExec(ctx context.Context, executor ExecExecutor, statement string, argum
 	if strings.TrimSpace(statement) == "" {
 		return 0, fmt.Errorf("orm: raw mutation SQL must not be empty")
 	}
-	observation := beginStatementObservation(ctx, inferStatementOperation(statement), statement, arguments)
+	metadata := runtimeRawMetadata("", "exec")
+	observation := beginStatementObservationWithMetadata(ctx, inferStatementOperation(statement), statement, arguments, metadata)
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, statement, arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute raw mutation: %w", err)

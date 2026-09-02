@@ -27,7 +27,7 @@ Run the current command directly from the checkout:
 
 ```sh
 go run ./cmd/tidbgo version
-go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
+go run ./cmd/tidbgo lint ./examples/starter-app
 ```
 
 Set a release version through the Go linker when building a release artifact:
@@ -42,11 +42,11 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `orm`: offline query and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
-- `check`: shared diagnostic data types, reasoned reports and suppression, and
-  offline model, query, and physical schema checks
+- `check`: shared diagnostic data types and offline model and physical schema
+  checks
 - `migrate`: reserved boundary for standalone migration tooling
 - `cmd/tidbgo`: CLI entry point
-- `internal`: non-public logging and redaction support
+- `internal`: non-public compiler, analysis, logging, and redaction support
 - `examples`: runnable public API examples
 - `integration`: independent module for actual TiDB Cloud Starter verification
 
@@ -54,6 +54,19 @@ The `integration` module owns the
 [`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependency and
 uses the current root checkout through a local module replacement. The root
 module and its users do not inherit that test dependency
+
+## Source projection analysis benchmark
+
+Measure recursive collection, Go parsing, model indexing, query-flow analysis,
+and diagnostic construction for one file containing 100 local result queries:
+
+```sh
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+```
+
+The benchmark is offline and does not load packages, run application code,
+open a database connection, or consume RU. Temporary fixture creation occurs
+before timing
 
 ## Schema compatibility client benchmarks
 
@@ -68,6 +81,37 @@ Both benchmarks are offline. They execute no SQL, open no connection, and
 consume no actual RU. `BenchmarkParse` includes lexical and catalog
 construction work. `BenchmarkSchema` reuses a parsed catalog and cached model
 metadata.
+
+## Query analysis client benchmarks
+
+Measure query-shape compilation, neutral query checks, schema-aware
+index-prefix checks, runtime artifact analysis, and ServerRU comparison:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryShapeIndexDiagnostics$' -benchmem -count=5
+go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
+go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+```
+
+These benchmarks are offline and exclude SQL execution, network calls, TiDB
+optimization, and actual RU consumption. The schema-aware benchmark includes
+QueryShape construction and physical index-prefix matching. Fingerprinting is
+lazy when evidence is not needed and has its own benchmark. The comparison
+benchmark uses the same builder for both diagnostic paths.
+The neutral query-check benchmark excludes builder compilation. The runtime
+benchmark analyzes 100 captured typed-query records without JSON decoding or
+database access. The ServerRU benchmark compares one and 10,000 samples for one
+fingerprint so retained bytes and allocation count can be checked independently
+of sample count. The baseline benchmark compares one and 10,000 persisted
+fingerprint aggregates; its memory must scale with fingerprint count because
+the output itself contains one entry per fingerprint. The comparison benchmark
+uses matching one- and 10,000-fingerprint baseline/current sets and includes
+validation plus deterministic merge, but excludes JSON decoding and report
+encoding.
 
 ## TiDB Cloud Starter integration tests
 
@@ -102,22 +146,11 @@ terminals, slice predicates, an application-selected DECIMAL type, temporal
 fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 `AUTO_RANDOM`, typed raw SQL, soft deletion, restore, transaction commit and
 rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
-ServerRU reads, plus operation debug reports spanning root and preload SELECTs
+ServerRU reads, plus statement observation spanning root and preload SELECTs
 
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
-
-## Debug report client benchmark
-
-Measure the client-side cost of grouping two completed statement events:
-
-```sh
-go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
-```
-
-This benchmark uses a local mutation executor. It excludes the MySQL driver,
-network calls, TiDB execution, and actual RU consumption
 
 ## EXPLAIN client benchmark
 
@@ -133,15 +166,28 @@ driver, network round trip, TiDB optimization, and actual RU consumption
 
 ## EXPLAIN ANALYZE client benchmark
 
-Measure the client-side cost of compiling one typed SELECT and scanning a
-three-operator TiDB runtime plan:
+Measure the client-side cost of compiling typed SELECTs, resolving plan access
+metadata, and scanning TiDB runtime plans:
 
 ```sh
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze($|RelationAliases$)' -benchmem -count=5
 ```
 
-This benchmark uses a local `database/sql` test driver. It measures neither
-the SELECT execution nor TiDB runtime cost and consumes no actual RU
+The first workload scans three physical-table operators. The relation workload
+scans four operators and resolves root, direct relation, many-to-many junction,
+and target aliases. Both use a local `database/sql` test driver, measure neither
+the SELECT execution nor TiDB runtime cost, and consume no actual RU
+
+Measure the cost of diagnosing already returned plans separately:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
+```
+
+The clean case has no diagnostics, the warning case emits incomplete
+statistics, large full-scan, and disk-use evidence, and the resolved-access
+case includes physical table, model, and relation metadata. No case performs
+database I/O or parses timing and RU text
 
 ## ServerRU client benchmark
 
@@ -151,9 +197,16 @@ Measure the client-side cost of reading and decoding one ServerRU value:
 go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
 ```
 
-This benchmark uses a local `database/sql` test driver. It includes the
-`database/sql` row path and JSON decoding but excludes the MySQL driver,
-network round trip, TiDB execution, and actual RU consumption
+Measure automatic connection pinning, one target `RawExec`, the auxiliary
+query, decoding, and either ordinary observer or runtime-capture delivery:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRawExecWith(ServerRUCollection|RuntimeCaptureAndServerRU)$' -benchmem -count=5
+```
+
+These benchmarks use a local `database/sql` test driver. They include the
+relevant client paths but exclude the MySQL driver, network round trip, TiDB
+execution, and actual RU consumption
 
 ## Driver transport benchmark
 

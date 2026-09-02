@@ -114,17 +114,22 @@ runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
 Invalid model metadata is returned through the existing non-suppressible
 `MOD001` diagnostic before physical compatibility is evaluated.
 
-Warnings, including the structural relation-index warning, are suppressible in
-the shared diagnostic representation through `check.NewReport` or
-`tidbgo check`. Errors represent an executable mapping, insertion, or
-cardinality conflict and are not suppressible. See the [offline diagnostic
-report guide](checks.md).
+Warnings, including the structural relation-index warning, set `Suppressible`
+in the shared diagnostic representation. Application tests own the policy for
+diagnostics returned directly by `check.Schema`. Errors represent an executable
+mapping, insertion, or cardinality conflict and are not suppressible. See the
+[analysis guide](checks.md).
 
 For a composite relation key, the leading index positions may order the mapped
 columns differently because every component is constrained by the generated
 relation lookup. An expression index does not prove this structural coverage.
-An exact junction pair can likewise use either source-target or target-source
-order, but it cannot include an additional unique-key component.
+An index part with a prefix length also does not represent the complete column
+and cannot prove relation lookup or uniqueness coverage. An exact junction
+pair can likewise use either source-target or target-source order, but it
+cannot include an additional unique-key component.
+Partial indexes do not prove unconditional lookup or uniqueness. Invisible
+unique indexes still prove uniqueness but do not prove a default-optimizer
+lookup, while FULLTEXT and SPATIAL indexes prove neither property.
 
 ## Type-check boundary
 

@@ -22,8 +22,9 @@ It demonstrates the current struct-first foundation:
 - Ordinary pointers and slices for direct and many-to-many relations
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
-- Offline query-shape diagnostics without exposing bind values
-- Application-owned diagnostic JSON and deterministic `tidbgo check` reports
+- Executed query-shape and query-to-index diagnostics through RuntimeCapture
+  and `tidbgo analyze`, without bind values
+- Offline source projection analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
@@ -39,11 +40,13 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Context-scoped statement logging with automatic terminal colors and no bind
   argument values
-- Operation-scoped debug reports that aggregate root and relation statements
-  without additional database calls
+- Structured runtime capture of actual root, relation, and split-bulk
+  statements without per-query wrappers
 - SELECT-only TiDB execution-plan inspection through the typed query builder
-- Explicit SELECT execution with TiDB runtime-plan inspection
+- Explicit SELECT execution with TiDB runtime-plan inspection and diagnostics
+  over the returned rows without another database call
 - Explicit same-session ServerRU reading for one completed DML statement
+- Optional observer-scoped ServerRU collection without query-specific wrappers
 
 `User` intentionally omits a database-managed `created_at` column because an
 application model does not need to mirror every physical column.
@@ -59,18 +62,28 @@ Run the example test from the repository root:
 go test ./examples/starter-app
 ```
 
+Scan the example's production Go source without a database connection:
+
+```sh
+go run ./cmd/tidbgo lint ./examples/starter-app
+```
+
+The report includes recognized query and uncertainty counts even when no
+projection warning is emitted
+
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
-connection, and `CheckRecentOrdersQuery` applies static query-shape diagnostics
-to the same builder. `BuildRecentClipsInGenreQuery` demonstrates natural
+connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows;
-`CheckRecentClipsInGenreQuery` reports an `EXISTS` fallback if that shape stops
-being eligible. `FirstRecentOrder`, `FindUserByEmail`,
+compiler filters and limits `clip_genres` before loading root rows. When the
+connected form is captured, `tidbgo analyze --schema` reports an `EXISTS`
+fallback or a missing association index prefix without another application
+wrapper.
+`FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
-SELECT and joining each User into that statement. `ListUsersWithRoles`
-demonstrates a pure
+SELECT and joining each User into that statement.
+`ListUsersWithRoles` demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
@@ -78,7 +91,8 @@ the matching roles. `ListVideos` uses the default active-row scope,
 `ListWatchLaterVideos` uses `PreloadWithDeleted` for one relation path.
 `InsertUser`, `InsertOrders`, `UpsertUser`, `UpsertUsers`,
 `SaveUser`, `UpdateUserEmail`, `DeleteUser`, and `DeleteOrdersForUser` show the
-ordinary mutation surface. `DeleteVideo` and `RestoreVideo` demonstrate a
+ordinary mutation surface without parallel diagnostic wrappers.
+`DeleteVideo` and `RestoreVideo` demonstrate a
 server-timestamped soft delete and explicit restore. `ClaimJobLease` and
 `FailJobLease` demonstrate a
 predicate-bounded update, NULL assignments, and atomic increment without raw
@@ -90,27 +104,66 @@ pure-junction relation mutations.
 `orm.Raw[User]`.
 `WithQueryLog` enables the built-in statement logger for selected operations
 without replacing the application-owned executor.
-`DebugUsersWithOrders` returns the users together with one `orm.DebugReport`
-containing the root SELECT and collection preload SELECT. The report omits bind
-values and performs no additional database calls.
+Structured runtime capture is configured directly at a request or job boundary
+instead of adding a companion function for every repository operation:
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture)
+```
+
+When the extra same-session round trip per recognized DML statement is
+intentional, enable ServerRU collection at the same boundary:
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+`*sql.DB` statements are temporarily pinned with their diagnostic query. The
+artifact keeps target and diagnostic cost separate, and a collection failure
+does not replace the application result. Offline analysis groups attempted
+ServerRU collection by bind-free fingerprint and reports count, samples,
+errors, total, mean, minimum, and maximum without retaining every sample.
+After a clean measurement run, write the deterministic versioned reference
+with `tidbgo baseline runtime.jsonl > server-ru-baseline.json`. Baseline
+creation is offline and requires complete error-free coverage with at least
+five samples per measured fingerprint. Compare another capture with
+`tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json`.
+The fixed policy reports `RU001` only when the current mean exceeds both 130%
+of the baseline mean and the observed baseline maximum; missing or unusable
+measurements report `RU002`.
+
+The existing functions in this example continue to receive the derived
+context unchanged. Analyze the resulting JSON Lines file with
+`tidbgo analyze`. Captured typed query shapes are checked automatically; pass
+`--schema schema.sql` to add offline physical index-prefix checks without a
+database connection or an application-side query registry.
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and
 returns actual rows, execution information, memory, and disk usage for each
-operator.
+operator. Each row also resolves an unambiguous compiler-owned access alias to
+its physical table, Go model, and root-relative relation path. Its returned
+`orm.ExplainAnalyzePlan` can be inspected directly:
+
+```go
+runtimePlan, err := ExplainAnalyzeUserByEmail(ctx, db, email)
+if err != nil {
+    return err
+}
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` does not execute another database statement.
 `FindUserByEmailWithServerRU` uses a pinned `*sql.Conn` for one query and reads
-its TiDB-reported ServerRU immediately afterward.
-`CheckModels` explicitly lists the application-owned model types and returns
-their diagnostics without source generation, configuration, or a database
-connection.
-The [`cmd/check`](cmd/check) example combines the model and query diagnostics
-into one JSON array that can be piped directly to `tidbgo check`.
-`CheckUserSchema` accepts a self-contained TiDB `CREATE TABLE` snapshot and
-checks the mapped table, columns, primary key, `AUTO_RANDOM`, nullability,
-required database-only columns, relation targets, the pure junction, and
-collection lookup index prefixes entirely offline. The snapshot includes the
-declared `orders`, `roles`, and `user_roles` relation tables. The omitted
-database-managed `created_at` column is accepted because it has a default.
+its TiDB-reported ServerRU immediately afterward when a single manual sample is
+more appropriate.
+The example tests call `check.Model` for each application-owned model and call
+`check.Schema` with a self-contained TiDB `CREATE TABLE` snapshot. These checks
+cover mapped tables, columns, primary keys, `AUTO_RANDOM`, nullability, required
+database-only columns, relation targets, the pure junction, and collection
+lookup index prefixes entirely offline. The omitted database-managed
+`created_at` column is accepted because it has a default.
 
 Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
@@ -123,5 +176,5 @@ writes and raw SQL. The [statement observation guide](../../docs/observability.m
 documents query logging and custom observers.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
-The [offline diagnostic report guide](../../docs/checks.md) documents CLI
-input, fixed exit statuses, and reason-carrying suppression.
+The [analysis guide](../../docs/checks.md) documents each evidence boundary,
+CLI exit statuses, and reason-carrying suppression for `analyze` and `lint`.

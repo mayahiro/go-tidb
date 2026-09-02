@@ -644,7 +644,8 @@ func parseTableIndex(source string, tokens []sqlToken) (Index, bool, error) {
 	if tokens[0].keyword("FOREIGN") || tokens[0].keyword("CHECK") {
 		return Index{}, false, nil
 	}
-	if tokens[0].keyword("FULLTEXT") || tokens[0].keyword("SPATIAL") {
+	specialized := tokens[0].keyword("FULLTEXT") || tokens[0].keyword("SPATIAL")
+	if specialized {
 		tokens = tokens[1:]
 		if len(tokens) == 0 {
 			return Index{}, false, parseErrorAt(source, positionToken.offset, "index definition is incomplete")
@@ -689,14 +690,23 @@ func parseTableIndex(source string, tokens []sqlToken) (Index, bool, error) {
 		return Index{}, false, err
 	}
 	index := Index{
-		name:     name,
-		position: positionAt(source, positionToken.offset),
-		columns:  make([]string, 0, len(parts)),
-		primary:  primary,
-		unique:   unique,
+		name:        name,
+		position:    positionAt(source, positionToken.offset),
+		columns:     make([]string, 0, len(parts)),
+		primary:     primary,
+		unique:      unique,
+		specialized: specialized,
+	}
+	for _, token := range tokens[closeIndex+1:] {
+		if token.keyword("WHERE") {
+			index.partial = true
+		}
+		if token.keyword("INVISIBLE") {
+			index.invisible = true
+		}
 	}
 	for _, part := range parts {
-		column, simple := part[0].identifier()
+		column, simple := simpleIndexColumn(part)
 		if !simple {
 			index.hasExpression = true
 			continue
@@ -704,6 +714,23 @@ func parseTableIndex(source string, tokens []sqlToken) (Index, bool, error) {
 		index.columns = append(index.columns, column)
 	}
 	return index, true, nil
+}
+
+func simpleIndexColumn(tokens []sqlToken) (string, bool) {
+	if len(tokens) == 0 {
+		return "", false
+	}
+	column, simple := tokens[0].identifier()
+	if !simple {
+		return "", false
+	}
+	if len(tokens) == 1 {
+		return column, true
+	}
+	if len(tokens) == 2 && (tokens[1].keyword("ASC") || tokens[1].keyword("DESC")) {
+		return column, true
+	}
+	return "", false
 }
 
 func splitIndexParts(source string, tokens []sqlToken) ([][]sqlToken, error) {

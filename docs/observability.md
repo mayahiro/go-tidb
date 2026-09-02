@@ -33,6 +33,8 @@ The logger includes:
 - Database-reported affected rows when available
 - SQL template
 - Error when the operation fails
+- Opt-in ServerRU value, diagnostic duration, auxiliary statement count, and
+  collection error
 
 By default it does not receive or log bind argument values. The SQL template
 can still contain application literals when raw SQL is constructed that way,
@@ -78,53 +80,181 @@ by default and contains a shallow slice snapshot only when
 only after `sql.Result.RowsAffected` succeeds. A SELECT or EXPLAIN duration
 covers `QueryContext`, row scanning, iteration, and row closing. Terminal errors
 such as `sql.ErrNoRows` and `orm.ErrMultipleRows` are included in the event.
+`ServerRU` is nil unless `CollectServerRU` requested a diagnostic for a
+recognized DML operation. When present, it keeps the target result separate
+from the value, diagnostic duration, auxiliary statement count, and collection
+error.
 
 Observers run synchronously after the duration is captured. Custom observers
 should return quickly, be concurrency-safe when contexts are shared, and not
 panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
-`WithStatementObserver` disables an inherited observer.
+`WithStatementObserver` disables an inherited ordinary observer without
+disabling `RuntimeCapture`.
 
-## Operation debug reports
+## Structured runtime capture
 
-Use `Debug` to group every statement completed by one application operation:
-
-```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
-```
-
-The callback must execute the operation with `debugContext`. `Statements` is a
-non-nil slice in observer delivery order and includes root queries, collection
-preloads, automatically split bulk mutations, raw statements, and transaction
-lifecycle events when those paths use that context. Each entry is the same
-`StatementEvent` shape used by custom observers.
-
-`Duration` measures the complete callback including observer work.
-`StatementDuration` is the sum of captured event durations and can exceed the
-callback duration when statements execute concurrently. The callback must wait
-for any goroutines that use `debugContext`; events completed after it returns
-are outside the report. A callback error is returned unchanged with the report
-of statements that already completed.
-
-`Debug` only collects existing events. It adds no database calls, `EXPLAIN`,
-ServerRU reads, or implicit transaction. An observer already present on `ctx`
-continues to receive the events. Bind arguments are excluded from the report by
-default and can be enabled independently with `IncludeStatementArguments`:
+Use one reusable `RuntimeCapture` when executed statements should be analyzed
+without registering each query in application code:
 
 ```go
-report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
+capture := orm.NewRuntimeCapture(captureWriter)
+
+// Install once at each request, job, or test-operation boundary.
+ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
-Argument values can contain secrets, personal data, or large payloads. The
-report stores SQL templates and errors even in the default mode, so apply the
-same output and retention controls as statement logging.
+Continue passing the derived context to existing ORM terminals. No query,
+repository, statement-count, or artifact-conversion wrapper is required. Reuse
+the capture across concurrent
+scopes; `WithRuntimeCapture` assigns each call a distinct scope used by offline
+N+1 analysis. It also preserves an inherited ordinary `StatementObserver`.
+The ordinary observer and capture can be installed in either order. Installing
+another capture on the derived context replaces the inherited capture.
+
+The capture writes one JSON object per completed statement. Records contain a
+format version, capture and scope identities, bind-free fingerprint, SQL
+template, operation, terminal, model or Relation identity when known, start
+time, target-statement duration, returned or affected row count, error, and
+automatic bulk or preload batch position. Model-row `All`, `First`, and `Only`
+records and typed plan records also carry the bind-free query shape and
+compiler rewrite or fallback decision. LIMIT and OFFSET bind values remain
+excluded; the shape records only whether each bound is present and positive so
+offline rules can distinguish a zero LIMIT. `Count` and `Exists` retain a stable
+bind-free statement fingerprint without claiming the model-row projection
+shape. Raw SQL is marked as opaque. Collection preloads and automatically split
+bulk mutations are recorded from the actual execution path, so
+application-side statement count wrappers are unnecessary.
+
+Capture is opt-in. When it is disabled, query-shape construction and artifact
+encoding do not run. Ordinary statement observers do not enable this extra
+metadata path. Capture performs no additional database I/O by default and
+never runs `EXPLAIN`. It records only statements executed through go-tidb with
+the derived context; direct `database/sql` and other ORM calls remain outside
+its coverage.
+
+Runtime artifacts never contain bind values. `IncludeStatementArguments` is a
+statement-observer option and cannot be passed to `WithRuntimeCapture`.
+
+Enable high-cost ServerRU collection at the same scope boundary when the extra
+round trip per recognized DML statement is intentional:
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+The resulting record keeps target duration separate from ServerRU diagnostic
+duration and auxiliary statement count. `tidbgo analyze` reports go-tidb
+statement and auxiliary statement counts separately, together with successful
+sample count, collection-error count, and summed ServerRU. A collection failure
+produces `RUN003` but never replaces the target statement result.
+
+For each fingerprint with at least one collection attempt, text output adds a
+`server_ru_fingerprint` line and JSON output adds an entry to
+`server_ru_by_fingerprint`. `count` is the number of all captured target
+statements with that fingerprint, including unsampled statements. `samples`
+counts usable values and `errors` counts collection or connection-release
+errors; one statement can contribute to both. `total`, `mean`, `min`, and `max`
+use only successful samples and are zero when no sample succeeded. Entries are
+sorted by fingerprint. Analysis retains one constant-size accumulator per
+distinct fingerprint and never retains the individual RU samples. These values
+are descriptive statistics, not a regression threshold or a billing-RU value.
+
+Create a reusable reference artifact from a completed capture:
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+The baseline is exactly one JSON object with format version `1` and a
+fingerprint-sorted `server_ru_by_fingerprint` array. Each entry stores
+`fingerprint`, `count`, `samples`, `total`, `mean`, `min`, and `max`. Collection
+errors reject creation and are not stored as an always-zero field. The artifact
+has no creation timestamp and therefore produces deterministic output for the
+same analysis. The CLI streams the runtime input and retains no individual
+samples. It writes only to standard output and performs no database access.
+
+Baseline creation requires every measured fingerprint to have complete
+coverage (`count == samples`), at least five successful samples, and no
+collection or connection-release error. It also fails when the runtime
+artifact is invalid. Creating the artifact itself does not compare a current
+measurement.
+
+Compare a current runtime capture with the saved reference:
+
+```sh
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+```
+
+The baseline option requires a file path so the runtime artifact can still use
+standard input. Comparison is offline and deterministic. The baseline and
+current capture must contain the same measured fingerprint set. Current
+coverage must also be complete and error-free, with at least five successful
+samples per fingerprint. Different statement counts are allowed when both
+sides have complete coverage because the metric is the per-statement mean.
+Fingerprints with no collection attempt are outside this set, so enable
+`CollectServerRU` consistently across the complete measurement workload.
+
+For each comparable fingerprint, the effective limit is:
+
+```text
+max(baseline mean * 1.30, baseline maximum)
+```
+
+The current mean is an `RU001` regression only when it is strictly greater
+than that limit. Equality passes. The observed baseline maximum acts as an
+empirical noise floor; there is no fixed absolute RU allowance that would hide
+a material relative increase in a low-RU query. A new or missing fingerprint,
+collection error, incomplete coverage, or fewer than five current samples
+produces `RU002` instead of claiming a regression result.
+
+Both diagnostics are non-suppressible errors and therefore produce check exit
+status `1`. Text output includes one `server_ru_comparison` line per
+fingerprint and a comparison summary. JSON output adds
+`server_ru_comparison`, including the fixed policy, summary, sorted entries,
+status, measurement coverage, compared means, observed baseline maximum, and
+effective limit. Entry status is one of `pass`, `regression`,
+`missing_baseline`, `missing_current`, `collection_error`,
+`incomplete_coverage`, or `insufficient_samples`. This value is TiDB statement
+ServerRU, not billing RU.
+
+Analyze a completed artifact without a database connection:
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+```
+
+The CLI streams statement records instead of retaining the complete artifact
+in memory. Exact aggregate statistics still retain the distinct capture,
+scope, fingerprint, and batch identities needed by the report. Memory therefore
+grows with distinct identities rather than statement or RU sample count.
+
+The analyzer applies `QRY002` through `QRY005` once per distinct captured
+query diagnostic and reports repeated non-preload SELECT fingerprints within
+one scope as possible N+1 queries. `--schema` parses an offline TiDB `CREATE
+TABLE` snapshot and applies `QRY006` and `QRY007` to each captured query shape.
+It never connects to a database. Statistics distinguish all captured
+statements, statements carrying a query shape, and statements checked against
+the snapshot. `Count`, `Exists`, raw SQL, collection preload statements, and
+mutations do not claim a complete model-row query shape and therefore remain
+outside these query-shape rules.
+
+Repetition is evidence rather than proof; retries and intentionally repeated
+lookups require application review. Failed SELECT attempts are included
+because they still consume statements. Every suppression names an exact code
+and records a non-empty reason. Preload batch splits are excluded from the
+N+1 rule.
+
+Bind values are never written to the runtime artifact. SQL templates can still
+contain literals supplied through raw SQL, and database errors can contain
+values. Treat the artifact as sensitive development data and choose its file
+permissions, destination, and retention accordingly. The caller owns and
+closes the writer. Encoding and writer failures never replace database results;
+inspect `capture.Err()` when artifact completeness matters.
 
 ## SELECT EXPLAIN
 
@@ -175,10 +305,27 @@ runtimePlan, err := orm.Query[User]().
 
 The explicit method call is the opt-in. It executes the complete root SELECT
 without adding a protective limit, then returns a non-nil
-`[]orm.ExplainAnalyzeRow`. The result maps TiDB's nine default columns to
+`orm.ExplainAnalyzePlan`. The result maps TiDB's nine default columns to
 `ID`, `EstRows`, `ActRows`, `Task`, `AccessObject`, `ExecutionInfo`,
 `OperatorInfo`, `Memory`, and `Disk`. It returns the runtime plan rather than
 hydrating application models.
+
+Each row also has compiler-derived `PhysicalTable`, `Model`, and
+`RelationPath` fields. These are not additional TiDB columns. go-tidb reads the
+exact `table:` token from `AccessObject` and resolves it against metadata for
+the compiled root SELECT, inline preload joins, relation predicates,
+many-to-many junctions, and relation-first TopN associations. Generated aliases
+identify occurrences in one query and do not come from model tags. Relation
+occurrences use distinct aliases, so a target and its root-relative relation
+path remain identifiable when multiple relations appear at the same nesting
+depth.
+
+`PhysicalTable` and `Model` identify the root or related model. `RelationPath`
+is empty for the root. A junction table has a physical table and relation path
+but no Go model. A derived table has no physical-table mapping. If TiDB returns
+an unknown token or only a physical name shared by multiple relation paths,
+go-tidb preserves `AccessObject` and leaves the ambiguous derived fields empty
+instead of parsing the SQL or guessing.
 
 `ExplainAnalyze` has the same typed boundary as `Explain`: mutation builders
 and caller-supplied raw SQL cannot enter it, inline to-one joins are part of the
@@ -193,6 +340,41 @@ TiDB includes the RU consumed by this execution in the top-level
 format. RU and timing can vary between runs because of caches and service
 conditions.
 
+Inspect high-confidence facts in the returned rows without database I/O:
+
+```go
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` emits at most one suppressible warning for each rule and attaches
+one evidence item per matching operator:
+
+| Code | Runtime-plan fact |
+| --- | --- |
+| `PLN001` | `OperatorInfo` reports `stats:pseudo` or `stats:partial` |
+| `PLN002` | Estimated and actual rows differ by at least 100 times and either side is at least 1,000 rows |
+| `PLN003` | A `TableFullScan` operator outputs at least 10,000 rows |
+| `PLN004` | The `Disk` column reports a positive value in a recognized TiDB byte unit |
+
+An operator with incomplete statistics is omitted from `PLN002`, because the
+known statistics condition is the more direct evidence. The fixed thresholds
+are intentionally conservative. A warning identifies a plan fact to inspect;
+it does not prove that an index or query rewrite is better. Timing, RU, loops,
+RPC details, memory, and other free-form execution text are not parsed.
+
+The diagnostic evidence includes operator identifiers, access objects,
+resolved physical tables, models and relation paths when available, row counts,
+and recognized disk values. It does not copy full `OperatorInfo`, which can
+contain predicate ranges derived from bind values. Treat access-object, model,
+relation, and schema identifiers as development metadata. The returned
+diagnostics are application-owned values that tests can inspect directly.
+
+TiDB documents `estRows`, `actRows`, pseudo statistics, and execution-info
+fields in its [execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)
+and [EXPLAIN walkthrough](https://docs.pingcap.com/tidb/stable/explain-walkthrough/).
+Positive disk usage can indicate an intermediate operator spilled to disk; see
+TiDB's [disk-spill documentation](https://docs.pingcap.com/tidb/stable/configure-memory-usage/#disk-spill).
+
 An observed call emits `StatementExplainAnalyze` after the SELECT executes and
 all plan rows are scanned and closed. The built-in logger renders
 `EXPLAIN ANALYZE` in bright yellow on a supported interactive terminal. Bind
@@ -200,6 +382,32 @@ values remain opt-in. See TiDB's [EXPLAIN ANALYZE statement
 reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
 
 ## ServerRU
+
+`CollectServerRU` automatically samples recognized SELECT, INSERT, UPSERT,
+UPDATE, and DELETE operations when passed to `WithStatementObserver`,
+or `WithRuntimeCapture`. It does not sample `EXPLAIN`, transaction
+lifecycle events, or unclassified `EXEC` raw SQL.
+
+For `*sql.DB`, go-tidb temporarily pins one connection before the target call,
+executes the target and diagnostic on that connection, then returns it to the
+pool. A caller-supplied `*sql.Conn` or active `*sql.Tx` is used directly. Other
+executor implementations still execute the target but report a collection
+error without an auxiliary query. The caller retains ownership of a supplied
+connection or transaction. Do not interleave another statement on it while a
+measured ORM call is in progress.
+
+Each eligible statement adds one `SELECT @@tidb_last_query_info` round trip
+after target completion. SELECT rows are scanned and closed first. The
+auxiliary query does not emit another `StatementEvent` or runtime record;
+instead its count, duration, value, and error are attached to the target event.
+Connection-pool wait and release time introduced by automatic `*sql.DB`
+pinning are included in diagnostic duration, not target duration. The
+operation's return value and error remain those of the target even when
+collection fails. Summed ServerRU contains only the values TiDB reports for
+target statements; it does not measure the diagnostic query's own resource
+use.
+
+Use `LastServerRU` for a single explicit read instead of automatic collection.
 
 `LastServerRU` reads the `ru_consumption` reported by TiDB for the last DML
 statement recorded on the same session:

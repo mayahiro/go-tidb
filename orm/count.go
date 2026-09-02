@@ -33,7 +33,8 @@ func (q *SelectQuery[T]) Count(ctx context.Context, executor QueryExecutor) (int
 	if err != nil {
 		return 0, err
 	}
-	rows, err := queryTextRows(ctx, executor, compiled.modelName, compiled.sql, compiled.arguments)
+	metadata := runtimeTypedSelectMetadata(compiled.modelName, "count")
+	rows, err := queryTextRowsWithMetadata(ctx, executor, compiled.modelName, compiled.sql, compiled.arguments, metadata)
 	if err != nil {
 		return 0, err
 	}

@@ -143,6 +143,9 @@ type Index struct {
 	primary       bool
 	unique        bool
 	hasExpression bool
+	specialized   bool
+	partial       bool
+	invisible     bool
 }
 
 // Name returns the declared index name, or PRIMARY for a primary key.
@@ -151,19 +154,36 @@ func (i Index) Name() string { return i.name }
 // Position returns the location of the index definition in the SQL source.
 func (i Index) Position() Position { return i.position }
 
-// Columns returns simple indexed columns in index order. Expression parts are
-// omitted and can be detected with HasExpression.
+// Columns returns simple indexed columns in index order. Expression and
+// prefix-length parts are omitted and can be detected with HasExpression.
 func (i Index) Columns() []string { return append([]string(nil), i.columns...) }
 
 // Primary reports whether the index is the table primary key.
 func (i Index) Primary() bool { return i.primary }
 
-// Unique reports whether the index enforces uniqueness.
+// Unique reports whether the index is declared PRIMARY or UNIQUE. Use
+// ProvidesUnconditionalUniqueness when partial-index scope matters.
 func (i Index) Unique() bool { return i.primary || i.unique }
 
-// HasExpression reports whether any index part is an expression rather than a
-// simple column reference.
+// HasExpression reports whether any index part is an expression, a prefix
+// length, or another form that is not a complete simple column reference with
+// an optional ASC or DESC direction.
 func (i Index) HasExpression() bool { return i.hasExpression }
+
+// ProvidesUnconditionalUniqueness reports whether the index enforces
+// uniqueness for the complete listed columns across every table row.
+// Invisible unique indexes still enforce their constraint.
+func (i Index) ProvidesUnconditionalUniqueness() bool {
+	return i.Unique() && !i.hasExpression && !i.specialized && !i.partial
+}
+
+// SupportsDefaultColumnLookup reports whether the default TiDB optimizer can
+// use the index for an unconditional lookup over the complete listed columns.
+// Expression, prefix-length, specialized, partial, and invisible indexes do
+// not establish this coverage.
+func (i Index) SupportsDefaultColumnLookup() bool {
+	return !i.hasExpression && !i.specialized && !i.partial && !i.invisible
+}
 
 func foldIdentifier(identifier string) string {
 	return strings.ToLower(identifier)

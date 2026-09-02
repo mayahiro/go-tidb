@@ -34,6 +34,7 @@ loggerは次を出力します
 - 取得できた場合のdatabase-reported affected rows
 - SQL template
 - operation失敗時のerror
+- opt-inのServerRU value、diagnostic duration、auxiliary statement count、collection error
 
 defaultではbind argument valueを受け取らず、logにも出力しません
 
@@ -83,56 +84,198 @@ SELECTまたはEXPLAINのdurationには `QueryContext`、row scan、iteration、
 
 `sql.ErrNoRows` と `orm.ErrMultipleRows` のようなterminal errorもeventへ含めます
 
+`ServerRU` は `CollectServerRU` がrecognized DML operationのdiagnosticを要求した場合だけnon-nilになります
+
+target resultとServerRU value、diagnostic duration、auxiliary statement count、collection errorを分離して保持します
+
 durationを確定した後にobserverを同期実行します
 
 custom observerは短時間でreturnし、contextを共有する場合はconcurrency-safeにし、panicしないようにしてください
 
 `NewStatementLogger` はwriteを直列化し、writer errorがdatabase resultを置き換えないよう無視します
 
-`WithStatementObserver` へnilを渡すと継承したobserverを無効化します
+`WithStatementObserver` へnilを渡すと継承した通常observerを無効化しますが、`RuntimeCapture` は無効化しません
 
-## Operation debug report
+## Structured runtime capture
 
-`Debug` で1 application operation内に完了した全statementをまとめます
-
-```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
-```
-
-callback内のoperationには `debugContext` を使う必要があります
-
-`Statements` はobserver delivery順のnon-nil sliceであり、そのcontextを使ったroot query、collection preload、自動分割bulk mutation、raw statement、transaction lifecycle eventを含みます
-
-各entryはcustom observerと同じ `StatementEvent` です
-
-`Duration` はobserver処理を含むcallback全体、`StatementDuration` はcaptured event durationの合計です
-
-statementを並行実行した場合は `StatementDuration` がcallback durationを超えることがあります
-
-callbackは `debugContext` を使うgoroutineの完了を待つ必要があり、return後に完了したeventはreportへ含みません
-
-callback errorは変更せず、完了済みstatementのreportとともに返します
-
-`Debug` は既存eventだけを収集し、database call、`EXPLAIN`、ServerRU read、implicit transactionを追加しません
-
-`ctx` に既存observerがある場合は同じeventを引き続き受け取ります
-
-reportのbind argumentはdefaultで除外し、必要な場合だけ独立して有効化します
+application codeでqueryごとの登録を行わず実行statementを解析する場合は1個の `RuntimeCapture` を再利用します
 
 ```go
-report, err := orm.Debug(ctx, operation, orm.IncludeStatementArguments())
+capture := orm.NewRuntimeCapture(captureWriter)
+
+// request、job、test operationの境界ごとに1回だけ設定します
+ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
-argument valueにはsecret、personal data、大きなpayloadが含まれ得ます
+既存ORM terminalにはderived contextをそのまま渡します
 
-default modeでもSQL templateとerrorを保持するため、statement logと同じ出力先とretention controlを適用してください
+query、repository、statement count、artifact変換のwrapperは不要です
+
+captureはconcurrentなscope間で再利用でき、`WithRuntimeCapture` の呼び出しごとにoffline N+1解析用の異なるscopeを割り当てます
+
+継承した通常の `StatementObserver` も維持します
+
+通常observerとcaptureはどちらの順序でも設定できます
+
+derived contextへ別のcaptureを設定した場合は継承したcaptureを置き換えます
+
+captureは完了statementごとに1個のJSON objectを書き込みます
+
+recordにはformat version、captureとscopeのidentity、bind valueを含まないfingerprint、SQL template、operation、terminal、判明しているmodelまたはRelation identity、start time、対象statement duration、returnedまたはaffected row count、error、自動bulkまたはpreload batch位置を含めます
+
+model rowを返す `All`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+
+LIMITとOFFSETのbind valueは除外したまま、offline ruleがzero LIMITを区別できるよう指定の有無と正数かどうかだけをshapeへ記録します
+
+`Count` と `Exists` はmodel row projection shapeを表明せず、bind valueを含まない安定したstatement fingerprintを記録します
+
+Raw SQLはopaqueとして記録します
+
+collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
+
+captureはopt-inです
+
+無効時はquery shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
+
+captureはdefaultで追加database I/Oを行わず、`EXPLAIN` を実行しません
+
+runtime artifactはbind valueを保持しません
+
+`IncludeStatementArguments` はstatement observer用optionであり `WithRuntimeCapture` には渡せません
+
+recognized DML statementごとの追加round tripを意図して受け入れる場合は同じscope boundaryで高costなServerRU収集を有効にします
+
+```go
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+recordはtarget durationとServerRU diagnostic durationおよびauxiliary statement countを分離します
+
+`tidbgo analyze` はgo-tidb statement数、auxiliary statement数、成功sample数、collection error数、ServerRU合計を別々にreportします
+
+collection failureは `RUN003` を生成しますがtarget statement resultを置き換えません
+
+collection試行が1回以上あるfingerprintごとにtext出力へ `server_ru_fingerprint` line、JSON出力へ `server_ru_by_fingerprint` entryを追加します
+
+`count` はsampleされていないstatementも含む、そのfingerprintの全captured target statement数です
+
+`samples` は利用可能なvalue数、`errors` はcollectionまたはconnection releaseのerror数であり、1 statementが両方へ加算される場合があります
+
+`total`、`mean`、`min`、`max` は成功sampleだけを使い、成功sampleがない場合は0です
+
+entryはfingerprint順で、解析中はdistinct fingerprintごとに固定sizeのaccumulatorだけを保持し、個別RU sampleを保持しません
+
+これらは記述統計であり、regression thresholdまたはbilling RUではありません
+
+完了したcaptureから再利用可能なreference artifactを作成できます
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+baselineはformat version `1` とfingerprint順の `server_ru_by_fingerprint` arrayを持つexactly one JSON objectです
+
+各entryは `fingerprint`、`count`、`samples`、`total`、`mean`、`min`、`max` を保存します
+
+collection errorはbaseline作成を失敗させるため、常に0となるfieldとして保存しません
+
+作成時刻を含まないため、同じanalysisからdeterministicな出力を生成します
+
+CLIはruntime inputをstreaming処理して個別sampleを保持せず、standard outputへの書き込み以外にDB accessを行いません
+
+baseline作成では全measured fingerprintの完全なcoverageである `count == samples`、5件以上の成功sample、collectionまたはconnection release errorなしを必須とします
+
+runtime artifactが不正な場合も失敗します
+
+artifactの作成自体はcurrent measurementとの比較を行いません
+
+保存したreferenceとcurrent runtime captureを比較できます
+
+```sh
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+```
+
+runtime artifactがstandard inputを引き続き使用できるよう、baseline optionにはfile pathが必要です
+
+比較はofflineかつdeterministicです
+
+baselineとcurrent captureは同じmeasured fingerprint setを持つ必要があります
+
+current coverageも完全かつerrorなしで、fingerprintごとに5件以上の成功sampleが必要です
+
+metricはstatement単位meanであるため、両側のcoverageが完全であればstatement countが異なっても比較できます
+
+collectionを1回も試行していないfingerprintはこのsetの対象外となるため、measurement workload全体で `CollectServerRU` を一貫して有効化してください
+
+比較可能なfingerprintのeffective limitは次の値です
+
+```text
+max(baseline mean * 1.30, baseline maximum)
+```
+
+current meanがこのlimitを厳密に超えた場合だけ `RU001` regressionになります
+
+同値はpassします
+
+baselineで観測した最大値を実測noise floorとし、低RU queryの有意な相対増加を隠す固定absolute RU allowanceは設けません
+
+新規または欠落fingerprint、collection error、不完全なcoverage、current sampleが5件未満の場合はregression結果を主張せず `RU002` になります
+
+どちらのdiagnosticもsuppressできないerrorで、check exit status `1` になります
+
+text出力はfingerprintごとの `server_ru_comparison` lineと比較summaryを含みます
+
+JSON出力は固定policy、summary、sort済みentry、status、measurement coverage、比較したmean、baselineで観測した最大値、effective limitを持つ `server_ru_comparison` を追加します
+
+entry statusは `pass`、`regression`、`missing_baseline`、`missing_current`、`collection_error`、`incomplete_coverage`、`insufficient_samples` のいずれかです
+
+この値はTiDB statement ServerRUでありbilling RUではありません
+
+derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
+
+完了したartifactはDB接続なしで解析できます
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+```
+
+CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析します
+
+正確なaggregate statisticsに必要な異なるcapture、scope、fingerprint、batch identityは保持します
+
+そのためmemoryはstatement数またはRU sample数ではなくdistinct identity数に応じて増加します
+
+analyzerは異なるcaptured query diagnosticごとに `QRY002` から `QRY005` を1回適用し、同一scope内でpreload以外のSELECT fingerprintが繰り返された場合のN+1候補をreportします
+
+`--schema` はofflineのTiDB `CREATE TABLE` snapshotをparseし、各captured query shapeへ `QRY006` と `QRY007` を適用します
+
+DB接続は行いません
+
+statisticsは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
+
+`Count`、`Exists`、raw SQL、collection preload statement、mutationはcompleteなmodel row query shapeを表明しないため、これらのquery shape ruleの対象外です
+
+反復は証拠であり確定ではなく、retryまたは意図した反復lookupはapplication reviewが必要な場合があります
+
+失敗したSELECT attemptもstatementを消費するため対象に含めます
+
+suppressionはexact codeと空ではないreasonを記録します
+
+preload batch splitはN+1 ruleから除外します
+
+bind valueはruntime artifactへ書き込みません
+
+Raw SQLへ直接記述したliteralはSQL templateに残り、database errorにもvalueが含まれる場合があります
+
+artifactをsensitiveなdevelopment dataとして扱い、file permission、destination、retentionを管理してください
+
+writerの所有とcloseはcallerが担当します
+
+encodeまたはwriter errorはdatabase resultを置き換えず、artifactの完全性が必要な場合は `capture.Err()` を確認します
 
 ## SELECT EXPLAIN
 
@@ -188,11 +331,29 @@ runtimePlan, err := orm.Query[User]().
 
 明示的なmethod call自体がopt-inです
 
-protective limitを追加せずcompleteなroot SELECTを実行し、non-nilな `[]orm.ExplainAnalyzeRow` を返します
+protective limitを追加せずcompleteなroot SELECTを実行し、non-nilな `orm.ExplainAnalyzePlan` を返します
 
 TiDB default formatの9 columnを `ID`、`EstRows`、`ActRows`、`Task`、`AccessObject`、`ExecutionInfo`、`OperatorInfo`、`Memory`、`Disk` へ対応させます
 
 application modelをhydrateせずruntime planを返します
+
+各rowはcompilerから導出した `PhysicalTable`、`Model`、`RelationPath` fieldも持ちます
+
+これらはTiDBが返す追加columnではありません
+
+go-tidbは `AccessObject` の正確な `table:` tokenを読み、compile済みroot SELECT、inline preload join、Relation predicate、many-to-many junction、Relation-first TopN associationのmetadataと照合します
+
+生成aliasはmodel tagではなく1 query内のoccurrenceを識別します
+
+同じnesting depthに複数Relationがある場合もRelation occurrenceごとに異なるaliasを使い、targetとrootからのRelation pathを識別可能にします
+
+`PhysicalTable` と `Model` はrootまたは関連modelを識別し、rootの `RelationPath` は空です
+
+junction tableはphysical tableとRelation pathを持ちますがGo modelを持ちません
+
+derived tableにはphysical table mappingを設定しません
+
+TiDBが未知のtokenまたは複数Relation pathで共有するphysical nameだけを返した場合は `AccessObject` を保持し、SQL parseまたは推測を行わず曖昧なderived fieldを空にします
 
 `Explain` と同じtyped boundaryを持ち、mutation builderとcaller-supplied raw SQLは対象外です
 
@@ -210,6 +371,43 @@ TiDBは今回の実行で消費したRUをtop-level `ExecutionInfo` へ含めま
 
 cacheとservice conditionによってRUとtimingは実行ごとに変化し得ます
 
+返されたrowに含まれる確度の高い事実をDB I/Oなしで検査できます
+
+```go
+diagnostics := runtimePlan.Diagnostics()
+```
+
+`Diagnostics` はruleごとに最大1個のsuppressible warningを生成し、該当するoperatorごとにevidenceを1個追加します
+
+| Code | Runtime planの事実 |
+| --- | --- |
+| `PLN001` | `OperatorInfo` が `stats:pseudo` または `stats:partial` を報告する |
+| `PLN002` | estimateとactual rowが100倍以上異なり、いずれかが1,000 row以上である |
+| `PLN003` | `TableFullScan` operatorが10,000 row以上を出力する |
+| `PLN004` | `Disk` columnがTiDBの認識可能なbyte unitで正数を報告する |
+
+不完全なstatisticsを持つoperatorは原因を直接示す `PLN001` を優先し、同じoperatorを `PLN002` へ含めません
+
+固定thresholdは意図的に保守的です
+
+warningは確認すべきplan上の事実を示すものであり、index追加またはquery rewriteが常に改善になることを保証しません
+
+timing、RU、loop、RPC detail、memory、その他のfree-form execution textはparseしません
+
+diagnostic evidenceにはoperator identifier、access object、解決できたphysical table、model、Relation path、row count、認識したdisk valueを含みます
+
+bind value由来のpredicate rangeを含み得るため、完全な `OperatorInfo` はコピーしません
+
+access object、model、Relation、schema identifierはdevelopment metadataとして扱ってください
+
+返されたdiagnosticはapplicationが所有する値であり、testから直接検査できます
+
+TiDBの `estRows`、`actRows`、pseudo statistics、execution info fieldについては[execution-plan overview](https://docs.pingcap.com/tidb/stable/explain-overview/)と[EXPLAIN walkthrough](https://docs.pingcap.com/tidb/stable/explain-walkthrough/)を参照してください
+
+正数のdisk usageはintermediate operatorのdisk spillを示す場合があります
+
+TiDBの[disk-spill documentation](https://docs.pingcap.com/tidb/stable/configure-memory-usage/#disk-spill)を参照してください
+
 observerを設定した場合はSELECT実行と全plan rowのscanおよびclose後に `StatementExplainAnalyze` を生成します
 
 built-in loggerは対応するinteractive terminalで `EXPLAIN ANALYZE` をbright yellowにし、bind valueはopt-inのままです
@@ -217,6 +415,34 @@ built-in loggerは対応するinteractive terminalで `EXPLAIN ANALYZE` をbrigh
 TiDBの[EXPLAIN ANALYZE statement reference](https://docs.pingcap.com/ja/tidb/stable/sql-statement-explain-analyze/)を参照してください
 
 ## ServerRU
+
+`CollectServerRU` は `WithStatementObserver` または `WithRuntimeCapture` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
+
+`EXPLAIN`、transaction lifecycle event、分類できないraw `EXEC` はsampleしません
+
+`*sql.DB` ではgo-tidbがtarget callの前に1 connectionを一時的にpinし、そのconnection上でtargetとdiagnosticを実行してからpoolへ返します
+
+caller-supplied `*sql.Conn` またはactiveな `*sql.Tx` は直接使います
+
+渡されたconnectionまたはtransactionのownershipはcallerが維持します
+
+その他のexecutor implementationではtargetを通常どおり実行し、auxiliary queryを行わずcollection errorをreportします
+
+測定中のORM callと並行してcaller-supplied connectionまたはtransactionへ別statementを挟まないでください
+
+eligible statementごとにtarget完了後の `SELECT @@tidb_last_query_info` 1 round tripを追加します
+
+SELECT rowは先にscanしてcloseします
+
+auxiliary queryは別の `StatementEvent` またはruntime recordを生成せず、count、duration、value、errorをtarget eventへ保持します
+
+automaticな `*sql.DB` pinningで追加されたconnection pool waitとrelease timeはtarget durationではなくdiagnostic durationへ含めます
+
+collectionが失敗してもoperationのreturn valueとerrorはtargetのものを維持します
+
+ServerRU合計はTiDBがtarget statementについて返したvalueだけを含み、diagnostic query自体のresource useは測定しません
+
+automatic collectionではなく1回だけ明示的に読む場合は `LastServerRU` を使います
 
 `LastServerRU` は同じsessionに記録された最後のDML statementについて、TiDBが報告する `ru_consumption` を取得します
 

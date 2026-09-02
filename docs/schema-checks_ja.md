@@ -105,17 +105,23 @@ value-formの `time.Time` soft-delete fieldはruntimeがSQL `NULL` をzero time�
 
 structuralなRelation index warningを含むwarningはshared diagnostic representationでsuppressibleです
 
-`check.NewReport` または `tidbgo check` でreason付きsuppressionを適用できます
+`check.Schema` が直接返すdiagnosticの判定policyはapplication testが所有します
 
 errorは実行可能なmapping、insert、cardinalityの矛盾を表すためsuppressibleではありません
 
-詳細は[Offline diagnostic report guide](checks_ja.md)を参照してください
+詳細は[解析guide](checks_ja.md)を参照してください
 
 composite Relation keyでは全componentを生成queryが制約するため、indexのleading position内でmappingと異なるcolumn順を使用できます
 
 expression indexはこのstructural coverageを証明しません
 
+prefix length付きindex partもcolumn全体を表さないため、Relation lookupまたはunique性のcoverageを証明しません
+
 exact junction pairもsource-targetまたはtarget-sourceのどちらの順序でもよい一方、追加のunique-key componentを含めることはできません
+
+partial indexはunconditional lookupまたはunique性を証明しません
+
+invisible unique indexはunique性を証明しますがdefault optimizerのlookupを証明せず、FULLTEXTとSPATIAL indexはいずれも証明しません
 
 ## Type checkの境界
 

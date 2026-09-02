@@ -25,9 +25,9 @@ func TestStatementObserverRecordsSelectAfterRowsFinish(t *testing.T) {
 		events = append(events, event)
 	})
 
-	rows, err := queryTextRows(ctx, database, "scanModel", "SELECT id, name FROM scan_model WHERE name = ?", []any{"Ada"})
+	rows, err := queryTextRowsWithMetadata(ctx, database, "scanModel", "SELECT id, name FROM scan_model WHERE name = ?", []any{"Ada"}, statementRuntimeMetadata{})
 	if err != nil {
-		t.Fatalf("queryTextRows() error = %v", err)
+		t.Fatalf("queryTextRowsWithMetadata() error = %v", err)
 	}
 	if len(events) != 0 {
 		t.Fatalf("events before rows finish = %#v, want none", events)
@@ -336,6 +336,26 @@ func TestStatementLoggerWritesExplicitArgumentValuesSeparatelyFromSQL(t *testing
 	}
 	if strings.Contains(output.String(), `email = "ada@example.test"`) {
 		t.Fatalf("logger interpolated a value into SQL = %q", output.String())
+	}
+}
+
+func TestStatementLoggerWritesServerRUAndDiagnosticCost(t *testing.T) {
+	var output bytes.Buffer
+	logger := NewStatementLogger(&output)
+	logger(StatementEvent{
+		Operation: StatementSelect,
+		SQL:       "SELECT id FROM users",
+		Duration:  9 * time.Millisecond,
+		ServerRU: &ServerRUObservation{
+			Value:               4.34885578125,
+			Known:               true,
+			DiagnosticDuration:  3 * time.Millisecond,
+			AuxiliaryStatements: 1,
+		},
+	})
+
+	if got := output.String(); !strings.Contains(got, "SELECT   9ms diagnostic=3ms auxiliary=1 server_ru=4.34885578125 args=0") {
+		t.Fatalf("logger output = %q", got)
 	}
 }
 

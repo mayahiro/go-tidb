@@ -115,6 +115,7 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 		return 0, err
 	}
 	statementCount := bulkStatementCount(plan.values.Len(), rowsPerStatement)
+	var statementGroup uint64
 	var totalAffected int64
 	statementOperation := StatementInsert
 	if len(plan.updateFields) != 0 {
@@ -127,7 +128,12 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 			return totalAffected, plan.batchError(statementIndex, statementCount, start, end, "compile", compileErr)
 		}
 		observation := beginStatementObservation(ctx, statementOperation, compiled.sql, compiled.arguments)
-		result, execErr := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
+		plan.attachRuntimeCapture(observation, &statementGroup, statementOperation, statementIndex, statementCount, start, end)
+		statementExecutor := executor
+		if observation != nil && observation.event.ServerRU != nil {
+			statementExecutor = observation.prepareServerRUExecExecutor(ctx, executor)
+		}
+		result, execErr := statementExecutor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 		if execErr != nil {
 			observation.finish(0, false, execErr)
 			return totalAffected, plan.batchError(statementIndex, statementCount, start, end, "execute", execErr)
@@ -144,6 +150,22 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 		totalAffected += affected
 	}
 	return totalAffected, nil
+}
+
+func (plan bulkMutationPlan) attachRuntimeCapture(observation *statementObservation, statementGroup *uint64, operation StatementOperation, statementIndex, statementCount, start, end int) {
+	if observation == nil || observation.runtime == nil {
+		return
+	}
+	if *statementGroup == 0 {
+		*statementGroup = nextRuntimeStatementGroupWhen(true)
+	}
+	terminal := "insert_many"
+	if operation == StatementUpsert {
+		terminal = "upsert_many"
+	}
+	metadata := runtimeTypedMutationMetadata(plan.descriptor.Name(), terminal)
+	metadata.batch = runtimeBatchMetadata(*statementGroup, statementIndex+1, statementCount, end-start, plan.values.Len())
+	observation.runtime.metadata = metadata
 }
 
 func (plan bulkMutationPlan) batchError(statementIndex, statementCount, start, end int, action string, err error) error {

@@ -26,7 +26,7 @@ checkoutから現在のcommandを直接実行します
 
 ```sh
 go run ./cmd/tidbgo version
-go run ./examples/starter-app/cmd/check | go run ./cmd/tidbgo check
+go run ./cmd/tidbgo lint ./examples/starter-app
 ```
 
 release artifactをbuildする場合はGo linkerでversionを設定します
@@ -40,16 +40,28 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `model`: application-owned Go structのcached offline metadata
 - `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
 - `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
-- `check`: shared diagnostic data type、reason付きreportとsuppression、offline model、query、physical schema check
+- `check`: shared diagnostic data typeとoffline modelおよびphysical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界
 - `cmd/tidbgo`: CLI entry point
-- `internal`: 非公開のloggingとredaction support
+- `internal`: 非公開のcompiler、analysis、logging、redaction support
 - `examples`: 実行可能なpublic API example
 - `integration`: actual TiDB Cloud Starterを検証する独立module
 
 `integration` moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependencyを所有し、local module replacementで現在のroot checkoutを使用します
 
 root moduleとその利用者へtest dependencyは伝播しません
+
+## Source projection解析benchmark
+
+100個のlocal result queryを含む1 fileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
+
+```sh
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+```
+
+offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
+
+temporary fixture作成はtimer開始前に完了します
 
 ## Schema compatibility client benchmark
 
@@ -65,6 +77,40 @@ go test ./check -run '^$' -bench '^BenchmarkSchema$' -benchmem -count=5
 `BenchmarkParse` はlexical analysisとcatalog constructionを含みます
 
 `BenchmarkSchema` はparse済みcatalogとcached model metadataを再利用します
+
+## Query analysis client benchmark
+
+query shape compile、neutral query check、schema-aware index prefix check、runtime artifact解析、ServerRU比較を計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryShapeIndexDiagnostics$' -benchmem -count=5
+go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchmem -count=5
+go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+```
+
+全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
+
+schema-aware benchmarkはQueryShape構築と物理index prefix照合を含みます
+
+fingerprintはevidenceが不要な場合に遅延され、独立したbenchmarkで計測します
+
+comparison benchmarkは同じbuilderを両diagnostic pathで使用します
+
+neutral query check benchmarkはbuilder compileを含みません
+
+runtime benchmarkはJSON decodeとDB accessなしで100個のcaptured typed query recordを解析します
+
+ServerRU benchmarkは1 fingerprintの1 sampleと10,000 sampleを比較し、保持bytesとallocation数がsample数へ依存しないことを確認します
+
+baseline benchmarkは保存対象のfingerprint aggregateが1個の場合と10,000個の場合を比較します
+
+出力自体がfingerprintごとに1 entryを持つため、このpathのmemoryはfingerprint数に応じて増えます
+
+comparison benchmarkは一致する1件と10,000件のbaselineとcurrent fingerprint setを使い、validationとdeterministic mergeを含みますがJSON decodeとreport encodeは含みません
 
 ## TiDB Cloud Starter integration test
 
@@ -101,23 +147,13 @@ driverの[`interpolateParams` documentation](https://github.com/go-sql-driver/my
 
 suiteはconnection poolを1 connectionに制限します
 
-scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTをまとめるoperation debug reportを確認します
+scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTのstatement observationを確認します
 
 固定された18個の `tidbgo_it_*` tableを作成し、現在のrunが作成したtableだけを削除します
 
 既存fixture tableを検出した場合は削除せず失敗します
 
 同じdatabaseに対する複数suiteを同時実行しません
-
-## Debug report client benchmark
-
-完了した2 statement eventをまとめるclient-side costを計測します
-
-```sh
-go test ./orm -run '^$' -bench '^BenchmarkDebugReportTwoStatements$' -benchmem -count=5
-```
-
-local mutation executorを使い、MySQL driver、network call、TiDB execution、actual RU consumptionは含みません
 
 ## EXPLAIN client benchmark
 
@@ -131,13 +167,27 @@ local `database/sql` test driverを使い、MySQL driver、network round trip、
 
 ## EXPLAIN ANALYZE client benchmark
 
-1個のtyped SELECTをcompileし、3 operatorのTiDB runtime planをscanするclient-side costを計測します
+typed SELECTをcompileし、plan access metadataを解決してTiDB runtime planをscanするclient-side costを計測します
 
 ```sh
-go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryExplainAnalyze($|RelationAliases$)' -benchmem -count=5
 ```
 
-local `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
+1個目のworkloadは3個のphysical table operatorをscanします
+
+Relation workloadは4 operatorをscanし、root、direct Relation、many-to-many junction、targetのaliasを解決します
+
+いずれもlocal `database/sql` test driverを使い、SELECT executionとTiDB runtime costを計測せずactual RUも消費しません
+
+取得済みplanをdiagnosticへ変換するcostは別に計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkExplainAnalyzePlanDiagnostics' -benchmem -count=5
+```
+
+clean caseはdiagnosticなし、warning caseは不完全なstatistics、大規模full scan、disk usageのevidenceを生成し、resolved access caseはphysical table、model、Relation metadataを含めます
+
+どちらもDB I/Oを行わずtimingとRU textをparseしません
 
 ## ServerRU client benchmark
 
@@ -147,7 +197,13 @@ local `database/sql` test driverを使い、SELECT executionとTiDB runtime cost
 go test ./orm -run '^$' -bench '^BenchmarkLastServerRU$' -benchmem -count=5
 ```
 
-local `database/sql` test driverを使い、`database/sql` row pathとJSON decodeを含みます
+automatic connection pinning、1 target `RawExec`、auxiliary query、decode、通常observerまたはruntime capture deliveryを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRawExecWith(ServerRUCollection|RuntimeCaptureAndServerRU)$' -benchmem -count=5
+```
+
+local `database/sql` test driverを使い、該当するclient pathを含みます
 
 MySQL driver、network round trip、TiDB execution、actual RU consumptionは含みません
 

@@ -50,7 +50,7 @@ type predicateCompiler struct {
 	query            *strings.Builder
 	arguments        []any
 	qualifier        string
-	depth            int
+	relationAlias    int
 	negationDepth    int
 	disjunctionDepth int
 	operation        string

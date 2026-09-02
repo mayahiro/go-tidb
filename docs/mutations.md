@@ -36,6 +36,10 @@ reported with its zero-based row index before execution. An empty slice is a
 no-op. `InsertMany` does not populate individual generated IDs because one
 `sql.Result` does not expose every generated value.
 
+Runtime capture records each attempted batch and its group, position, row
+count, and total planned count automatically after it is installed once at the
+request or job boundary.
+
 `Exec` deterministically splits values only when one statement would exceed
 TiDB's 65,535-placeholder limit. The maximum rows in each statement is
 `floor(65535 / max(1, insertedFieldCount))`; the virtual field count of one
@@ -72,6 +76,9 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 
 `UpsertMany` has the same automatic placeholder-bound batching, affected-count
 aggregation, empty-slice behavior, and transaction boundary as `InsertMany`.
+RuntimeCapture records every batch that actually executes, including its
+position, row range, and total batch count.
+
 Neither `Upsert` nor `UpsertMany` changes generated `AUTO_RANDOM` fields. A
 single `sql.Result` cannot reliably distinguish an insert from a conflict on a
 different unique key. Use `Insert` when the generated ID must be assigned to

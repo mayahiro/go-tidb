@@ -40,6 +40,8 @@ empty sliceはno-opです
 
 1個の `sql.Result` から全generated valueを取得できないため、`InsertMany` は個別のgenerated IDを反映しません
 
+requestまたはjob境界へruntime captureを1回設定すると、各attempted batchのgroup、位置、row数、予定総数を自動的に記録します
+
 `Exec` は1statementがTiDBの65535 placeholder上限を超える場合だけ決定的に分割します
 
 各statementの最大row数は `floor(65535 / max(1, insert対象field数))` です
@@ -78,6 +80,8 @@ affected, err := orm.UpsertMany(ratings).Exec(ctx, db)
 ```
 
 `UpsertMany` は `InsertMany` と同じplaceholder上限による自動分割、affected countの集約、empty sliceのno-op、transaction境界を持ちます
+
+RuntimeCaptureは実際に実行された全batchについてposition、row range、batch総数を記録します
 
 `Upsert` と `UpsertMany` はgenerated `AUTO_RANDOM` fieldを変更しません
 

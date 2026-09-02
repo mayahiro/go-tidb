@@ -396,6 +396,30 @@ func TestSchemaWarnsWhenCollectionRelationHasNoSourcePrefixIndex(t *testing.T) {
 	}
 }
 
+func TestSchemaIndexProofDistinguishesInvisibleAndPartialIndexes(t *testing.T) {
+	t.Parallel()
+
+	catalog := parseSchemaCheckCatalog(t, `CREATE TABLE schema_index_capabilities (
+  id BIGINT NOT NULL,
+  code VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  UNIQUE KEY code_unique (code) /*!80000 INVISIBLE */,
+  UNIQUE KEY status_partial_unique (status) WHERE status = 'ready',
+  KEY id_invisible (id) /*!80000 INVISIBLE */,
+  KEY id_partial (id) WHERE status = 'ready'
+);`)
+	table, _ := catalog.Table("schema_index_capabilities")
+	if !tableHasUniqueKey(table, []string{"code"}) {
+		t.Fatal("invisible unique index did not prove unconditional uniqueness")
+	}
+	if tableHasUniqueKey(table, []string{"status"}) {
+		t.Fatal("partial unique index unexpectedly proved unconditional uniqueness")
+	}
+	if tableHasIndexPrefix(table, []string{"id"}) {
+		t.Fatal("invisible or partial index unexpectedly proved default lookup coverage")
+	}
+}
+
 func TestSchemaReportsMissingToOneTargetTableOrColumn(t *testing.T) {
 	t.Parallel()
 

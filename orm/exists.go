@@ -33,7 +33,8 @@ func (q *SelectQuery[T]) Exists(ctx context.Context, executor QueryExecutor) (bo
 	if err != nil {
 		return false, err
 	}
-	rows, err := queryTextRows(ctx, executor, compiled.modelName, compiled.sql, compiled.arguments)
+	metadata := runtimeTypedSelectMetadata(compiled.modelName, "exists")
+	rows, err := queryTextRowsWithMetadata(ctx, executor, compiled.modelName, compiled.sql, compiled.arguments, metadata)
 	if err != nil {
 		return false, err
 	}

@@ -35,45 +35,68 @@ field in struct declaration order. It never uses `SELECT *`. `Select` accepts
 Go field names, not physical column names, and preserves the requested scan
 order. Computed fields are available only through aliased `Raw[T]` results.
 
-## Check a query shape offline
+## Analyze executed query shapes
 
-Call `Diagnostics` on the same builder to apply static query-shape checks:
+RuntimeCapture records the bind-free QueryShape of executed typed queries
+after it is installed once at a request, job, or analysis-test boundary.
+`tidbgo analyze` applies query-pattern rules offline without application-owned
+query registration:
 
-```go
-diagnostics := query.Diagnostics()
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
 ```
 
-`Diagnostics` applies the same validation as `Build`, performs no database
-I/O, and does not execute custom `driver.Valuer` implementations. Diagnostics
-never include predicate or cursor values.
+The schema-aware form records a versioned query fingerprint as evidence
+without including bind or pagination values.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
-| `QRY001` | error | Model metadata or the SELECT builder is invalid |
 | `QRY002` | warning | A positive OFFSET skips rows and its cost grows as the offset grows |
 | `QRY003` | warning | An explicit positive LIMIT has no ORDER BY |
 | `QRY004` | warning | `Contains` or `HasSuffix` builds a LIKE pattern with a leading wildcard |
 | `QRY005` | warning | An ordered, limited collection `Has` must use the `EXISTS` fallback |
+| `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
+| `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
-`QRY001` is not suppressible because the query cannot compile. The other
-diagnostics describe valid query shapes and set `Suppressible` to true. TiDB's
+`QRY006` is not suppressible because the requested schema-aware check cannot
+be completed. The other diagnostics describe valid query shapes and set
+`Suppressible` to true. TiDB's
 [pagination guide](https://docs.pingcap.com/developer/dev-guide-paginate-results/)
 recommends ordering paginated results and notes the increasing compute cost of
 larger offsets. Prefer `SeekAfter` when a stable cursor fits the application.
-Reasoned report and suppression behavior is documented in the [offline
-diagnostic report guide](checks.md).
+Reasoned report and suppression behavior is documented in the [analysis
+guide](checks.md).
 
 `Contains` and `HasSuffix` deliberately begin the pattern with `%`, whose
 matching behavior is defined by TiDB's
 [`LIKE` documentation](https://docs.pingcap.com/tidb/stable/string-functions/#like).
-The static check does not claim a specific physical plan because indexes,
-statistics, collation, and optimizer behavior are connected concerns. Use
-`Explain` or `ExplainAnalyze` to verify the actual access path.
+The schema-aware rule applies only when one index candidate is structurally
+clear: a positive `Limit`, a uniform-direction `OrderBy`, and only
+conjunctive `Equal` filters for a root access, or the association access
+produced by relation-first TopN. An active default soft-delete scope contributes
+its generated `IS NULL` column to the equality prefix. Equality columns can
+occupy the leading prefix in any order and must be followed by the ordered
+columns. An expression or prefix-length index does not prove this coverage. A
+simple unique key fully constrained by the equality filters also satisfies the
+rule because ordering at most one row needs no additional index component.
+Partial, invisible, FULLTEXT, and SPATIAL indexes do not prove a default-usable
+unconditional lookup for this rule.
 
-The same builder can be used with `All`, `First`, `Only`, `Exists`, `Count`, or
-plan terminals, so this method checks only state explicitly stored on the
-builder. It does not report terminal-implied limits or an unbounded `All` call.
-Raw SQL is outside the typed query AST and is not inspected.
+The first rule deliberately does not diagnose `Or`, `Not`, range filters,
+mixed order directions, or fallback `EXISTS` access. It also does not claim a
+specific physical plan because statistics, data distribution, collation, and
+optimizer behavior remain connected concerns. Use `Explain` or
+`ExplainAnalyze` to verify the actual access path before changing an index.
+
+Runtime rules inspect the QueryShape attached to the executed statement. Raw
+SQL is outside the typed query AST and is not inspected.
+
+The `q1:` fingerprint identifies the bind-free logical and compiler shape. It
+changes with projection, predicate structure, ordering, preload, or compiler
+rewrite, while different bind values and different `Limit` or `Offset` values
+retain the same fingerprint when the compiler decision remains unchanged
+because they use the same SQL placeholder shape.
 
 `QRY005` reports the metadata-only reason that relation-first TopN could not be
 applied, such as an unproven one-row-per-root condition, a different root
@@ -307,7 +330,11 @@ observation](observability.md#select-explain) for the fields, runtime boundary,
 and TiDB-specific caveats.
 
 `ExplainAnalyze` is the explicit opt-in terminal that executes the complete
-root SELECT and returns TiDB's runtime plan as `[]orm.ExplainAnalyzeRow`. It
+root SELECT and returns TiDB's runtime plan as `orm.ExplainAnalyzePlan`. Its
+`Diagnostics` method checks the returned rows for conservative runtime-plan
+warnings without another database statement. `ExplainAnalyze`
+also resolves compiler-owned access aliases to physical tables, Go models, and
+root-relative relation paths when the mapping is unambiguous. `ExplainAnalyze`
 does not add a protective `LIMIT`, because changing the query would change the
 measured plan. It consumes the executed SELECT's database resources and RU,
 and runtime-plan collection can add overhead. Typed mutations and
@@ -430,6 +457,9 @@ statements: the parent, the Orders SELECT, and the Roles SELECT.
 `Preload("Orders.User")` executes two: the parent and an Orders SELECT with User
 joined inline.
 
+Runtime capture records actual root, inline, preload, and split-batch statement
+behavior after it is installed once at a request or job boundary.
+
 A keyed pure many-to-many SELECT reads the junction source key first as
 internal bookkeeping, then every mapped scalar target field:
 
@@ -473,8 +503,9 @@ executes as one statement and does not need a cross-statement snapshot.
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, `Explain`, `ExplainAnalyze`, direct and pure many-to-many relation
-predicates, and nested direct or pure many-to-many preloads with target
-projection, collection ordering, and per-path soft-delete scope.
+`Count`, `Explain`, `ExplainAnalyze`, direct and pure
+many-to-many relation predicates, and nested direct or pure many-to-many
+preloads with target projection, collection ordering, and per-path soft-delete
+scope.
 `IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and
 other SQL outside the scalar builder surface.

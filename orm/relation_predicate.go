@@ -161,8 +161,9 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	if err != nil {
 		return err
 	}
-	depth := c.depth + 1
-	targetAlias := relationTargetAlias(depth)
+	c.relationAlias++
+	aliasIndex := c.relationAlias
+	targetAlias := relationTargetAlias(aliasIndex)
 	sourceAlias := c.qualifier
 	if sourceAlias == "" {
 		sourceAlias = c.descriptor.TableName()
@@ -178,7 +179,7 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 		c.query.WriteString(" WHERE (")
 		writeRelationColumnEqualities(c.query, targetAlias, plan.targetColumns, sourceAlias, plan.sourceColumns)
 	} else {
-		junctionAlias := relationJunctionAlias(depth)
+		junctionAlias := relationJunctionAlias(aliasIndex)
 		writeAliasedRelationTable(c.query, plan.junction.tableName, junctionAlias)
 		c.query.WriteString(" JOIN ")
 		writeAliasedRelationTable(c.query, plan.target.TableName(), targetAlias)
@@ -194,22 +195,20 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	}
 
 	if len(current.children) != 0 {
-		targetCompiler := predicateCompiler{
-			descriptor:       plan.target,
-			query:            c.query,
-			arguments:        c.arguments,
-			qualifier:        targetAlias,
-			depth:            depth,
-			negationDepth:    c.negationDepth,
-			disjunctionDepth: c.disjunctionDepth,
-		}
+		sourceDescriptor := c.descriptor
+		sourceQualifier := c.qualifier
+		c.descriptor = plan.target
+		c.qualifier = targetAlias
 		for index := range current.children {
 			c.query.WriteString(" AND ")
-			if err := targetCompiler.write(current.children[index]); err != nil {
+			if err := c.write(current.children[index]); err != nil {
+				c.descriptor = sourceDescriptor
+				c.qualifier = sourceQualifier
 				return fmt.Errorf("orm: SELECT relation predicate %s.%s: %w", plan.sourceName, plan.relationName, err)
 			}
 		}
-		c.arguments = targetCompiler.arguments
+		c.descriptor = sourceDescriptor
+		c.qualifier = sourceQualifier
 	}
 	c.query.WriteByte(')')
 	return nil
@@ -226,25 +225,25 @@ func writeRelationRootAlias(query *strings.Builder) {
 	writeQuotedIdentifier(query, relationRootAlias)
 }
 
-func relationTargetAlias(depth int) string {
-	switch depth {
+func relationTargetAlias(index int) string {
+	switch index {
 	case 1:
 		return relationTargetAlias1
 	case 2:
 		return relationTargetAlias2
 	default:
-		return "tidbgo_r" + strconv.Itoa(depth)
+		return "tidbgo_r" + strconv.Itoa(index)
 	}
 }
 
-func relationJunctionAlias(depth int) string {
-	switch depth {
+func relationJunctionAlias(index int) string {
+	switch index {
 	case 1:
 		return relationJunctionAlias1
 	case 2:
 		return relationJunctionAlias2
 	default:
-		return "tidbgo_j" + strconv.Itoa(depth)
+		return "tidbgo_j" + strconv.Itoa(index)
 	}
 }
 

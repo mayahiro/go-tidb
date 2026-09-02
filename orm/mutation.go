@@ -55,7 +55,10 @@ func (q *InsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err != nil {
 		return 0, err
 	}
-	observation := beginStatementObservation(ctx, StatementInsert, compiled.sql, compiled.arguments)
+	observation := beginTypedMutationStatementObservation(ctx, StatementInsert, compiled.sql, compiled.arguments, compiled.modelName, "insert")
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute INSERT for %s: %w", compiled.modelName, err)
@@ -268,7 +271,10 @@ func (q *UpdateQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err != nil {
 		return 0, err
 	}
-	observation := beginStatementObservation(ctx, StatementUpdate, compiled.sql, compiled.arguments)
+	observation := beginTypedMutationStatementObservation(ctx, StatementUpdate, compiled.sql, compiled.arguments, compiled.modelName, "update")
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute UPDATE for %s: %w", compiled.modelName, err)
@@ -376,7 +382,10 @@ func (q *DeleteQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err != nil {
 		return 0, err
 	}
-	observation := beginStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments)
+	observation := beginTypedMutationStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments, compiled.modelName, "delete")
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute DELETE for %s: %w", compiled.modelName, err)

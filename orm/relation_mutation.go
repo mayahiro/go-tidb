@@ -499,7 +499,14 @@ func relationParameterLimitError(path string, count int) error {
 }
 
 func executeRelationMutation(ctx context.Context, executor ExecExecutor, compiled compiledRelationMutation, operation string) (int64, error) {
-	observation := beginStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments)
+	terminal := "relation_insert"
+	if operation == "DELETE" {
+		terminal = "relation_delete"
+	}
+	observation := beginRelationMutationStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments, compiled.path, terminal)
+	if observation != nil && observation.event.ServerRU != nil {
+		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
 		err = fmt.Errorf("orm: execute relation %s for %s: %w", operation, compiled.path, err)

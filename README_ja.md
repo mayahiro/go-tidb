@@ -6,14 +6,15 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 [English](README.md) | [Struct model](docs/models_ja.md) |
 [Query](docs/queries_ja.md) | [Mutationとraw SQL](docs/mutations_ja.md) |
-[Offline check](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
+[解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
 [Development](docs/development_ja.md)
 
 ## 利用できる機能
 
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
-- reason付きdiagnostic suppressionと決定的なtextまたはJSON CLI report
+- runtimeおよびsource解析向けのreason付きdiagnostic suppressionと決定的なtextまたはJSON report
+- 明示的なcoverage statisticsを持つoffline Go source projection解析
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -22,10 +23,10 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
 - terminalの自動色付きcontext-scoped statement observation
-- multi-statement ORM callをまとめるoperation-scoped debug report
+- actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析
 - typed query builderによるSELECT限定のTiDB execution plan取得
-- 明示的なSELECT実行によるTiDB actual runtime plan取得
-- 完了した1 DML statementに対する明示的なsame-session ServerRU取得
+- 明示的なSELECT実行によるTiDB actual runtime plan取得と返されたrowのdiagnostic
+- 明示的またはobserver scope単位のsame-session ServerRU diagnostic
 
 ## サポート範囲
 
@@ -47,6 +48,12 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 ```sh
 go get github.com/mayahiro/go-tidb
+```
+
+解析commandを使用する場合は `tidbgo` commandを別にinstallします
+
+```sh
+go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
 ```
 
 `go-tidb` はdatabase driverを同梱または選択しません
@@ -188,16 +195,19 @@ query := orm.Query[Order]().
     Limit(100)
 
 sqlText, arguments, err := query.Build()
-diagnostics := query.Diagnostics()
 ```
 
 `Build`はDBへ接続せず、custom `driver.Valuer`も実行しません
 
 valueはbind argumentとしてSQLから分離し、物理identifierにはvalidated model metadataだけを使います
 
-`Diagnostics` もofflineで動作します
+runtime captureは実行されたtyped query shapeへ `QRY002` から `QRY005` を自動適用します
 
-build failureを `QRY001` へ変換し、有効なOFFSET pagination、明示的なpaginationのorder不足、leading wildcard predicate、relation-first compilerを使用できないRelation filter付きTopNをbind valueなしの `QRY002` から `QRY005` で報告します
+offline schema snapshotを `tidbgo analyze` へ渡すと `QRY006` と `QRY007` のindex checkを追加します
+
+未実行builderには現在 `Build` validationだけを適用し、source全体のquery-pattern解析は今後の課題です
+
+indexの存在はoptimizerが選ぶplanを予測しないため、`Explain` または `ExplainAnalyze` で確認します
 
 既存executorを明示的に渡した場合だけ同じqueryを実行します
 
@@ -235,7 +245,9 @@ admins, err := orm.Query[User]().
 
 metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
 
-orderedかつlimitedなcollection filterが `EXISTS` fallbackになる理由は `QRY005` で確認できます
+実行されたorderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合はruntime解析が `QRY005` を出力します
+
+schema-aware runtime解析はassociation index prefixの不足を `QRY007` で出力します
 
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
@@ -319,6 +331,8 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 
 `Exec` はTiDBの65535 placeholder上限で自動分割し、`Build` は1個の実行可能statementを表す契約を維持します
 
+runtime captureが実際の分割を自動的に記録します
+
 全batchをatomicにする場合は直接作成した `*sql.Tx` または `Transaction` callbackから受け取った `*sql.Tx` を使います
 
 `Transaction` はdefaultの `database/sql` optionを使い、callbackをretryしません
@@ -394,24 +408,62 @@ lifecycleの対象、custom observer、logの安全境界は[Statement observati
 
 bind argument valueが必要な場合だけ `IncludeStatementArguments` で明示的に有効化できます
 
-追加database callなしで1 ORM operationのroot statementとRelation statementをまとめて取得できます
+structured analysisには1個のcaptureを再利用し、requestまたはjob境界だけで設定します
 
 ```go
-var users []User
-report, err := orm.Debug(ctx, func(debugContext context.Context) error {
-    var queryErr error
-    users, queryErr = orm.Query[User]().
-        Preload("Orders").
-        All(debugContext, db)
-    return queryErr
-})
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture)
 ```
 
-`report.Statements` は完了event、`report.StatementDuration` はその累積duration、`report.Duration` はcallback全体のdurationを保持します
+既存ORM callには登録、wrapper、diagnostic callを追加しません
 
-bind valueは `Debug` へ `IncludeStatementArguments` を渡した場合だけ含めます
+JSON Lines artifactは実際に通過したroot query、collection preload、bulk splitをbind valueなしのfingerprint、duration、row countとともに記録します
 
-wrapper自体は `EXPLAIN`、ServerRU read、その他のdatabase I/Oを行いません
+model rowを返すSELECTとplan recordにはbind valueなしのquery shapeとcompiler decisionも含めます
+
+DB接続とqueryごとの登録なしでoffline解析できます
+
+```sh
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
+```
+
+analyzerはcaptured query shapeへ `QRY002` から `QRY005` を適用し、N+1 SELECT候補をreportします
+
+offlineのTiDB `CREATE TABLE` snapshotを渡すと物理indexの `QRY006` と `QRY007` も適用します
+
+coverage counterは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
+
+runtime captureはdefaultで `EXPLAIN` またはその他のdatabase I/Oを追加しません
+
+recognized DML statementごとのsame-session diagnostic round tripを1回追加できる場合だけ `WithRuntimeCapture` へ `orm.CollectServerRU()` を渡します
+
+artifactと `tidbgo analyze` はtargetとdiagnosticのduration、go-tidbとauxiliaryのstatement数、sample数、error数、ServerRU合計を分離します
+
+collectionを試行したfingerprintごとにcaptured statement数、成功sampleのtotal、mean、min、maxも個別sampleを保持せずreportします
+
+全measured fingerprintが完全に計測され、成功sampleが5件以上あり、collection errorがないcaptureでは、これらのaggregateをdeterministicなversion付きbaselineとして保存できます
+
+```sh
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
+```
+
+このcommandはofflineで動作し、standard outputへexactly one JSON valueを書き込み、個別sampleを保持しません
+
+`tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json` でcurrent captureとoffline比較できます
+
+全measured fingerprintが両方に存在し、current collectionも完全かつerrorなしで、両側に5件以上のsampleが必要です
+
+currentのstatement単位meanがbaseline meanの130%とbaselineで観測した最大値の両方を超えた場合だけ `RU001` regressionになります
+
+fingerprintの欠落または利用不能な計測は `RU002` になります
+
+どちらもsuppressできないerrorで、effective limitと同値の場合はpassします
+
+bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
+
+scope、cost、writer error、retentionの詳細は[Statement observation guide](docs/observability_ja.md)を参照してください
 
 ## TiDB diagnostics
 
@@ -441,9 +493,19 @@ runtimePlan, err := orm.Query[User]().
     Select("ID", "Email").
     Where(orm.Equal("Email", email)).
     ExplainAnalyze(ctx, db)
+if err != nil {
+    return err
+}
+diagnostics := runtimePlan.Diagnostics()
 ```
 
-`ExplainAnalyze` はactual row、execution information、memory、disk usageを `[]orm.ExplainAnalyzeRow` として返します
+`ExplainAnalyze` はactual row、execution information、memory、disk usageを `orm.ExplainAnalyzePlan` として返します
+
+`Diagnostics` は追加のDB callを行わず、返されたrowから不完全なstatistics、保守的なestimateとactual rowの差、大規模table full scan、disk usageを検査します
+
+TiDBがcompiler-owned table aliasを返した場合、各runtime plan rowはtyped query metadataから `PhysicalTable`、`Model`、rootからの `RelationPath` も解決します
+
+junction tableにはmodelを設定せず、曖昧なaccess objectは推測せず未解決のままにします
 
 limitを追加せずcompleteなroot SELECTを実行し、database resourceとRUを消費します
 
@@ -452,6 +514,21 @@ mutation、raw SQL、collection preload statementは対象外です
 applicationで有効化する前に[runtime plan boundary](docs/observability_ja.md#explain-analyze)を確認してください
 
 完了した1 DML statementについて、同じpinned sessionからTiDBのServerRUを取得できます
+
+```go
+capture := orm.NewRuntimeCapture(captureWriter)
+ctx = orm.WithRuntimeCapture(ctx, capture, orm.CollectServerRU())
+```
+
+observer scope単位の形式ではqueryごとのwrapperは不要です
+
+`*sql.DB` ではgo-tidbがrecognized DML statementとdiagnostic queryを同じconnectionへ一時的にpinします
+
+caller-supplied `*sql.Conn` とactiveな `*sql.Tx` executorも利用できます
+
+collection failureは別に記録し、target resultを置き換えません
+
+1回だけ手動で読む場合はcaller-pinned sessionを使います
 
 ```go
 connection, err := db.Conn(ctx)
@@ -479,27 +556,45 @@ ServerRUはTiDBが報告するdiagnostic valueであり請求RUではありま�
 
 ## CLI
 
-applicationが所有するJSON diagnostic arrayをstandard inputまたは1個の明示的なfileからreportします
+application queryの登録とDB接続なしでstructured runtime artifactを解析できます
 
 ```sh
-go run ./examples/starter-app/cmd/check | tidbgo check
-tidbgo check diagnostics.json --json
+tidbgo analyze runtime.jsonl
+tidbgo analyze runtime.jsonl --json
+tidbgo analyze runtime.jsonl --schema schema.sql
+tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
-active errorがある場合はstatus `1`、warningとinfoだけの場合はsuccessになります
+このcommandはcaptured statementを集約し、記録済みquery shapeへ `QRY002` から `QRY005` を適用し、observer scopeごとのN+1 SELECT候補をreportします
 
-suppressionにはexact codeとreasonが必須でreportへ残り、non-suppressibleまたは未使用の指定はerrorになります
+`--schema` はofflineの `QRY006` と `QRY007` index checkを追加します
+
+詳細は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)を参照してください
+
+`tidbgo baseline` はversion付きでfingerprint順のServerRU referenceを出力し、measured fingerprintごとに5件以上の完全かつerrorなしの計測を必須とします
+
+`tidbgo analyze --baseline` は[Statement observation guide](docs/observability_ja.md#structured-runtime-capture)に記載した固定offline regression policyを適用します
 
 ```sh
-go run ./examples/starter-app/cmd/check | \
-  tidbgo check --suppress 'MOD005=read-only model does not use key mutations'
+tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-application側のcheck commandがmodel type、query builder、schema snapshotを明示的に選択します
+default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
 
-`tidbgo check` はsource scan、code generation、configuration discovery、DB accessを行いません
+```sh
+tidbgo lint
+tidbgo lint ./internal/repository --json
+```
 
-詳細は[Offline diagnostic report guide](docs/checks_ja.md)を参照してください
+pathを省略するとcurrent directoryを使用します
+
+application codeの実行、package load、DB接続、source変更は行いません
+
+`All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
+
+return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず `uncertain` として数え、全reportへcoverage statisticsを含めます
+
+詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
 version情報は次のcommandで出力します
 
@@ -518,7 +613,7 @@ command helpは `tidbgo --help` で表示できます
 - typed builderはvalueをbind argumentとしてSQL textから分離する
 - model由来identifierはSQLへ書き込む前にvalidationする
 - built-in statement loggerはdefaultでargument valueを除外する
-- debug reportはdefaultでargument valueを除外するがSQL templateとerrorは保持する
+- runtime captureはbind valueを除外するがSQL templateとerrorを保持するためartifactの出力先とretentionを保護する
 - `IncludeStatementArguments` はcredential、token、personal dataを公開し得るため管理されたdebug時だけ有効化する
 - Raw SQLはtrusted application codeでありtyped builderの構造validationとmutation safety validationを受けない
 
@@ -531,6 +626,7 @@ command helpは `tidbgo --help` で表示できます
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
+- `QRY002` から `QRY007` は現在RuntimeCaptureで取得した実行済みtyped queryだけを解析し、source lintは未実行builderへまだ適用しない
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License

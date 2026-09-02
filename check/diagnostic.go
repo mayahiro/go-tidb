@@ -1,5 +1,5 @@
-// Package check defines diagnostics, reason-carrying suppression, and reports
-// shared by schema, query, plan, runtime, and migration checks.
+// Package check defines diagnostics and offline model and schema checks shared
+// by go-tidb analysis.
 package check
 
 // Severity describes how a diagnostic affects command execution.
@@ -30,7 +30,7 @@ type Evidence struct {
 	Location Location `json:"location,omitempty,omitzero"`
 }
 
-// Diagnostic is the stable base representation produced by tidbgo checks.
+// Diagnostic is the stable base representation produced by go-tidb analysis.
 type Diagnostic struct {
 	Code         string     `json:"code"`
 	Severity     Severity   `json:"severity"`

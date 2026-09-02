@@ -21,6 +21,10 @@ type ServerRUSession interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type serverRUQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 type lastQueryInfo struct {
 	RUConsumption *float64 `json:"ru_consumption"`
 }
@@ -40,7 +44,10 @@ func LastServerRU[S ServerRUSession](ctx context.Context, session S) (float64, e
 	if nilPredicateArgument(session) {
 		return 0, fmt.Errorf("orm: read last ServerRU with a nil session")
 	}
+	return readLastServerRU(ctx, session)
+}
 
+func readLastServerRU(ctx context.Context, session serverRUQueryer) (float64, error) {
 	var raw string
 	if err := session.QueryRowContext(ctx, lastServerRUQuery).Scan(&raw); err != nil {
 		return 0, fmt.Errorf("orm: read last ServerRU: %w", err)
