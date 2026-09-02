@@ -61,6 +61,12 @@ schema-aware形式はbind valueとpagination valueを含まないversion付きqu
 | `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
 | `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
+`tidbgo lint` もpackage loadなしで関連builder flowを解決できるsource query terminalへ `QRY002` から `QRY004` を適用します
+
+RuntimeCaptureで実行されなかったcodeも対象になります
+
+dynamic valueと別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
+
 要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします

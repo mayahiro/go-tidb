@@ -7,7 +7,7 @@ application to register every query in a diagnostic program
 | --- | --- | --- |
 | Go model metadata | `check.Model[T]` | No |
 | SQL snapshot compatibility | `check.Schema[T]` | No |
-| Go source projection use | `tidbgo lint` | No |
+| Go source query patterns and projection use | `tidbgo lint` | No |
 | Executed query shapes and statement behavior | RuntimeCapture and `tidbgo analyze` | Capture only executes application statements unless ServerRU collection is enabled |
 | TiDB optimizer estimate | `SelectQuery.Explain` | Yes |
 | TiDB runtime plan | `SelectQuery.ExplainAnalyze` and `ExplainAnalyzePlan.Diagnostics` | Yes, and the SELECT is executed |
@@ -96,15 +96,26 @@ tidbgo lint .
 tidbgo lint . --json
 ```
 
-The current source rule is `SRC001`, which proposes a narrower projection only
-when one function proves the complete result use
-Repository returns, aliases, model methods, and unresolved flows remain
-explicitly uncertain
+Source analysis applies `QRY002` through `QRY004` to resolved `Build`, `All`,
+`First`, `Only`, `Explain`, and `ExplainAnalyze` query terminals
+It resolves fluent chains, a single local builder definition, local query
+helpers, integer and string literals, and simple same-file constants
 
-Source analysis does not yet apply `QRY002` through `QRY007` to unexecuted
-builders
-This temporary coverage gap avoids requiring application-owned query
-registries while query-pattern analysis is moved into source analysis
+`analyzed_patterns` counts terminals whose relevant pagination, ordering, and
+leading-wildcard status were all resolved
+Dynamic `Limit` or `Offset` values, variadic ordering, unresolved predicate
+helpers, separately mutated builders, and captured builders are counted as
+`uncertain_patterns` and are not guessed
+
+`SRC001` proposes a narrower projection only when one function proves the
+complete result use
+Repository returns, aliases, model methods, and unresolved result flows remain
+explicitly uncertain in the separate `analyzed` and `uncertain` projection
+counters
+
+`QRY005` requires the compiler's normalized relation decision, while `QRY006`
+and `QRY007` require physical schema metadata
+They remain runtime-capture analysis rules instead of syntax heuristics
 
 ## Runtime plan diagnostics
 
@@ -151,8 +162,10 @@ Invalid input returns status `2`, and I/O or internal failures return status
 
 - RuntimeCapture sees only statements executed through go-tidb with the
   derived context
-- Unexecuted builders do not currently receive `QRY002` through `QRY007`
-- `tidbgo lint` currently implements projection analysis only
+- Source lint applies `QRY002` through `QRY004` only to statically resolved
+  builder flows
+- `QRY005` through `QRY007` require captured compiler decisions or a physical
+  schema
 - `EXPLAIN ANALYZE` executes the SELECT and consumes RU
 - ServerRU collection adds one same-session diagnostic round trip per
   recognized DML statement

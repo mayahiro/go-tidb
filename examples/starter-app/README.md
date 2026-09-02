@@ -24,7 +24,7 @@ It demonstrates the current struct-first foundation:
 - Offline scalar SQL construction with predicates and keyset pagination
 - Executed query-shape and query-to-index diagnostics through RuntimeCapture
   and `tidbgo analyze`, without bind values
-- Offline source projection analysis through `tidbgo lint`
+- Offline source query-pattern and projection analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target

@@ -59,6 +59,12 @@ without including bind or pagination values.
 | `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
 | `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
+`tidbgo lint` also applies `QRY002` through `QRY004` to source query terminals
+whose relevant builder flow can be resolved without package loading
+This covers code that was not exercised during RuntimeCapture
+Dynamic values and separately mutated builders remain visible in source
+coverage statistics instead of being guessed
+
 `QRY006` is not suppressible because the requested schema-aware check cannot
 be completed. The other diagnostics describe valid query shapes and set
 `Suppressible` to true. TiDB's

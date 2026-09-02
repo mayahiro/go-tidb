@@ -39,3 +39,39 @@ func query%d() int {
 		b.Fatalf("Diagnostics = %d, want 100", len(analysis.Diagnostics))
 	}
 }
+
+func BenchmarkAnalyzePathHundredResolvedPatterns(b *testing.B) {
+	directory := b.TempDir()
+	writeSourceTestFile(b, filepath.Join(directory, "go.mod"), "module example.test/benchmark\n\ngo 1.26\n")
+	var source strings.Builder
+	source.WriteString(`package benchmark
+import "github.com/mayahiro/go-tidb/orm"
+type User struct { ID int64; Name string }
+`)
+	for index := range 100 {
+		fmt.Fprintf(&source, `
+func query%d() (string, []any, error) {
+	return orm.Query[User]().
+		Where(orm.Contains("Name", "needle")).
+		OrderBy(orm.Desc("ID")).
+		Limit(20).
+		Offset(40).
+		Build()
+}
+`, index)
+	}
+	writeSourceTestFile(b, filepath.Join(directory, "queries.go"), source.String())
+
+	var analysis Analysis
+	var err error
+	b.ReportAllocs()
+	for b.Loop() {
+		analysis, err = AnalyzePath(directory)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	if len(analysis.Diagnostics) != 200 {
+		b.Fatalf("Diagnostics = %d, want 200", len(analysis.Diagnostics))
+	}
+}

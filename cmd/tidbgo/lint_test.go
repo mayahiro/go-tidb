@@ -28,7 +28,7 @@ func TestApplicationLintReportsNarrowProjectionFromCurrentDirectory(t *testing.T
 		"WARNING[SRC001] Query can use a narrower projection",
 		`Add Select(\"ID\") before the terminal`,
 		"at: repository.go:",
-		"source: files=1 model_types=1 result_queries=1 explicit_projections=0 analyzed=1 uncertain=0",
+		"source: files=1 model_types=1 result_queries=1 query_patterns=1 explicit_projections=0 analyzed=1 uncertain=0 analyzed_patterns=1 uncertain_patterns=0",
 		"summary: errors=0 warnings=1 info=0 suppressed=0",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -37,6 +37,43 @@ func TestApplicationLintReportsNarrowProjectionFromCurrentDirectory(t *testing.T
 	}
 	if got := result.Stderr(); len(got) != 0 {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestApplicationLintReportsQueryPatternsWithoutExecutingApplication(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeLintFile(t, filepath.Join(directory, "repository.go"), `package application
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64; Name string }
+
+func build() {
+	_, _, _ = orm.Query[User]().
+		Where(orm.Contains("Name", "x")).
+		Limit(20).
+		Offset(40).
+		Build()
+}
+`)
+	result := runApplicationAt(t, directory, nil, "lint")
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"WARNING[QRY002] OFFSET pagination cost grows with the offset",
+		"WARNING[QRY003] Pagination has no deterministic order",
+		"WARNING[QRY004] LIKE predicate starts with a wildcard",
+		"source: files=1 model_types=1 result_queries=0 query_patterns=1",
+		"analyzed_patterns=1 uncertain_patterns=0",
+		"summary: errors=0 warnings=3 info=0 suppressed=0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
 	}
 }
 

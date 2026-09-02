@@ -16,7 +16,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Offline model validation, model-intent diagnostics, and SQL construction
 - Reasoned suppression and deterministic text or JSON reports for runtime and
   source analysis
-- Offline Go-source projection analysis with explicit coverage statistics
+- Offline Go-source query-pattern and projection analysis with explicit
+  coverage statistics
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -203,8 +204,10 @@ identifiers come only from validated model metadata.
 
 Runtime capture applies `QRY002` through `QRY005` automatically to executed
 typed query shapes. Passing an offline schema snapshot to `tidbgo analyze`
-adds `QRY006` and `QRY007` index checks. Unexecuted builders currently receive
-only `Build` validation; source-wide query-pattern analysis remains planned.
+adds `QRY006` and `QRY007` index checks. `tidbgo lint` applies `QRY002` through
+`QRY004` to statically resolved source query terminals, including `Build`,
+without compiling or executing the application. Dynamic and separately
+mutated builder flows remain explicitly uncertain.
 Index presence does not predict the optimizer's selected plan, so verify it
 with `Explain` or `ExplainAnalyze`.
 
@@ -552,8 +555,8 @@ guide](docs/observability.md#structured-runtime-capture).
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-Analyze production Go source for default projections that can be proven wider
-than their local result use:
+Analyze production Go source for resolved query patterns and default
+projections that can be proven wider than their local result use:
 
 ```sh
 tidbgo lint
@@ -562,11 +565,13 @@ tidbgo lint ./internal/repository --json
 
 The optional path defaults to the current directory. The command does not
 execute application code, load packages, connect to a database, or modify
-source. `SRC001` is emitted only when every use of an `All`, `First`, or `Only`
-result is understood within the same function. Returned, passed, aliased,
-preloaded, or otherwise uncertain flows are counted as `uncertain` and are not
-guessed. Every report includes coverage statistics. See the [analysis
-guide](docs/checks.md#go-source-analysis)
+source. `QRY002` through `QRY004` cover resolved `Offset`, `Limit` plus
+ordering, and leading-wildcard predicates. `SRC001` is emitted only when every
+use of an `All`, `First`, or `Only` result is understood within the same
+function. Dynamic values, separately mutated builders, returned or passed
+results, aliases, preloads, and other unresolved flows are counted separately
+and are not guessed. Every report includes coverage statistics. See the
+[analysis guide](docs/checks.md#go-source-analysis)
 
 Print version information with:
 
@@ -608,8 +613,9 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
-- `QRY002` through `QRY007` currently analyze executed typed queries captured
-  by RuntimeCapture. Source lint does not yet apply them to unexecuted builders.
+- Source lint applies `QRY002` through `QRY004` only when the relevant builder
+  flow is statically resolved. `QRY005` through `QRY007` still require captured
+  compiler decisions or a physical schema.
 - No database connection constructor, bundled protocol driver, migration
   application API, or live-schema introspection API is available yet.
 

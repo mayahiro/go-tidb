@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/mayahiro/go-tidb/internal/querycheck"
 )
 
 func TestAnalyzeInputsReportsNarrowLocalDefaultProjection(t *testing.T) {
@@ -49,10 +52,12 @@ func loadUsers() int {
 		t.Fatalf("analyzeInputs() error = %v", err)
 	}
 	wantStatistics := Statistics{
-		Files:         1,
-		ModelTypes:    1,
-		ResultQueries: 1,
-		Analyzed:      1,
+		Files:            1,
+		ModelTypes:       1,
+		ResultQueries:    1,
+		QueryPatterns:    1,
+		Analyzed:         1,
+		AnalyzedPatterns: 1,
 	}
 	if !reflect.DeepEqual(analysis.Statistics, wantStatistics) {
 		t.Fatalf("Statistics = %#v, want %#v", analysis.Statistics, wantStatistics)
@@ -113,7 +118,7 @@ func loadUser() {
 	_ = user.ID
 }
 `)
-	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, Analyzed: 1}); !reflect.DeepEqual(got, want) {
+	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, QueryPatterns: 1, Analyzed: 1, UncertainPatterns: 1}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Statistics = %#v, want %#v", got, want)
 	}
 	if len(analysis.Diagnostics) != 1 || !strings.Contains(analysis.Diagnostics[0].Suggestion, `Select("ID")`) {
@@ -159,7 +164,7 @@ func loadUser() {
 	_ = user.ID
 }
 `)
-	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, Analyzed: 1}); !reflect.DeepEqual(got, want) {
+	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, QueryPatterns: 1, Analyzed: 1, AnalyzedPatterns: 1}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Statistics = %#v, want %#v", got, want)
 	}
 	if len(analysis.Diagnostics) != 1 {
@@ -220,9 +225,11 @@ func countOnly() int {
 		Files:               1,
 		ModelTypes:          1,
 		ResultQueries:       7,
+		QueryPatterns:       7,
 		ExplicitProjections: 1,
 		Analyzed:            2,
 		Uncertain:           4,
+		AnalyzedPatterns:    7,
 	}
 	if !reflect.DeepEqual(analysis.Statistics, want) {
 		t.Fatalf("Statistics = %#v, want %#v", analysis.Statistics, want)
@@ -284,7 +291,7 @@ func load(selectID bool) {
 	_ = users[0].ID
 }
 `)
-	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, Uncertain: 1}); !reflect.DeepEqual(got, want) {
+	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, QueryPatterns: 1, Uncertain: 1, UncertainPatterns: 1}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Statistics = %#v, want %#v", got, want)
 	}
 	if len(analysis.Diagnostics) != 0 {
@@ -308,11 +315,194 @@ func handler() func() {
 	}
 }
 `)
-	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, Analyzed: 1}); !reflect.DeepEqual(got, want) {
+	if got, want := analysis.Statistics, (Statistics{Files: 1, ModelTypes: 1, ResultQueries: 1, QueryPatterns: 1, Analyzed: 1, AnalyzedPatterns: 1}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Statistics = %#v, want %#v", got, want)
 	}
 	if len(analysis.Diagnostics) != 1 {
 		t.Fatalf("Diagnostics = %#v, want one", analysis.Diagnostics)
+	}
+}
+
+func TestAnalyzeInputsReportsResolvedQueryPatterns(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+const pageSize int64 = 20
+const pageOffset = 40
+
+type Genre struct { ID int64; Name string }
+type Video struct {
+	ID int64
+	Title string
+	Genres []Genre `+"`tidbgo:\"many_to_many,junction=videos_genres,source=VideoID,target=GenreID\"`"+`
+}
+
+func load(term, suffix string) {
+	predicate := orm.And(
+		orm.Contains("Title", term),
+		orm.Has("Genres", orm.HasSuffix("Name", suffix)),
+	)
+	_, _ = orm.Query[Video]().
+		Where(predicate).
+		Limit(pageSize).
+		Offset(pageOffset).
+		All(ctx, db)
+}
+`)
+	if got, want := analysis.Statistics.QueryPatterns, 1; got != want {
+		t.Fatalf("QueryPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedPatterns, 1; got != want {
+		t.Fatalf("AnalyzedPatterns = %d, want %d", got, want)
+	}
+	wantCodes := []string{
+		querycheck.CodeLeadingWildcardFilter,
+		querycheck.CodeLeadingWildcardFilter,
+		querycheck.CodeOffsetPagination,
+		querycheck.CodeUnorderedPagination,
+	}
+	gotCodes := sourceDiagnosticCodes(analysis)
+	sort.Strings(wantCodes)
+	if !reflect.DeepEqual(gotCodes, wantCodes) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", gotCodes, wantCodes)
+	}
+	joined := ""
+	for _, diagnostic := range analysis.Diagnostics {
+		joined += diagnostic.Message + "\n"
+		if diagnostic.Location.Path != "query.go" || diagnostic.Location.Line == 0 || diagnostic.Location.Column == 0 {
+			t.Fatalf("diagnostic location = %#v, want query.go source position", diagnostic.Location)
+		}
+	}
+	for _, want := range []string{"skips 40 rows", "Video.Title", "Video.Genres.Name", "LIMIT without ORDER BY"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostic messages = %q, want substring %q", joined, want)
+		}
+	}
+}
+
+func TestAnalyzeInputsReportsPatternCoverageWithoutGuessing(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64; Name string }
+
+func customPredicate() orm.Predicate
+
+func queries(limit int64) {
+	_, _ = orm.Query[User]().
+		Where(orm.HasPrefix("Name", "A")).
+		OrderBy(orm.Desc("ID")).
+		Limit(20).
+		All(ctx, db)
+	_, _ = orm.Query[User]().Limit(limit).All(ctx, db)
+	_, _ = orm.Query[User]().Where(customPredicate()).All(ctx, db)
+
+	query := orm.Query[User]()
+	query.Limit(20)
+	_, _ = query.All(ctx, db)
+}
+`)
+	if got, want := analysis.Statistics.QueryPatterns, 4; got != want {
+		t.Fatalf("QueryPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedPatterns, 1; got != want {
+		t.Fatalf("AnalyzedPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.UncertainPatterns, 3; got != want {
+		t.Fatalf("UncertainPatterns = %d, want %d", got, want)
+	}
+	if codes := sourceDiagnosticCodes(analysis); len(codes) != 0 {
+		t.Fatalf("diagnostic codes = %#v, want none", codes)
+	}
+}
+
+func TestAnalyzeInputsChecksOfflineBuildAndDeduplicatesHelperPatterns(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64; Name string }
+
+func userQuery() *orm.SelectQuery[User] {
+	return orm.Query[User]().Where(orm.Contains("Name", "x")).Limit(10)
+}
+
+func buildQueries() {
+	_, _, _ = userQuery().Build()
+	_, _, _ = userQuery().Build()
+}
+`)
+	if got, want := analysis.Statistics, (Statistics{
+		Files:            1,
+		ModelTypes:       1,
+		QueryPatterns:    2,
+		AnalyzedPatterns: 2,
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Statistics = %#v, want %#v", got, want)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{
+		querycheck.CodeUnorderedPagination,
+		querycheck.CodeLeadingWildcardFilter,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestAnalyzeInputsDoesNotCarryPatternsFromReplacedBuilders(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64; Name string }
+
+func build() {
+	query := orm.Query[User]().Where(orm.Contains("Name", "old")).Limit(10)
+	query = orm.Query[User]().OrderBy(orm.Desc("ID")).Limit(10)
+	_, _, _ = query.Build()
+}
+`)
+	if got, want := analysis.Statistics.QueryPatterns, 1; got != want {
+		t.Fatalf("QueryPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.UncertainPatterns, 1; got != want {
+		t.Fatalf("UncertainPatterns = %d, want %d", got, want)
+	}
+	if codes := sourceDiagnosticCodes(analysis); len(codes) != 0 {
+		t.Fatalf("diagnostic codes = %#v, want none", codes)
+	}
+}
+
+func TestAnalyzeInputsUsesResolvedORMAliasOnly(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import dborm "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64 }
+type fakeORM struct{}
+
+func build() {
+	_, _, _ = dborm.Query[User]().Limit(10).Build()
+	dborm := fakeORM{}
+	_, _, _ = dborm.Query[User]().Limit(20).Build()
+}
+`)
+	if got, want := analysis.Statistics.QueryPatterns, 1; got != want {
+		t.Fatalf("QueryPatterns = %d, want %d", got, want)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeUnorderedPagination}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
 }
 
@@ -397,8 +587,8 @@ func TestAnalyzePathRejectsMissingOrInvalidSource(t *testing.T) {
 func TestFormatStatistics(t *testing.T) {
 	t.Parallel()
 
-	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2}
-	const want = "source: files=3 model_types=2 result_queries=5 explicit_projections=1 analyzed=2 uncertain=2"
+	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, QueryPatterns: 6, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2, AnalyzedPatterns: 4, UncertainPatterns: 2}
+	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2"
 	if got := FormatStatistics(statistics); got != want {
 		t.Fatalf("FormatStatistics() = %q, want %q", got, want)
 	}
@@ -415,6 +605,15 @@ func analyzeSource(t testing.TB, source string) Analysis {
 		t.Fatalf("analyzeInputs() error = %v", err)
 	}
 	return analysis
+}
+
+func sourceDiagnosticCodes(analysis Analysis) []string {
+	codes := make([]string, len(analysis.Diagnostics))
+	for index, diagnostic := range analysis.Diagnostics {
+		codes[index] = diagnostic.Code
+	}
+	sort.Strings(codes)
+	return codes
 }
 
 func writeSourceTestFile(t testing.TB, path, contents string) {

@@ -51,17 +51,20 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 
 root moduleとその利用者へtest dependencyは伝播しません
 
-## Source projection解析benchmark
+## Source解析benchmark
 
-100個のlocal result queryを含む1 fileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
+100個のlocal queryを含むfileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
 
 ```sh
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedPatterns$' -benchmem -count=5
 ```
 
 offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
 
 temporary fixture作成はtimer開始前に完了します
+
+2番目のworkloadはconstant pagination、order、nested predicate解析、source location、deduplication、query-pattern diagnosticを実行します
 
 ## Schema compatibility client benchmark
 

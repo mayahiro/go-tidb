@@ -38,9 +38,12 @@ type Statistics struct {
 	Files               int `json:"files"`
 	ModelTypes          int `json:"model_types"`
 	ResultQueries       int `json:"result_queries"`
+	QueryPatterns       int `json:"query_patterns"`
 	ExplicitProjections int `json:"explicit_projections"`
 	Analyzed            int `json:"analyzed"`
 	Uncertain           int `json:"uncertain"`
+	AnalyzedPatterns    int `json:"analyzed_patterns"`
+	UncertainPatterns   int `json:"uncertain_patterns"`
 }
 
 // Analysis contains deterministic source statistics and diagnostics.
@@ -283,12 +286,15 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d explicit_projections=%d analyzed=%d uncertain=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
+		statistics.QueryPatterns,
 		statistics.ExplicitProjections,
 		statistics.Analyzed,
 		statistics.Uncertain,
+		statistics.AnalyzedPatterns,
+		statistics.UncertainPatterns,
 	)
 }

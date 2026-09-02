@@ -14,7 +14,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
 - runtimeおよびsource解析向けのreason付きdiagnostic suppressionと決定的なtextまたはJSON report
-- 明示的なcoverage statisticsを持つoffline Go source projection解析
+- 明示的なcoverage statisticsを持つoffline Go source query-patternとprojection解析
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -205,7 +205,9 @@ runtime captureは実行されたtyped query shapeへ `QRY002` から `QRY005` �
 
 offline schema snapshotを `tidbgo analyze` へ渡すと `QRY006` と `QRY007` のindex checkを追加します
 
-未実行builderには現在 `Build` validationだけを適用し、source全体のquery-pattern解析は今後の課題です
+`tidbgo lint` はapplicationをcompileまたは実行せず、`Build` を含むsource上の解決済みquery terminalへ `QRY002` から `QRY004` を適用します
+
+dynamicな値と別statementで変更されたbuilder flowは明示的にuncertainとします
 
 indexの存在はoptimizerが選ぶplanを予測しないため、`Explain` または `ExplainAnalyze` で確認します
 
@@ -579,7 +581,7 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
+解決済みquery patternと、default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
 
 ```sh
 tidbgo lint
@@ -590,9 +592,11 @@ pathを省略するとcurrent directoryを使用します
 
 application codeの実行、package load、DB接続、source変更は行いません
 
+`QRY002` から `QRY004` は解決できた `Offset`、`Limit` とorder、leading wildcard predicateを対象にします
+
 `All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
 
-return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず `uncertain` として数え、全reportへcoverage statisticsを含めます
+dynamic value、別statementで変更されたbuilder、return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず種類別に数え、全reportへcoverage statisticsを含めます
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
@@ -626,7 +630,7 @@ command helpは `tidbgo --help` で表示できます
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
-- `QRY002` から `QRY007` は現在RuntimeCaptureで取得した実行済みtyped queryだけを解析し、source lintは未実行builderへまだ適用しない
+- source lintは関連するbuilder flowを静的に解決できる場合だけ `QRY002` から `QRY004` を適用し、`QRY005` から `QRY007` にはcaptured compiler decisionまたはphysical schemaが引き続き必要
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License

@@ -46,10 +46,10 @@ func Diagnostics(shape queryshape.Query) []check.Diagnostic {
 
 	diagnostics := make([]check.Diagnostic, 0, diagnosticCount)
 	if returnsRows && shape.Offset.Set && shape.Offset.Positive {
-		diagnostics = append(diagnostics, offsetPaginationDiagnostic(shape.Model, shape.Offset.Value))
+		diagnostics = append(diagnostics, OffsetPaginationDiagnostic(shape.Model, shape.Offset.Value))
 	}
 	if returnsRows && shape.Limit.Set && shape.Limit.Positive && len(shape.Order) == 0 {
-		diagnostics = append(diagnostics, unorderedPaginationDiagnostic(shape.Model))
+		diagnostics = append(diagnostics, UnorderedPaginationDiagnostic(shape.Model))
 	}
 	if returnsRows && shape.Compiler.Rewrite == queryshape.CompilerRewriteRelationTopNFallback {
 		diagnostics = append(diagnostics, relationTopNFallbackDiagnostic(
@@ -61,7 +61,8 @@ func Diagnostics(shape queryshape.Query) []check.Diagnostic {
 	return appendLeadingWildcardDiagnostics(diagnostics, shape.Predicates, shape.Model)
 }
 
-func offsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
+// OffsetPaginationDiagnostic describes one positive OFFSET use.
+func OffsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
 	message := "SELECT for " + model + " uses a positive OFFSET and skips rows before returning a page"
 	if offset > 0 {
 		message = "SELECT for " + model + " skips " + strconv.FormatInt(offset, 10) + " rows before returning a page"
@@ -77,7 +78,8 @@ func offsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
 	}
 }
 
-func unorderedPaginationDiagnostic(model string) check.Diagnostic {
+// UnorderedPaginationDiagnostic describes one positive LIMIT without ORDER BY.
+func UnorderedPaginationDiagnostic(model string) check.Diagnostic {
 	return check.Diagnostic{
 		Code:         CodeUnorderedPagination,
 		Severity:     check.SeverityWarning,
@@ -127,7 +129,7 @@ func appendLeadingWildcardDiagnostics(diagnostics []check.Diagnostic, predicates
 		current := predicates[index]
 		switch current.Operator {
 		case queryshape.PredicateContains, queryshape.PredicateHasSuffix:
-			diagnostics = append(diagnostics, leadingWildcardDiagnostic(
+			diagnostics = append(diagnostics, LeadingWildcardDiagnostic(
 				scope,
 				current.Field,
 				current.Operator == queryshape.PredicateHasSuffix,
@@ -141,7 +143,8 @@ func appendLeadingWildcardDiagnostics(diagnostics []check.Diagnostic, predicates
 	return diagnostics
 }
 
-func leadingWildcardDiagnostic(scope, field string, suffix bool) check.Diagnostic {
+// LeadingWildcardDiagnostic describes one Contains or HasSuffix predicate.
+func LeadingWildcardDiagnostic(scope, field string, suffix bool) check.Diagnostic {
 	constructor := "Contains"
 	if suffix {
 		constructor = "HasSuffix"
