@@ -6,7 +6,7 @@ go-tidbはapplicationへqueryごとのdiagnostic登録を要求せず、必要�
 | --- | --- | --- |
 | Go model metadata | `check.Model[T]` | なし |
 | SQL snapshot compatibility | `check.Schema[T]` | なし |
-| Go sourceのprojection利用 | `tidbgo lint` | なし |
+| Go sourceのquery patternとprojection利用 | `tidbgo lint` | なし |
 | 実行されたquery shapeとstatement behavior | RuntimeCaptureと `tidbgo analyze` | ServerRU収集を有効にしない限りcaptureはapplication statementだけを実行 |
 | TiDB optimizer estimate | `SelectQuery.Explain` | あり |
 | TiDB runtime plan | `SelectQuery.ExplainAnalyze` と `ExplainAnalyzePlan.Diagnostics` | あり、SELECTも実行 |
@@ -39,7 +39,7 @@ func TestUserMapping(t *testing.T) {
 
 `check.Model` は `MOD001` から `MOD007` でmodel intentとtagを検証します
 
-`check.Schema` は `CMP001` から `CMP014` で方向付きcompatibility ruleを適用します
+`check.Schema` はquery rewriteが使うcandidate unique-key宣言を含め、`CMP001` から `CMP015` で方向付きcompatibility ruleを適用します
 
 ## 実行済みqueryのdiagnostic
 
@@ -90,17 +90,44 @@ applicationをcompileまたは実行せずsourceを解析します
 ```sh
 tidbgo lint .
 tidbgo lint . --json
+tidbgo lint . --schema schema.sql
 ```
 
-現在のsource ruleは `SRC001` です
+source解析は解決済みの `Build`、`All`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
 
-1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
+fluent chain、1個のlocal builder定義、local query helper、integerとstring literal、同じfile内の単純なconstantを解決します
 
-repository return、alias、model method、解決できないflowは明示的にuncertainとします
+関連するpagination、order、leading wildcard有無を全て解決できたterminalは `analyzed_patterns` へ数えます
 
-source解析は未実行builderへまだ `QRY002` から `QRY007` を適用しません
+dynamicな `Limit` または `Offset`、variadic order、未解決predicate helper、別statementで変更されたbuilder、captureされたbuilderは推測せず `uncertain_patterns` へ数えます
 
-query-pattern解析をsource解析へ移す間の一時的なcoverage gapを許容し、application所有のquery registryは要求しません
+orderedかつpositive Limitのroot `Has` では、runtime compilerと同じcollection Relation metadataを解決し、共通の正規化済みrelation-first TopN decisionを適用します
+
+`relation_topn_patterns`、`analyzed_relation_topn_patterns`、`uncertain_relation_topn_patterns` がこのruleのcoverageを表します
+
+解決済みfallbackは `QRY005` を出力し、解決できないRelation名、model、key、order、builder flowは推測せずuncertainとします
+
+source decisionはruntime model metadataと同じ規則で `unique=<group>` candidate keyを認識します
+
+source lintはmodel-to-schema compatibility testを置き換えないため、各宣言がunconditionalな物理unique constraintに裏付けられることは `check.Schema` で検証します
+
+`--schema` を指定するとsource解析はruntime model descriptorと同じ `tidbgo` metadataとdefault naming ruleから物理table名とcolumn名も導出します
+
+明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを解決できたroot shapeだけをruntime解析と共通のneutral index-prefix checkerへ渡します
+
+解決済みのrelation-first TopN decisionがある場合はassociation accessも同じcheckerへ渡します
+
+direct `has_many` accessはtarget equality columnの後にRelation keyが続くindexを検査し、pure `many_to_many` accessはjunction target columnの後にjunction source columnが続くindexを検査します
+
+default active soft-delete columnはroot query上で `WithDeleted` を解決できない限りequality prefixへ含め、direct Relation targetのsoft-delete columnはassociation equality prefixへ含めます
+
+`index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
+
+Relation fallback、associationのnon-equality filter、mixed direction、unknown field、embedded model shape、別statementで変更されたbuilderには推測したindex diagnosticを出さずuncertainとします
+
+`SRC001` は1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
+
+repository return、alias、model method、解決できないresult flowは別の `analyzed` と `uncertain` projection counterへ反映します
 
 ## Runtime plan diagnostic
 
@@ -142,8 +169,9 @@ invalid inputはstatus `2`、I/Oまたはinternal failureはstatus `5` です
 ## 現在のcoverage境界
 
 - RuntimeCaptureはderived contextを使ってgo-tidbから実行されたstatementだけを対象にする
-- 未実行builderには現在 `QRY002` から `QRY007` を適用しない
-- `tidbgo lint` は現在projection解析だけを実装する
+- source lintは静的に解決できたbuilder flowとRelation metadataだけへ `QRY002` から `QRY005` を適用する
+- source lintへ `--schema` を指定した場合は解決済みrootまたはrelation-first ordered-limit accessだけへ `QRY006` と `QRY007` を適用する
+- source metadataから証明できないdynamicなRelation名とRelation shapeはRelation uncertainty counterへ反映する
 - `EXPLAIN ANALYZE` はSELECTを実行してRUを消費する
 - ServerRU収集はrecognized DML statementごとにsame-session diagnostic round tripを1回追加する
 - query planとRUは現在のstatistics、data distribution、workloadに依存する

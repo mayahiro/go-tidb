@@ -66,6 +66,8 @@ cardinality:
   is a warning because it can produce SQL `NULL`
 - When a model declares a primary key, its ordered columns must match the
   physical primary key
+- Every declared candidate unique key must be proven by an unconditional
+  physical primary or unique key over the declared columns or a subset
 - A mapped column must declare `AUTO_RANDOM` on both sides or neither side
 - A physical generated column cannot be an ordinary writable model field
 - Every declared relation target and many-to-many junction table and key column
@@ -107,6 +109,7 @@ reports the unavailable primary-key mutation capability as `MOD005`.
 | `CMP012` | error | A many-to-many junction has no exact unique source-target pair |
 | `CMP013` | error | A many-to-many junction requires insert data beyond its mapped keys |
 | `CMP014` | warning | A collection relation has no index starting with its complete source key |
+| `CMP015` | error | A declared candidate unique key is not proven by an unconditional physical primary or unique key |
 
 A value-form `time.Time` soft-delete field is treated as nullable because the
 runtime scans SQL `NULL` to zero time and writes zero time as SQL `NULL`.
@@ -130,6 +133,15 @@ cannot include an additional unique-key component.
 Partial indexes do not prove unconditional lookup or uniqueness. Invisible
 unique indexes still prove uniqueness but do not prove a default-optimizer
 lookup, while FULLTEXT and SPATIAL indexes prove neither property.
+
+Candidate-key group names are logical metadata and are not compared with SQL
+index names. Column order does not affect the uniqueness proof, and a physical
+unique key over a subset is also sufficient because it is a stronger
+constraint. TiDB unique constraints apply to non-NULL values; the compiler
+therefore uses a candidate key only when relation correlation and non-nil
+`Equal` predicates cover every declared field. The unique constraint proves
+cardinality, while a separately ordered index can still be required for an
+efficient relation-first TopN access path or a relation-only Count.
 
 ## Type-check boundary
 
@@ -155,5 +167,7 @@ TiDB documents the current [`CREATE TABLE`
 grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/),
 [`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/), and
 [case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/).
+Candidate-key validation follows TiDB's [unique constraint
+semantics](https://docs.pingcap.com/tidb/stable/constraints/).
 The structural warning follows TiDB's
 [index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/).

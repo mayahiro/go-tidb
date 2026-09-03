@@ -265,6 +265,15 @@ func buildQueryShapeIndexAccesses(
 		if !exact {
 			return nil
 		}
+		if analysis.plan.metadata.junction != nil {
+			return []queryshape.IndexAccess{{
+				Kind:            queryshape.IndexAccessRelationTopN,
+				Table:           analysis.plan.metadata.junction.tableName,
+				Relation:        analysis.relationName,
+				EqualityColumns: append([]string(nil), analysis.plan.metadata.junction.targetColumns...),
+				OrderColumns:    append([]string(nil), analysis.plan.metadata.junction.sourceColumns...),
+			}}
+		}
 		if softDeleteField, exists := analysis.plan.metadata.target.SoftDeleteField(); exists {
 			equalityColumns = appendQueryShapeColumn(equalityColumns, softDeleteField.ColumnName())
 		}

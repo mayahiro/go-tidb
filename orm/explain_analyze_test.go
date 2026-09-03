@@ -169,6 +169,72 @@ func TestSelectQueryExplainAnalyzeResolvesRelationTopNAliases(t *testing.T) {
 	}
 }
 
+func TestSelectQueryExplainAnalyzeResolvesManyToManyRelationTopNAliases(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"IndexRangeScan_1", "20", "20", "cop[tikv]", "table:tidbgo_a0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableRowIDScan_2", "20", "20", "cop[tikv]", "table:tidbgo_t0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"TableScan_3", "20", "20", "root", "table:tidbgo_k0", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := relationTopNManyToManyBenchmarkQuery().ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	want := []struct {
+		table    string
+		model    string
+		relation string
+	}{
+		{table: "preload_user_roles", relation: "Roles"},
+		{table: "preload_users", model: "preloadUser"},
+		{},
+	}
+	for index := range want {
+		row := plan[index]
+		if row.PhysicalTable != want[index].table || row.Model != want[index].model || row.RelationPath != want[index].relation {
+			t.Fatalf("plan[%d] access = (%q, %q, %q), want (%q, %q, %q)", index, row.PhysicalTable, row.Model, row.RelationPath, want[index].table, want[index].model, want[index].relation)
+		}
+	}
+}
+
+func TestSelectQueryExplainAnalyzeResolvesManyToManyRelationTopNNestedAliases(t *testing.T) {
+	state := explainAnalyzeTestState(
+		[]driver.Value{"IndexRangeScan_1", "20", "20", "cop[tikv]", "table:tidbgo_a0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"Point_Get_2", "1", "1", "root", "table:tidbgo_m0", "time:1ms", "", "N/A", "N/A"},
+		[]driver.Value{"Point_Get_3", "1", "1", "root", "table:tidbgo_r1", "time:1ms", "", "N/A", "N/A"},
+	)
+	database := openAllTestDB(t, state)
+
+	plan, err := Query[preloadGraph]().
+		Where(Has(
+			"Tags",
+			Equal("ID", uint64(7)),
+			Has("Node", Equal("Value", "active")),
+		)).
+		OrderBy(Desc("ID")).
+		Limit(20).
+		ExplainAnalyze(context.Background(), database)
+	if err != nil {
+		t.Fatalf("ExplainAnalyze() error = %v", err)
+	}
+	want := []struct {
+		table    string
+		model    string
+		relation string
+	}{
+		{table: "preload_graph_tags", relation: "Tags"},
+		{table: "preload_graph_tag_targets", model: "preloadGraphTag", relation: "Tags"},
+		{table: "preload_graph_nodes", model: "preloadGraphNode", relation: "Tags.Node"},
+	}
+	for index := range want {
+		row := plan[index]
+		if row.PhysicalTable != want[index].table || row.Model != want[index].model || row.RelationPath != want[index].relation {
+			t.Fatalf("plan[%d] access = (%q, %q, %q), want (%q, %q, %q)", index, row.PhysicalTable, row.Model, row.RelationPath, want[index].table, want[index].model, want[index].relation)
+		}
+	}
+}
+
 func TestSelectQueryExplainAnalyzeExecutesOnlyPreloadRootSelect(t *testing.T) {
 	state := explainAnalyzeTestState([]driver.Value{"TableReader_1", "2", "2", "root", "", "time:1ms, loops:2", "data:TableFullScan_2", "1 KB", "N/A"})
 	database := openAllTestDB(t, state)

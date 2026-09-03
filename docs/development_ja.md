@@ -51,17 +51,29 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 
 root moduleとその利用者へtest dependencyは伝播しません
 
-## Source projection解析benchmark
+## Source解析benchmark
 
-100個のlocal result queryを含む1 fileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
+100個のlocal queryを含むfileについて再帰的な収集、Go parse、model index、query flow解析、diagnostic構築を計測します
 
 ```sh
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
 ```
 
 offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
 
 temporary fixture作成はtimer開始前に完了します
+
+2番目のworkloadはconstant pagination、order、nested predicate解析、source location、deduplication、query-pattern diagnosticを実行します
+
+3番目はparse済みschema metadata、物理model名の解決、100個のordered-limit queryに対するshared index-prefix checkerを追加します
+
+4番目はdirect Relation metadataを解決し、共通のrelation-first TopN compiler decisionを適用して100個のassociation index accessを照合します
+
+5番目はpure many-to-many Relationとjunction metadataを解決し、同じcompiler decisionを適用して100個のjunction index accessを照合します
 
 ## Schema compatibility client benchmark
 

@@ -61,6 +61,14 @@ schema-aware形式はbind valueとpagination valueを含まないversion付きqu
 | `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
 | `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
+`tidbgo lint` もpackage loadなしで関連builder flowを解決できるsource query terminalへ `QRY002` から `QRY005` を適用します
+
+`tidbgo lint --schema schema.sql` はconjunctiveな `Equal` filterと同じ方向のorderだけを持つ解決済みroot ordered positive-limit access、および解決済みrelation-first TopN compiler decisionが生成するassociation accessへ `QRY006` と `QRY007` も適用します
+
+RuntimeCaptureで実行されなかったcodeも対象になります
+
+dynamicなRelation名、未解決のRelation metadata、associationのnon-equality filter、mixed order、別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
+
 要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
 他のdiagnosticは有効なquery shapeを対象とし、`Suppressible` をtrueにします
@@ -75,7 +83,7 @@ applicationでstable cursorを保持できる場合は `SeekAfter` を優先し�
 
 schema-aware ruleは1個のindex候補を構造的に決定できる場合だけ適用します
 
-root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcompilerが生成したassociation accessを対象にします
+root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではruntimeまたはsourceのcompiler decisionが生成したassociation accessを対象にします
 
 activeなdefault soft-delete scopeがある場合は、生成される `IS NULL` のcolumnもequality prefixへ含めます
 
@@ -103,7 +111,7 @@ projection、predicate structure、order、preload、compiler rewriteが変わ�
 
 `QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
 
-例として1 rootあたり1 rowの証明不足、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter`、`many_to_many` があります
+例として1 rootあたり1 rowの証明不足、target primary keyまたはcandidate unique keyのいずれも全体を固定しないpure many-to-many filter、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter` があります
 
 target predicate valueは含めません
 
@@ -196,35 +204,79 @@ TiDBの公式仕様は[Optimizer Hints](https://docs.pingcap.com/tidb/stable/opt
 
 compilerは次の条件をmetadataから証明できるTopN shapeをさらに変換します
 
-- builderにtop-level direct `has_many` の `Has` が1個だけあり、他のroot predicateがない
+- builderにtop-level direct collectionの `Has` が1個だけあり、他のroot predicateがない
 - positive `Limit` と `OrderBy` が明示され、orderがroot primary key全体と完全に一致する
 - Relation source keyがroot primary key全体である
-- Relation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
+- direct `has_many` ではtarget keyとconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全てcoverし、1 rootあたり最大1 target rowと証明できる
+- pure `many_to_many` ではconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全て固定し、pure-junction contractによってsource-target pairが一意になる
 - `SeekAfter` とroot default soft-delete scopeがactiveではない
 
-このshapeではRelation targetをderived query内でfilterしてorderし、そこで `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+このshapeではrelation-firstなderived query内で `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+
+outer queryでは交換可能なderived keyとrootのinner join pairだけを `LEADING(tidbgo_k0, tidbgo_t0)` へ指定します
+
+これによりLimit済みkey setをroot lookupのdriving sideとし、後続するinline `LEFT JOIN` preloadの順序は拘束しません
+
+`LEADING` はjoin順を制御し、TiDBが適用可能なjoin algorithmを選択できるようにするため、compilerは `INL_JOIN` を自動付与しません
+
+direct `has_many` はtarget tableをfilterしてorderします
+
+pure `many_to_many` はRelation target key自体が完全なprimary keyまたはcandidate unique keyで他のtarget条件が不要ならjunction target columnを直接filterし、それ以外は固定したtargetをjoinしてからjunction source keyをorderします
 
 TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
 
 data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pushdown guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
 
+join順のsemanticsとhintが適用不能になる条件はTiDBの[`LEADING` documentation](https://docs.pingcap.com/tidb/stable/optimizer-hints/#leadingt1_name--tl_name-)を参照してください
+
+代表dataでは対象statementと同じconnection上で直後に `SHOW WARNINGS` を実行し、`ExplainAnalyze` も確認します
+
 物理schemaにforeign keyがなくてもRelation mappingはdata integrity contractです
 
 direct Relationが表すtarget keyは既存source rowを参照する必要があります
 
-`go-tidb` はquery実行時にこのconstraintを作成または検査しません
+pure junctionは既存sourceとtarget rowを参照し、source-target column全体のpairにexact uniqueを設定する必要があります
 
-relation-first TopNはこのcontractを前提とするため、orphan target rowがある場合はroot joinより前にpage slotを消費し、結果件数がLimit未満になる可能性があります
+`go-tidb` はquery実行時にこれらのconstraintを作成または検査しません
+
+relation-first TopNとrelation-only Countはこのcontractを前提とします
+
+orphan sourceはroot joinより前にpage slotを消費する可能性があり、compilerがtargetをjoinせずjunctionをfilterする場合のorphan targetはRelation existenceを誤ってtrueにする可能性があります
+
+relation-only Countはroot joinを意図的に省略するため、orphan association rowを件数へ含める可能性があります
+
+duplicate direct edgeまたはpure-junction pairは件数を過大に数えるかroot resultを重複させる可能性があります
 
 workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
 
+payloadを持つedge modelはsurrogate primary keyを維持したままRelation cardinalityを別に宣言できます
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+`Has("VideoGenres", Equal("GenreID", ...))` ではRelation correlationが `VideoID`、predicateが `GenreID` を固定するため、candidate key全体からVideoごとに最大1 edgeと証明できます
+
+offline SQL compileはこの宣言をtrustするため、modelを使用する前に `check.Schema` でSQL snapshotと照合してください
+
 compilerは物理indexをofflineでinspectできません
 
-効率的なrelation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
+効率的なdirect `has_many` relation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
 
 例えば `Equal("GenreID", ...)` と `OrderBy(Desc("ID"))` には `(genre_id, video_id)` が該当します
 
+pure `many_to_many` のjunctionには通常target columnの後にsource columnを置くindexが必要で、例えば `(role_id, user_id)` が該当します
+
 empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
+
+unique constraintとordered access indexの役割は別です
+
+このedge例では `UNIQUE(video_id, genre_id)` がcardinalityを証明し、`INDEX(genre_id, video_id)` がfilter済みordered Limitを支えます
 
 target modelがsoft-delete fieldを持つ場合、`Has` はactive target rowだけを対象にします
 
@@ -340,6 +392,31 @@ activeな `SeekAfter` がある場合は `OrderBy` をcursor predicateの定義�
 `Limit` または `Offset` がある場合はderived `SELECT 1` を数え、paginationを結果へ反映します
 
 条件に一致する全row数が必要な場合は `Limit` と `Offset` を指定しません
+
+metadataから証明できる1つのRelation shapeでは、直接の `COUNT(*)` をselected modelではなくassociation起点へ変換します
+
+compilerは次の条件を全て満たす場合にこの変換を適用します
+
+- `Limit`、`Offset`、`SeekAfter` がない
+- root predicateがdirectかつpositiveなcollection `Has` 1件だけ
+- default root soft-delete scopeがactiveではない
+- Relation source keyがroot primary key全体
+- Relation correlationとconjunctiveかつnon-nullな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique key全体をcoverし、rootごとのmatching association rowが最大1件であることを証明できる
+- pure `many_to_many` では全target predicateをjunctionのtarget key columnへ直接移せて、target soft-delete scopeがない
+
+例えば1つの `ClipGenre.GenreID` でfilterする `Clip` queryのCountは、relation-first TopN Listとは独立して次へcompileできます
+
+```sql
+SELECT COUNT(*) FROM `clip_genres` WHERE `genre_id` = ?
+```
+
+これによりroot lookupを除き、TiDBがassociation covering indexだけでCountを処理できる可能性があります
+
+この変換は前述のRelation data integrity contractを前提とします
+
+いずれかの証明条件を満たさない場合はroot `EXISTS` queryを維持します
+
+通常の `OrderBy` はCountへ影響しないため、この変換を妨げません
 
 `Explain` は `Build` が表すroot SELECTへ `EXPLAIN` を実行し、TiDBのdefault row-format operatorを `[]orm.ExplainRow` として返します
 

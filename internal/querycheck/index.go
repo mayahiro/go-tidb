@@ -24,42 +24,54 @@ const (
 // IndexDiagnostics compares high-confidence ordered accesses in shape with a
 // parsed physical schema without claiming which access path TiDB will choose.
 func IndexDiagnostics(shape queryshape.Query, catalog *physicalschema.Catalog) []check.Diagnostic {
-	diagnostics := make([]check.Diagnostic, 0, len(shape.IndexAccesses))
-	fingerprint := ""
-	queryFingerprint := func() string {
-		if fingerprint == "" {
-			fingerprint = shape.Fingerprint()
-		}
-		return fingerprint
+	var evidence []check.Evidence
+	if catalog == nil || len(shape.IndexAccesses) != 0 {
+		evidence = fingerprintEvidence(shape.Fingerprint())
 	}
+	return indexAccessDiagnostics(shape.Model, shape.IndexAccesses, catalog, evidence)
+}
+
+// IndexAccessDiagnostics compares neutral ordered accesses with a parsed
+// physical schema without requiring a complete executable query shape.
+func IndexAccessDiagnostics(model string, accesses []queryshape.IndexAccess, catalog *physicalschema.Catalog) []check.Diagnostic {
+	return indexAccessDiagnostics(model, accesses, catalog, nil)
+}
+
+func indexAccessDiagnostics(
+	model string,
+	accesses []queryshape.IndexAccess,
+	catalog *physicalschema.Catalog,
+	evidence []check.Evidence,
+) []check.Diagnostic {
+	diagnostics := make([]check.Diagnostic, 0, len(accesses))
 	if catalog == nil {
 		return append(diagnostics, unavailableDiagnostic(
-			shape,
-			queryFingerprint(),
+			model,
 			"schema-aware query diagnostics require a non-nil catalog returned by schema.Parse",
 			check.Location{},
+			evidence,
 		))
 	}
 
-	for index := range shape.IndexAccesses {
-		access := shape.IndexAccesses[index]
+	for index := range accesses {
+		access := accesses[index]
 		table, exists := catalog.Table(access.Table)
 		if !exists {
 			diagnostics = append(diagnostics, unavailableDiagnostic(
-				shape,
-				queryFingerprint(),
+				model,
 				fmt.Sprintf("query access table %q is absent from the SQL snapshot", access.Table),
 				check.Location{},
+				evidence,
 			))
 			continue
 		}
 		missing := missingTableColumns(table, access)
 		if len(missing) != 0 {
 			diagnostics = append(diagnostics, unavailableDiagnostic(
-				shape,
-				queryFingerprint(),
+				model,
 				fmt.Sprintf("query access columns (%s) are absent from table %q", strings.Join(missing, ", "), table.Name()),
 				schemaLocation(table.Position()),
+				evidence,
 			))
 			continue
 		}
@@ -67,38 +79,38 @@ func IndexDiagnostics(shape queryshape.Query, catalog *physicalschema.Catalog) [
 			continue
 		}
 		diagnostics = append(diagnostics, missingIndexDiagnostic(
-			shape,
-			queryFingerprint(),
+			model,
 			table,
 			access,
 			requiredIndexColumns(access),
+			evidence,
 		))
 	}
 	return diagnostics
 }
 
-func unavailableDiagnostic(shape queryshape.Query, fingerprint, message string, location check.Location) check.Diagnostic {
+func unavailableDiagnostic(model, message string, location check.Location, evidence []check.Evidence) check.Diagnostic {
 	return check.Diagnostic{
 		Code:       CodeIndexCheckUnavailable,
 		Severity:   check.SeverityError,
 		Title:      "Query index check is unavailable",
-		Message:    "SELECT for " + shape.Model + " cannot compare its ordered access with the physical schema because " + message,
-		Evidence:   fingerprintEvidence(fingerprint),
+		Message:    "SELECT for " + model + " cannot compare its ordered access with the physical schema because " + message,
+		Evidence:   append([]check.Evidence(nil), evidence...),
 		Suggestion: "Use a self-contained schema snapshot containing every table and column needed by each analyzed ordered access",
 		Location:   location,
 	}
 }
 
 func missingIndexDiagnostic(
-	shape queryshape.Query,
-	fingerprint string,
+	model string,
 	table physicalschema.Table,
 	access queryshape.IndexAccess,
 	columns []string,
+	evidence []check.Evidence,
 ) check.Diagnostic {
 	accessName := "root SELECT"
 	if access.Kind == queryshape.IndexAccessRelationTopN {
-		accessName = "relation-first TopN for " + shape.Model + "." + access.Relation
+		accessName = "relation-first TopN for " + model + "." + access.Relation
 	}
 	return check.Diagnostic{
 		Code:     CodeMissingIndexPrefix,
@@ -108,7 +120,7 @@ func missingIndexDiagnostic(
 			", but the SQL snapshot has no default-usable direct-column index whose prefix covers (" + strings.Join(columns, ", ") + ")",
 		Evidence: append([]check.Evidence{{
 			Message: "Candidate index prefix: " + table.Name() + "(" + strings.Join(columns, ", ") + ")",
-		}}, fingerprintEvidence(fingerprint)...),
+		}}, evidence...),
 		Suggestion:   "Verify the generated query with ExplainAnalyze and add this prefix when the observed plan scans unnecessary rows",
 		Location:     schemaLocation(table.Position()),
 		Suppressible: true,

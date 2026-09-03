@@ -39,6 +39,161 @@ func TestSelectQueryCountCountsPredicatesWithoutProjectionOrOrder(t *testing.T) 
 	}
 }
 
+func TestSelectQueryCountUsesRelationOnlyAssociationWhenCardinalityIsProven(t *testing.T) {
+	t.Parallel()
+
+	compiled, err := Query[relationTopNVideo]().
+		Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
+		OrderBy(Desc("ID")).
+		compileCount()
+	if err != nil {
+		t.Fatalf("compileCount() error = %v", err)
+	}
+	wantSQL := "SELECT COUNT(*) FROM `relation_topn_video_genres` WHERE `genre_id` = ?"
+	if compiled.sql != wantSQL {
+		t.Fatalf("SQL = %q, want %q", compiled.sql, wantSQL)
+	}
+	if got, want := compiled.arguments, []any{int64(7)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectQueryCountUsesRelationOnlyJunctionWhenTargetKeyIsFixed(t *testing.T) {
+	t.Parallel()
+
+	compiled, err := Query[preloadUser]().
+		Where(Has("Roles", Equal("ID", uint64(7)))).
+		compileCount()
+	if err != nil {
+		t.Fatalf("compileCount() error = %v", err)
+	}
+	wantSQL := "SELECT COUNT(*) FROM `preload_user_roles` WHERE `role_id` = ?"
+	if compiled.sql != wantSQL {
+		t.Fatalf("SQL = %q, want %q", compiled.sql, wantSQL)
+	}
+	if got, want := compiled.arguments, []any{uint64(7)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectQueryRelationOnlyCountPreservesTargetSoftDeleteScope(t *testing.T) {
+	t.Parallel()
+
+	compiled, err := Query[relationTopNSoftVideo]().
+		WithDeleted().
+		Where(Has("Links", Equal("GenreID", int64(7)))).
+		compileCount()
+	if err != nil {
+		t.Fatalf("compileCount() error = %v", err)
+	}
+	wantSQL := "SELECT COUNT(*) FROM `relation_topn_soft_links` WHERE `deleted_at` IS NULL AND `genre_id` = ?"
+	if compiled.sql != wantSQL {
+		t.Fatalf("SQL = %q, want %q", compiled.sql, wantSQL)
+	}
+	if got, want := compiled.arguments, []any{int64(7)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectQueryRelationOnlyCountValidatesTargetPredicates(t *testing.T) {
+	t.Parallel()
+
+	compiled, err := Query[relationTopNVideo]().
+		Where(Has("VideoGenres", Equal("GenreID", nil))).
+		compileCount()
+	if err == nil || !strings.Contains(err.Error(), "COUNT relation predicate relationTopNVideo.VideoGenres") || !strings.Contains(err.Error(), "must not be nil") {
+		t.Fatalf("compileCount() = %#v, %v, want COUNT relation predicate validation error", compiled, err)
+	}
+}
+
+func TestSelectQueryRelationOnlyCountFallsBackWhenProofIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query interface {
+			compileCount() (compiledCount, error)
+		}
+		associationTable string
+	}{
+		{
+			name: "pagination",
+			query: Query[relationTopNVideo]().
+				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
+				Limit(20),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "keyset",
+			query: Query[relationTopNVideo]().
+				Where(Has("VideoGenres", Equal("GenreID", int64(7)))).
+				OrderBy(Desc("ID")).
+				SeekAfter(int64(100)),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "root predicate",
+			query: Query[relationTopNVideo]().
+				Where(Equal("Title", "video"), Has("VideoGenres", Equal("GenreID", int64(7)))),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "nested relation predicate",
+			query: Query[relationTopNVideo]().
+				Where(And(Has("VideoGenres", Equal("GenreID", int64(7))), Equal("Title", "video"))),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "multiple collection predicates",
+			query: Query[relationTopNVideo]().
+				Where(
+					Has("VideoGenres", Equal("GenreID", int64(7))),
+					Has("VideoGenres", Equal("GenreID", int64(8))),
+				),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "incomplete candidate unique key",
+			query: Query[relationTopNVideo]().
+				Where(Has("VideoGenres")),
+			associationTable: "relation_topn_video_genres",
+		},
+		{
+			name: "undeclared candidate unique key",
+			query: Query[relationTopNUnprovenVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))),
+			associationTable: "relation_topn_unproven_links",
+		},
+		{
+			name: "active root soft delete",
+			query: Query[relationTopNSoftVideo]().
+				Where(Has("Links", Equal("GenreID", int64(7)))),
+			associationTable: "relation_topn_soft_links",
+		},
+		{
+			name: "many-to-many predicate requires target join",
+			query: Query[preloadUser]().
+				Where(Has("Roles", Equal("Name", "admin"))),
+			associationTable: "preload_user_roles",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compiled, err := tt.query.compileCount()
+			if err != nil {
+				t.Fatalf("compileCount() error = %v", err)
+			}
+			if !strings.Contains(compiled.sql, "EXISTS (") {
+				t.Fatalf("SQL = %q, want root EXISTS fallback", compiled.sql)
+			}
+			if !strings.Contains(compiled.sql, "`"+tt.associationTable+"`") {
+				t.Fatalf("SQL = %q, want association table %s", compiled.sql, tt.associationTable)
+			}
+		})
+	}
+}
+
 func TestSelectQueryCountReturnsZeroForEmptySet(t *testing.T) {
 	state := &allTestState{
 		columns: []string{"count"},

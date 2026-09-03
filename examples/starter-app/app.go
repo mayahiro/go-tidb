@@ -89,11 +89,14 @@ type Clip struct {
 	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
 }
 
-// ClipGenre is an application-owned association model with one row per pair.
+// ClipGenre is a payload-bearing edge model with a surrogate primary key and
+// a candidate unique key over the relation pair.
 type ClipGenre struct {
 	model.Meta `tidbgo:"table=clip_genres"`
-	ClipID     int64 `tidbgo:",pk"`
-	GenreID    int64 `tidbgo:",pk"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	ClipID     int64 `tidbgo:",unique=clip_genre"`
+	GenreID    int64 `tidbgo:",unique=clip_genre"`
+	Priority   int64
 }
 
 // JobLease is an application-owned conditional-update model.
@@ -143,10 +146,20 @@ func BuildRecentClipsInGenreQuery(genreID int64) (string, []any, error) {
 	return recentClipsInGenreQuery(genreID).Build()
 }
 
-func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+// BuildRecentUsersWithRoleQuery compiles a pure many-to-many relation-filtered
+// TopN query without opening a database connection.
+func BuildRecentUsersWithRoleQuery(roleID int64) (string, []any, error) {
+	return recentUsersWithRoleQuery(roleID).Build()
+}
+
+func clipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
+		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID)))
+}
+
+func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+	return clipsInGenreQuery(genreID).
 		Select("ID", "Title").
-		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID))).
 		OrderBy(orm.Desc("ID")).
 		Limit(20)
 }
@@ -155,6 +168,13 @@ func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 // ClipGenre row through an explicitly supplied database/sql executor.
 func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
 	return recentClipsInGenreQuery(genreID).All(ctx, executor)
+}
+
+// CountClipsInGenre returns the total number of clips having one matching
+// ClipGenre row. The compiler can count the candidate-key-proven edge rows
+// directly without requiring a caller-authored junction query.
+func CountClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) (int64, error) {
+	return clipsInGenreQuery(genreID).Count(ctx, executor)
 }
 
 // FirstRecentOrder returns the newest order for a user through an explicitly
@@ -413,4 +433,12 @@ func usersInRoleQuery(roleName string) *orm.SelectQuery[User] {
 		Select("ID", "Email").
 		Where(orm.Has("Roles", orm.Equal("Name", roleName))).
 		OrderBy(orm.Asc("ID"))
+}
+
+func recentUsersWithRoleQuery(roleID int64) *orm.SelectQuery[User] {
+	return orm.Query[User]().
+		Select("ID", "Email").
+		Where(orm.Has("Roles", orm.Equal("ID", roleID))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
 }

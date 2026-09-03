@@ -15,6 +15,8 @@ It demonstrates the current struct-first foundation:
   `tidbgo` tag position
 - Explicit physical table names through the zero-size `model.Meta` marker
 - Ordered single-column and composite primary keys through `tidbgo:",pk"`
+- Candidate unique keys independent from the primary key by repeating
+  `tidbgo:",unique=<group>"` on their fields
 - TiDB `AUTO_RANDOM` primary keys through `tidbgo:",pk,auto_random"`
 - Aggregate result fields through `tidbgo:"column,computed"`
 - Value-form soft deletion through `tidbgo:",soft_delete"` without a separate
@@ -24,14 +26,16 @@ It demonstrates the current struct-first foundation:
 - Offline scalar SQL construction with predicates and keyset pagination
 - Executed query-shape and query-to-index diagnostics through RuntimeCapture
   and `tidbgo analyze`, without bind values
-- Offline source projection analysis through `tidbgo lint`
+- Offline source query-pattern, projection, and optional schema-aware root
+  index analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
 - Logical direct and pure many-to-many relation predicates, including TiDB
-  semi-join hints and relation-first TopN for an eligible direct collection,
-  without hydrating relations
+  semi-join hints and relation-first TopN for eligible direct and pure
+  many-to-many collections, plus relation-only Count for eligible unpaginated
+  collection filters, without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
@@ -66,21 +70,35 @@ Scan the example's production Go source without a database connection:
 
 ```sh
 go run ./cmd/tidbgo lint ./examples/starter-app
+go run ./cmd/tidbgo lint ./examples/starter-app --schema ./examples/starter-app/schema.sql
 ```
 
-The report includes recognized query and uncertainty counts even when no
-projection warning is emitted
+The second command also compares statically resolved ordered positive-LIMIT
+root and relation-first association accesses with the example's TiDB schema
+snapshot. Both reports include recognized query, relation compiler, index,
+and uncertainty counts even when no diagnostic is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows. When the
-connected form is captured, `tidbgo analyze --schema` reports an `EXISTS`
-fallback or a missing association index prefix without another application
-wrapper.
+compiler uses the `ClipGenre` candidate key to prove one matching edge per
+clip, then filters and limits `clip_genres` before loading root rows. Its outer
+`LEADING(tidbgo_k0, tidbgo_t0)` hint keeps that limited key set as the root
+lookup's driving input. The edge keeps its surrogate primary key and required
+`Priority` payload. `CountClipsInGenre` starts from the same natural
+`Clip`-rooted relation predicate while the Count compiler reads only
+`clip_genres` when the candidate key proves one edge per Clip.
+`BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
+many-to-many shape: fixing the complete Role primary key lets the compiler
+filter the junction directly and limit `(role_id, user_id)` access before
+loading User rows. Both
+`tidbgo lint --schema` and captured `tidbgo analyze --schema` can report an
+`EXISTS` fallback or a missing association index prefix without another
+application wrapper.
 `FirstRecentOrder`, `FindUserByEmail`,
-`HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
-`Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
+`HasUserWithEmail`, `CountOrdersForUser`, and `CountClipsInGenre` demonstrate
+connected `First`, `Only`, `Exists`, and scalar or relation-only `Count`
+terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
 SELECT and joining each User into that statement.
 `ListUsersWithRoles` demonstrates a pure

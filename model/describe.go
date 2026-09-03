@@ -9,7 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
+
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
 
 // ModelTag is the struct tag used for tidbgo model metadata and field exclusion.
@@ -98,6 +99,8 @@ type descriptorParser struct {
 	columns      map[string]string
 	fieldNames   map[string]int
 	members      map[string]string
+	uniqueKeys   []uniqueKeyDeclaration
+	uniqueByName map[string]int
 	tableName    string
 	metaSeen     bool
 	autoRandom   string
@@ -105,6 +108,11 @@ type descriptorParser struct {
 	declarations []relationDeclaration
 	relations    []Relation
 	issues       []Issue
+}
+
+type uniqueKeyDeclaration struct {
+	name   string
+	fields []int
 }
 
 func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
@@ -119,6 +127,7 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 	byColumn := make(map[string]int, len(parser.fields))
 	byGoName := make(map[string]int, len(parser.fields))
 	primaryKey := make([]int, 0)
+	uniqueKeys := make([]UniqueKey, len(parser.uniqueKeys))
 	softDelete := -1
 	for index, field := range parser.fields {
 		byColumn[field.columnName] = index
@@ -129,6 +138,13 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 		if field.softDelete {
 			softDelete = index
 		}
+	}
+	for index, declaration := range parser.uniqueKeys {
+		fields := make([]Field, len(declaration.fields))
+		for fieldIndex, descriptorIndex := range declaration.fields {
+			fields[fieldIndex] = parser.fields[descriptorIndex]
+		}
+		uniqueKeys[index] = UniqueKey{name: declaration.name, fields: fields}
 	}
 	byRelation := make(map[string]int, len(parser.relations))
 	for index, relation := range parser.relations {
@@ -141,6 +157,7 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 		byColumn:   byColumn,
 		byGoName:   byGoName,
 		primaryKey: primaryKey,
+		uniqueKeys: uniqueKeys,
 		softDelete: softDelete,
 		relations:  parser.relations,
 		byRelation: byRelation,
@@ -155,8 +172,8 @@ func parseModelShape(modelType reflect.Type) *descriptorParser {
 	}
 	parser.parseFields(modelType, modelType.Name(), nil, map[reflect.Type]bool{modelType: true})
 	if parser.tableName == "" {
-		parser.tableName = snakeCase(modelType.Name())
-		if !validSQLIdentifier(parser.tableName) {
+		parser.tableName = modelmeta.SnakeCase(modelType.Name())
+		if !modelmeta.ValidSQLIdentifier(parser.tableName) {
 			parser.add(modelType.Name(), fmt.Sprintf("default table name %q must be a simple SQL identifier of at most 64 bytes", parser.tableName))
 		}
 	}
@@ -213,6 +230,10 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 				p.add(fieldPath, "soft-delete metadata must be declared on a mapped scalar field")
 				continue
 			}
+			if len(options.uniqueGroups) != 0 {
+				p.add(fieldPath, "candidate unique-key metadata must be declared on a mapped scalar field")
+				continue
+			}
 			if stack[embeddedType] {
 				p.add(fieldPath, "embedded struct cycle is not supported")
 				continue
@@ -233,6 +254,10 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 		}
 		if options.computed && options.primaryKey {
 			p.add(fieldPath, "computed fields cannot be primary-key fields")
+			continue
+		}
+		if options.computed && len(options.uniqueGroups) != 0 {
+			p.add(fieldPath, "computed fields cannot be candidate unique-key fields")
 			continue
 		}
 		if options.softDelete {
@@ -272,7 +297,7 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 			}
 			p.autoRandom = fieldPath
 		}
-		if !validSQLIdentifier(column) {
+		if !modelmeta.ValidSQLIdentifier(column) {
 			p.add(fieldPath, fmt.Sprintf("column name %q must be a simple SQL identifier of at most 64 bytes", column))
 			continue
 		}
@@ -289,6 +314,7 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 		if options.softDelete {
 			p.softDelete = fieldPath
 		}
+		descriptorIndex := len(p.fields)
 		p.fields = append(p.fields, Field{
 			goName:       structField.Name,
 			columnName:   column,
@@ -305,12 +331,28 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 			computed:     options.computed,
 			softDelete:   options.softDelete,
 		})
+		p.appendUniqueKeyFields(options.uniqueGroups, descriptorIndex)
+	}
+}
+
+func (p *descriptorParser) appendUniqueKeyFields(groups []string, fieldIndex int) {
+	for _, group := range groups {
+		if p.uniqueByName == nil {
+			p.uniqueByName = make(map[string]int)
+		}
+		index, exists := p.uniqueByName[group]
+		if !exists {
+			index = len(p.uniqueKeys)
+			p.uniqueByName[group] = index
+			p.uniqueKeys = append(p.uniqueKeys, uniqueKeyDeclaration{name: group})
+		}
+		p.uniqueKeys[index].fields = append(p.uniqueKeys[index].fields, fieldIndex)
 	}
 }
 
 func startsWithRelationKind(value string) bool {
 	first, _, _ := strings.Cut(value, ",")
-	_, ok := relationKind(first)
+	_, ok := modelmeta.ParseRelationKind(first)
 	return ok
 }
 
@@ -358,20 +400,7 @@ func (p *descriptorParser) add(field, message string) {
 
 func taggedModelIgnore(field reflect.StructField) (bool, error) {
 	value, present := field.Tag.Lookup(ModelTag)
-	if !present || value == "" {
-		return false, nil
-	}
-	parts := strings.Split(value, ",")
-	for _, option := range parts {
-		if option != "-" {
-			continue
-		}
-		if len(parts) != 1 {
-			return false, errors.New("tidbgo ignore option must not be combined with other options")
-		}
-		return true, nil
-	}
-	return false, nil
+	return modelmeta.ParseIgnore(value, present)
 }
 
 type modelFieldOptions struct {
@@ -379,75 +408,29 @@ type modelFieldOptions struct {
 	autoRandom     bool
 	computed       bool
 	softDelete     bool
+	uniqueGroups   []string
 	explicitColumn bool
 }
 
 func taggedModelField(field reflect.StructField) (string, modelFieldOptions, error) {
 	value, present := field.Tag.Lookup(ModelTag)
-	if !present || value == "" {
-		return snakeCase(field.Name), modelFieldOptions{}, nil
+	parsed, err := modelmeta.ParseField(field.Name, value, present)
+	if err != nil {
+		return "", modelFieldOptions{}, err
 	}
-
-	parts := strings.Split(value, ",")
-	column := parts[0]
-	var options modelFieldOptions
-	if column == "" {
-		column = snakeCase(field.Name)
-	} else {
-		options.explicitColumn = true
-	}
-	for _, option := range parts[1:] {
-		switch option {
-		case "pk":
-			if options.primaryKey {
-				return "", modelFieldOptions{}, errors.New("tidbgo primary-key option must not be repeated")
-			}
-			options.primaryKey = true
-		case "auto_random":
-			if options.autoRandom {
-				return "", modelFieldOptions{}, errors.New("tidbgo AUTO_RANDOM option must not be repeated")
-			}
-			options.autoRandom = true
-		case "computed":
-			if options.computed {
-				return "", modelFieldOptions{}, errors.New("tidbgo computed option must not be repeated")
-			}
-			options.computed = true
-		case "soft_delete":
-			if options.softDelete {
-				return "", modelFieldOptions{}, errors.New("tidbgo soft-delete option must not be repeated")
-			}
-			options.softDelete = true
-		case "":
-			return "", modelFieldOptions{}, errors.New("empty tidbgo tag option is not supported after the column position")
-		default:
-			return "", modelFieldOptions{}, fmt.Errorf("tidbgo tag option %q is not supported after the column position", option)
-		}
-	}
-	return column, options, nil
+	return parsed.Column, modelFieldOptions{
+		primaryKey:     parsed.PrimaryKey,
+		autoRandom:     parsed.AutoRandom,
+		computed:       parsed.Computed,
+		softDelete:     parsed.SoftDelete,
+		uniqueGroups:   parsed.UniqueGroups,
+		explicitColumn: parsed.ExplicitColumn,
+	}, nil
 }
 
 func taggedModelMeta(field reflect.StructField) (string, error) {
 	value, present := field.Tag.Lookup(ModelTag)
-	if !present || value == "" {
-		return "", nil
-	}
-
-	var tableName string
-	for _, option := range strings.Split(value, ",") {
-		key, current, found := strings.Cut(option, "=")
-		if !found || key != "table" {
-			return "", fmt.Errorf("tidbgo tag option %q is not supported on model.Meta", option)
-		}
-		if tableName != "" {
-			return "", errors.New("tidbgo table option must not be repeated")
-		}
-		if !validSQLIdentifier(current) {
-			return "", fmt.Errorf("table name %q must be a simple SQL identifier of at most 64 bytes", current)
-		}
-		tableName = current
-	}
-	return tableName, nil
+	return modelmeta.ParseTable(value, present)
 }
 
 type fieldClassification struct {
@@ -523,37 +506,4 @@ func indirectType(value reflect.Type) reflect.Type {
 		value = value.Elem()
 	}
 	return value
-}
-
-func snakeCase(value string) string {
-	runes := []rune(value)
-	var result strings.Builder
-	for index, current := range runes {
-		if unicode.IsUpper(current) {
-			if index > 0 {
-				previous := runes[index-1]
-				nextIsLower := index+1 < len(runes) && unicode.IsLower(runes[index+1])
-				if unicode.IsLower(previous) || unicode.IsDigit(previous) || unicode.IsUpper(previous) && nextIsLower {
-					result.WriteByte('_')
-				}
-			}
-			result.WriteRune(unicode.ToLower(current))
-			continue
-		}
-		result.WriteRune(current)
-	}
-	return result.String()
-}
-
-func validSQLIdentifier(value string) bool {
-	if value == "" || len(value) > 64 {
-		return false
-	}
-	for index, current := range value {
-		if current >= 'a' && current <= 'z' || current >= 'A' && current <= 'Z' || current == '_' || index > 0 && current >= '0' && current <= '9' {
-			continue
-		}
-		return false
-	}
-	return true
 }

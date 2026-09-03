@@ -16,7 +16,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Offline model validation, model-intent diagnostics, and SQL construction
 - Reasoned suppression and deterministic text or JSON reports for runtime and
   source analysis
-- Offline Go-source projection analysis with explicit coverage statistics
+- Offline Go-source query-pattern and projection analysis with explicit
+  coverage statistics
 - Explicit execution through caller-owned `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
 - Scalar predicates, ordering, offset pagination, and keyset pagination
 - Deterministic direct and many-to-many relation predicates and preloads
@@ -136,6 +137,12 @@ Single-row `Insert` assigns the generated ID; upserts and bulk operations do
 not. Use `computed` for aliased raw-query results that must not participate in
 base-table reads or writes.
 
+Declare a candidate unique key independently from the primary key by repeating
+`tidbgo:",unique=<group>"` on its scalar fields. The logical group name is not
+a physical index name. `model.Descriptor.UniqueKeys()` exposes the declaration,
+and `check.Schema` requires the SQL snapshot to prove it with an unconditional
+primary or unique key before applications rely on the contract.
+
 Use `soft_delete` on one `time.Time` or `*time.Time` deletion field. A value
 field maps zero time to SQL `NULL`; a pointer field uses nil as `NULL`.
 Ordinary nullable columns continue to use pointers or `sql.Scanner` types.
@@ -173,7 +180,7 @@ native Go and SQL type families, nullability, writable generated columns, and
 physical Relation targets. Collection checks validate many-to-many junction
 keys and required columns, target identity, and the index prefixes used by
 deterministic `has_many` and `many_to_many` lookups through stable `CMP001`
-through `CMP014` codes. A model with relations therefore requires those target
+through `CMP015` codes. A model with relations therefore requires those target
 and junction tables in the supplied snapshot.
 
 `schema.Parse` accepts ordinary TiDB `CREATE TABLE` SQL and `SHOW CREATE TABLE`
@@ -203,8 +210,13 @@ identifiers come only from validated model metadata.
 
 Runtime capture applies `QRY002` through `QRY005` automatically to executed
 typed query shapes. Passing an offline schema snapshot to `tidbgo analyze`
-adds `QRY006` and `QRY007` index checks. Unexecuted builders currently receive
-only `Build` validation; source-wide query-pattern analysis remains planned.
+adds `QRY006` and `QRY007` index checks. `tidbgo lint` applies `QRY002` through
+`QRY005` to statically resolved source query terminals, including `Build`,
+without compiling or executing the application. For relation-filtered TopN it
+uses the same normalized compiler decision as runtime query compilation. Its
+optional `--schema` applies the same `QRY006` and `QRY007` index rules to
+high-confidence root and relation-first ordered-limit shapes. Dynamic and
+separately mutated builder flows remain explicitly uncertain.
 Index presence does not predict the optimizer's selected plan, so verify it
 with `Explain` or `ExplainAnalyze`.
 
@@ -237,11 +249,23 @@ admins, err := orm.Query[User]().
 `Has` is a logical relation-existence predicate. The compiler normally emits
 `EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
 predicates in a positive conjunctive context. For a narrow, metadata-proven
-`has_many` + root-primary-key order + positive-limit shape, it instead applies
-the target filter and Limit before loading root rows. Runtime analysis emits
-`QRY005` when an executed ordered, limited collection filter falls back to
-`EXISTS`, while schema-aware runtime analysis emits `QRY007` for a missing
-association index prefix. Pass target
+`has_many` or pure `many_to_many` + root-primary-key order + positive-limit
+shape, it instead applies the relation filter and Limit before loading root
+rows. The one-row proof can use either the target primary key or an explicitly
+declared candidate unique key whose complete field set is fixed by the relation
+and conjunctive `Equal` predicates. The generated outer query uses
+`LEADING(tidbgo_k0, tidbgo_t0)` so the limited derived keys drive root-row
+lookups; it does not force a join algorithm. Runtime analysis emits
+`QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
+This applies both to executed runtime shapes and statically resolved source
+terminals. Schema-aware runtime and source analysis emit `QRY007` for a
+missing association index prefix. An unpaginated `Count` with one direct
+positive collection `Has`, no root predicate or active root soft-delete scope,
+and the same one-row proof counts the association table directly. Pure
+many-to-many Count uses the junction directly only when every target predicate
+maps to its target-key columns. Other Count shapes retain the root `EXISTS`.
+The direct Count rewrite relies on the same documented relation-integrity
+contract as relation-first TopN. Pass target
 predicates to require a matching related row, or omit them for existence only.
 Relation and target field names are exported Go field names. `Build` validates
 and compiles them entirely offline. See the [scalar query
@@ -552,21 +576,31 @@ guide](docs/observability.md#structured-runtime-capture).
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-Analyze production Go source for default projections that can be proven wider
-than their local result use:
+Analyze production Go source for resolved query patterns and default
+projections that can be proven wider than their local result use:
 
 ```sh
 tidbgo lint
 tidbgo lint ./internal/repository --json
+tidbgo lint ./internal/repository --schema schema.sql
 ```
 
 The optional path defaults to the current directory. The command does not
 execute application code, load packages, connect to a database, or modify
-source. `SRC001` is emitted only when every use of an `All`, `First`, or `Only`
-result is understood within the same function. Returned, passed, aliased,
-preloaded, or otherwise uncertain flows are counted as `uncertain` and are not
-guessed. Every report includes coverage statistics. See the [analysis
-guide](docs/checks.md#go-source-analysis)
+source. `QRY002` through `QRY005` cover resolved `Offset`, `Limit` plus
+ordering, leading-wildcard predicates, and relation-first TopN compiler
+fallbacks. `SRC001` is emitted only when every
+use of an `All`, `First`, or `Only` result is understood within the same
+function. With `--schema`, resolved root queries using a positive explicit
+`Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
+checked for a matching physical index prefix. Eligible direct `has_many` and
+pure `many_to_many` relation-first TopN queries check the association access in
+the same way.
+Dynamic relation names, unresolved relation metadata, range filters, mixed
+ordering, and separately mutated builders remain uncertain. Projection
+analysis also leaves returned or passed results, aliases, and preloads
+uncertain. Every report includes general, relation compiler, and index
+coverage statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
 
 Print version information with:
 
@@ -601,15 +635,19 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
   yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,
-  and eligible ordered direct `has_many` pages use relation-first TopN SQL.
+  and eligible ordered `has_many` and pure `many_to_many` pages use
+  relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
-- `QRY002` through `QRY007` currently analyze executed typed queries captured
-  by RuntimeCapture. Source lint does not yet apply them to unexecuted builders.
+- Source lint applies `QRY002` through `QRY005` only when the relevant builder
+  flow and relation metadata are statically resolved. `--schema` adds
+  `QRY006` and `QRY007` for high-confidence root and relation-first
+  ordered-limit shapes. Dynamic relations remain explicit in uncertainty
+  counters instead of being guessed.
 - No database connection constructor, bundled protocol driver, migration
   application API, or live-schema introspection API is available yet.
 

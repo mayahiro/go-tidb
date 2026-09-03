@@ -1,10 +1,10 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
-	"strings"
+
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
 
 type relationPair struct {
@@ -74,97 +74,44 @@ func (p *descriptorParser) parseRelationField(field reflect.StructField, path st
 }
 
 func parseRelationTag(value string, collection bool) (relationDeclaration, error) {
-	parts := strings.Split(value, ",")
-	kind, ok := relationKind(parts[0])
-	if !ok {
-		return relationDeclaration{}, errors.New("tidbgo relation kind must be the first tag value")
+	parsed, err := modelmeta.ParseRelation(value, collection)
+	if err != nil {
+		return relationDeclaration{}, err
 	}
-	declaration := relationDeclaration{kind: kind}
-	for _, option := range parts[1:] {
-		if _, relationKindOption := relationKind(option); relationKindOption {
-			return relationDeclaration{}, errors.New("tidbgo relation kind must appear once as the first tag value")
-		}
-		key, current, found := strings.Cut(option, "=")
-		if !found || current == "" {
-			return relationDeclaration{}, fmt.Errorf("tidbgo relation option %q is not supported", option)
-		}
-		switch key {
-		case "join":
-			pair, err := parseRelationPair(current)
-			if err != nil {
-				return relationDeclaration{}, fmt.Errorf("invalid join option: %w", err)
-			}
-			declaration.joins = append(declaration.joins, pair)
-		case "through":
-			if declaration.through != "" {
-				return relationDeclaration{}, errors.New("through option must not be repeated")
-			}
-			if !validSQLIdentifier(current) {
-				return relationDeclaration{}, fmt.Errorf("junction table name %q must be a simple SQL identifier of at most 64 bytes", current)
-			}
-			declaration.through = current
-		case "source":
-			pair, err := parseRelationPair(current)
-			if err != nil {
-				return relationDeclaration{}, fmt.Errorf("invalid source option: %w", err)
-			}
-			if !validSQLIdentifier(pair.right) {
-				return relationDeclaration{}, fmt.Errorf("junction source column %q must be a simple SQL identifier of at most 64 bytes", pair.right)
-			}
-			declaration.sourcePairs = append(declaration.sourcePairs, pair)
-		case "target":
-			pair, err := parseRelationPair(current)
-			if err != nil {
-				return relationDeclaration{}, fmt.Errorf("invalid target option: %w", err)
-			}
-			if !validSQLIdentifier(pair.left) {
-				return relationDeclaration{}, fmt.Errorf("junction target column %q must be a simple SQL identifier of at most 64 bytes", pair.left)
-			}
-			declaration.targetPairs = append(declaration.targetPairs, pair)
-		default:
-			return relationDeclaration{}, fmt.Errorf("tidbgo relation option %q is not supported", option)
-		}
+	kind, _ := relationKind(string(parsed.Kind))
+	declaration := relationDeclaration{
+		kind:    kind,
+		through: parsed.Through,
 	}
-
-	if collection != (declaration.kind == RelationHasMany || declaration.kind == RelationManyToMany) {
-		return relationDeclaration{}, fmt.Errorf("relation kind %q does not match the relation field type", declaration.kind)
+	for _, pair := range parsed.Joins {
+		declaration.joins = append(declaration.joins, relationPair{left: pair.Left, right: pair.Right})
 	}
-	if declaration.kind == RelationManyToMany {
-		if len(declaration.joins) != 0 {
-			return relationDeclaration{}, errors.New("many_to_many does not support join options")
-		}
-		if declaration.through == "" || len(declaration.sourcePairs) == 0 || len(declaration.targetPairs) == 0 {
-			return relationDeclaration{}, errors.New("many_to_many requires through, source, and target options")
-		}
-		return declaration, nil
+	for _, pair := range parsed.SourcePairs {
+		declaration.sourcePairs = append(declaration.sourcePairs, relationPair{left: pair.Left, right: pair.Right})
 	}
-	if declaration.through != "" || len(declaration.sourcePairs) != 0 || len(declaration.targetPairs) != 0 {
-		return relationDeclaration{}, errors.New("direct relations support join options only")
+	for _, pair := range parsed.TargetPairs {
+		declaration.targetPairs = append(declaration.targetPairs, relationPair{left: pair.Left, right: pair.Right})
 	}
 	return declaration, nil
 }
 
 func relationKind(value string) (RelationKind, bool) {
-	switch value {
-	case "belongs_to":
+	kind, ok := modelmeta.ParseRelationKind(value)
+	if !ok {
+		return "", false
+	}
+	switch kind {
+	case modelmeta.RelationBelongsTo:
 		return RelationBelongsTo, true
-	case "has_one":
+	case modelmeta.RelationHasOne:
 		return RelationHasOne, true
-	case "has_many":
+	case modelmeta.RelationHasMany:
 		return RelationHasMany, true
-	case "many_to_many":
+	case modelmeta.RelationManyToMany:
 		return RelationManyToMany, true
 	default:
 		return "", false
 	}
-}
-
-func parseRelationPair(value string) (relationPair, error) {
-	left, right, found := strings.Cut(value, ":")
-	if !found || left == "" || right == "" || strings.Contains(right, ":") {
-		return relationPair{}, fmt.Errorf("%q must contain exactly one non-empty ':' pair", value)
-	}
-	return relationPair{left: left, right: right}, nil
 }
 
 func (p *descriptorParser) resolveRelations(sourceType reflect.Type) {

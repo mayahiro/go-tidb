@@ -48,12 +48,28 @@ func compilePlanAccessResolver(descriptor *model.Descriptor, selection *selectQu
 	}
 	if relationTopN.optimized {
 		metadata := relationTopN.plan.metadata
-		resolver.add(planAccessBinding{
-			alias:         relationTopNAssociationAlias,
-			physicalTable: metadata.target.TableName(),
-			model:         metadata.target.Name(),
-			relationPath:  metadata.relationName,
-		})
+		if metadata.junction == nil {
+			resolver.add(planAccessBinding{
+				alias:         relationTopNAssociationAlias,
+				physicalTable: metadata.target.TableName(),
+				model:         metadata.target.Name(),
+				relationPath:  metadata.relationName,
+			})
+		} else {
+			resolver.add(planAccessBinding{
+				alias:         relationTopNAssociationAlias,
+				physicalTable: metadata.junction.tableName,
+				relationPath:  metadata.relationName,
+			})
+			if !relationTopN.plan.junctionOnly {
+				resolver.add(planAccessBinding{
+					alias:         relationTopNManyTargetAlias,
+					physicalTable: metadata.target.TableName(),
+					model:         metadata.target.Name(),
+					relationPath:  metadata.relationName,
+				})
+			}
+		}
 		nextAlias := 0
 		if err := resolver.appendRelationPredicates(metadata.target, relationTopN.plan.predicate.children, metadata.relationName, &nextAlias); err != nil {
 			return err

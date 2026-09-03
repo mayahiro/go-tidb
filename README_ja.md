@@ -14,7 +14,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
 - runtimeおよびsource解析向けのreason付きdiagnostic suppressionと決定的なtextまたはJSON report
-- 明示的なcoverage statisticsを持つoffline Go source projection解析
+- 明示的なcoverage statisticsを持つoffline Go source query-patternとprojection解析
 - caller-owned `*sql.DB`、`*sql.Conn`、`*sql.Tx` による明示的な実行
 - scalar predicate、order、offset pagination、keyset pagination
 - 決定的なdirectとmany-to-many Relation predicateおよびpreload
@@ -119,6 +119,12 @@ column名を省略したfieldには決定的なsnake_caseを使用します
 
 primary keyは推定columnなら `tidbgo:",pk"`、明示columnなら `tidbgo:"column_name,pk"` で指定し、複数指定した場合は宣言順のcomposite keyになります
 
+primary keyとは独立したcandidate unique keyは、対象scalar fieldへ `tidbgo:",unique=<group>"` を同じ論理group名で繰り返して宣言します
+
+group名は物理index名ではありません
+
+`model.Descriptor.UniqueKeys()` で宣言を参照でき、applicationがこのcontractへ依存する前に `check.Schema` がunconditionalな物理primary keyまたはunique keyとの一致を要求します
+
 `db` を含む `tidbgo` 以外のstruct tag namespaceは無視し、column名の変更やfieldの除外には使用しません
 
 default table名はGo type名のsnake_caseです
@@ -172,7 +178,7 @@ databaseだけに存在する必須columnはmodel insertが失敗する可能性
 
 ordered primary key、`AUTO_RANDOM`、native GoとSQLのtype family、nullability、writableなgenerated column、物理Relation targetもcheckします
 
-collection checkはmany-to-many junction keyと必須column、target identity、決定的な `has_many` と `many_to_many` lookupが使うindex prefixをstableな `CMP001` から `CMP014` で検査します
+collection checkはmany-to-many junction keyと必須column、target identity、決定的な `has_many` と `many_to_many` lookupが使うindex prefixをstableな `CMP001` から `CMP015` で検査します
 
 Relationを持つmodelでは、渡すsnapshotにtarget tableとjunction tableも必要です
 
@@ -205,7 +211,13 @@ runtime captureは実行されたtyped query shapeへ `QRY002` から `QRY005` �
 
 offline schema snapshotを `tidbgo analyze` へ渡すと `QRY006` と `QRY007` のindex checkを追加します
 
-未実行builderには現在 `Build` validationだけを適用し、source全体のquery-pattern解析は今後の課題です
+`tidbgo lint` はapplicationをcompileまたは実行せず、`Build` を含むsource上の解決済みquery terminalへ `QRY002` から `QRY005` を適用します
+
+Relation filter付きTopNにはruntime query compilerと共通の正規化済みdecisionを使います
+
+optionalな `--schema` は高確度なrootとrelation-first ordered-limit shapeへ同じ `QRY006` と `QRY007` のindex ruleを適用します
+
+dynamicな値と別statementで変更されたbuilder flowは明示的にuncertainとします
 
 indexの存在はoptimizerが選ぶplanを予測しないため、`Explain` または `ExplainAnalyze` で確認します
 
@@ -243,11 +255,21 @@ admins, err := orm.Query[User]().
 
 通常は `EXISTS` を生成し、positive conjunctive contextのfiltered collection predicateにはTiDBの `SEMI_JOIN_REWRITE()` hintを追加します
 
-metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
+metadataから証明できる限定的な `has_many` またはpure `many_to_many`、root primary key order、positive Limitのshapeでは、Relation filterとLimitをroot rowのloadより先へ適用します
 
-実行されたorderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合はruntime解析が `QRY005` を出力します
+1 rowの証明にはtarget primary key、またはRelationとconjunctiveな `Equal` predicateがfield全体を固定する明示的なcandidate unique keyを使用できます
 
-schema-aware runtime解析はassociation index prefixの不足を `QRY007` で出力します
+生成するouter queryは `LEADING(tidbgo_k0, tidbgo_t0)` でLimit済みderived keyをroot row lookupのdriving sideとし、join algorithm自体は固定しません
+
+orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
+
+schema-awareなruntime解析とsource解析はassociation index prefixの不足を `QRY007` で出力します
+
+unpaginatedな `Count` でdirectかつpositiveなcollection `Has` が1件、root predicateとactiveなroot soft-delete scopeがなく、同じ1 row性を証明できる場合はassociation tableを直接数えます
+
+pure many-to-many Countは全target predicateをjunctionのtarget key columnへ移せる場合だけjunctionを直接数え、それ以外のCount shapeはroot `EXISTS` を維持します
+
+このCount変換はrelation-first TopNと同じRelation data integrity contractを前提とします
 
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
@@ -579,20 +601,29 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```
 
-default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
+解決済みquery patternと、default projectionが同じfunction内のresult利用より広いことを証明できるproduction Go sourceを解析できます
 
 ```sh
 tidbgo lint
 tidbgo lint ./internal/repository --json
+tidbgo lint ./internal/repository --schema schema.sql
 ```
 
 pathを省略するとcurrent directoryを使用します
 
 application codeの実行、package load、DB接続、source変更は行いません
 
+`QRY002` から `QRY005` は解決できた `Offset`、`Limit` とorder、leading wildcard predicate、relation-first TopN compiler fallbackを対象にします
+
 `All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
 
-return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず `uncertain` として数え、全reportへcoverage statisticsを含めます
+`--schema` を指定した場合、明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterだけを使う解決済みroot queryを物理index prefixと照合します
+
+条件を満たすdirect `has_many` とpure `many_to_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
+
+dynamicなRelation名、未解決のRelation metadata、range filter、mixed order、別statementで変更されたbuilderはuncertainとします
+
+projection解析ではreturn、別functionへの引き渡し、alias、preloadをuncertainとし、全reportへgeneral、Relation compiler、indexのcoverage statisticsを含めます
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
@@ -623,10 +654,11 @@ command helpは `tidbgo --help` で表示できます
 
 - scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
 - directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
-- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
+- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` とpure `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
-- `QRY002` から `QRY007` は現在RuntimeCaptureで取得した実行済みtyped queryだけを解析し、source lintは未実行builderへまだ適用しない
+- source lintは関連するbuilder flowとRelation metadataを静的に解決できる場合だけ `QRY002` から `QRY005` を適用し、`--schema` を指定した高確度なrootとrelation-first ordered-limit shapeへ `QRY006` と `QRY007` を適用する
+- dynamicなRelationは推測せずuncertainty counterへ反映する
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License

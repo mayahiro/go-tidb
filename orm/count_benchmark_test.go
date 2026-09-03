@@ -8,6 +8,7 @@ import (
 )
 
 var countQueryBenchmarkSink int64
+var compiledCountBenchmarkSink compiledCount
 
 func BenchmarkSelectQueryCountDirect(b *testing.B) {
 	benchmarkSelectQueryCount(b, false)
@@ -15,6 +16,19 @@ func BenchmarkSelectQueryCountDirect(b *testing.B) {
 
 func BenchmarkSelectQueryCountPaginated(b *testing.B) {
 	benchmarkSelectQueryCount(b, true)
+}
+
+func BenchmarkSelectQueryCompileRelationCount(b *testing.B) {
+	query := Query[relationTopNVideo]().
+		Where(Has("VideoGenres", Equal("GenreID", int64(7))))
+	b.ReportAllocs()
+	for b.Loop() {
+		compiled, err := query.compileCount()
+		if err != nil {
+			b.Fatal(err)
+		}
+		compiledCountBenchmarkSink = compiled
+	}
 }
 
 func benchmarkSelectQueryCount(b *testing.B, paginated bool) {

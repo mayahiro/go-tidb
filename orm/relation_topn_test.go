@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/queryshape"
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 	"github.com/mayahiro/go-tidb/model"
 )
 
@@ -59,11 +60,174 @@ func TestSelectQueryBuildsRelationFirstTopN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title`, `tidbgo_t1`.`id`, `tidbgo_t1`.`name` FROM (SELECT `tidbgo_a0`.`video_id` FROM `relation_topn_video_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`video_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `relation_topn_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) LEFT JOIN `relation_topn_makers` AS `tidbgo_t1` ON (`tidbgo_t0`.`maker_id` = `tidbgo_t1`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`title`, `tidbgo_t1`.`id`, `tidbgo_t1`.`name` FROM (SELECT `tidbgo_a0`.`video_id` FROM `relation_topn_video_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`video_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `relation_topn_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) LEFT JOIN `relation_topn_makers` AS `tidbgo_t1` ON (`tidbgo_t0`.`maker_id` = `tidbgo_t1`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
 	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+	descriptor, err := model.Describe[relationTopNVideoGenre]()
+	if err != nil {
+		t.Fatalf("Describe[relationTopNVideoGenre]() error = %v", err)
+	}
+	if got, want := relationFieldGoNames(descriptor.PrimaryKeyFields()), []string{"ID"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("target primary key = %#v, want %#v", got, want)
+	}
+	if keys := descriptor.UniqueKeys(); len(keys) != 1 || keys[0].Name() != "video_genre" ||
+		!reflect.DeepEqual(relationFieldGoNames(keys[0].Fields()), []string{"VideoID", "GenreID"}) {
+		t.Fatalf("target unique keys = %#v", keys)
+	}
+}
+
+func TestRelationFirstTopNRequiresEveryCandidateUniqueKeyField(t *testing.T) {
+	t.Parallel()
+
+	query := Query[relationTopNVideo]().
+		Where(Has("VideoGenres")).
+		OrderBy(Desc("ID")).
+		Limit(20)
+	compiler := relationTopNShapeForTest(query)(t).Compiler
+	if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || compiler.Reason != relationtopn.ReasonTargetUniqueness {
+		t.Fatalf("compiler decision = %#v", compiler)
+	}
+	sqlText, _, err := query.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(sqlText, "WHERE EXISTS") || strings.Contains(sqlText, "FROM (SELECT") {
+		t.Fatalf("SQL = %q, want EXISTS fallback", sqlText)
+	}
+}
+
+func TestSelectQueryBuildsManyToManyRelationFirstTopN(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := relationTopNManyToManyBenchmarkQuery().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`email` FROM (SELECT `tidbgo_a0`.`user_id` FROM `preload_user_roles` AS `tidbgo_a0` WHERE `tidbgo_a0`.`role_id` = ? ORDER BY `tidbgo_a0`.`user_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `preload_users` AS `tidbgo_t0` ON (`tidbgo_k0`.`user_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{uint64(7), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestManyToManyRelationFirstTopNRequiresCompleteTargetPrimaryKeyEquality(t *testing.T) {
+	t.Parallel()
+
+	optimized := Query[preloadMember]().
+		Where(Has("Groups", And(Equal("TenantID", uint64(7)), Equal("ID", uint64(9))))).
+		OrderBy(Desc("TenantID"), Desc("ID")).
+		Limit(20)
+	if rewrite := relationTopNShapeForTest(optimized)(t).Compiler.Rewrite; rewrite != queryshape.CompilerRewriteRelationTopN {
+		t.Fatalf("complete target key rewrite = %q, want relation TopN", rewrite)
+	}
+	sqlText, arguments, err := optimized.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, fragment := range []string{
+		"FROM `preload_member_groups` AS `tidbgo_a0`",
+		"WHERE (`tidbgo_a0`.`group_tenant_id` = ? AND `tidbgo_a0`.`group_id` = ?)",
+		"ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`member_id` DESC LIMIT ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("SQL = %q, want fragment %q", sqlText, fragment)
+		}
+	}
+	if got, want := arguments, []any{uint64(7), uint64(9), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+
+	fallback := Query[preloadMember]().
+		Where(Has("Groups", Equal("ID", uint64(9)))).
+		OrderBy(Desc("TenantID"), Desc("ID")).
+		Limit(20)
+	compiler := relationTopNShapeForTest(fallback)(t).Compiler
+	if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || !strings.Contains(compiler.Reason, "candidate unique key") {
+		t.Fatalf("partial target key compiler decision = %#v", compiler)
+	}
+}
+
+func TestManyToManyRelationFirstTopNPreservesTargetSoftDeleteScope(t *testing.T) {
+	t.Parallel()
+
+	sqlText, _, err := Query[softDeleteChannel]().
+		WithDeleted().
+		Where(Has("Tags", Equal("ID", int64(7)))).
+		OrderBy(Desc("ID")).
+		Limit(20).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, fragment := range []string{
+		"FROM `soft_delete_channel_tags` AS `tidbgo_a0` JOIN `soft_delete_tags` AS `tidbgo_m0`",
+		"WHERE `tidbgo_m0`.`deleted_at` IS NULL AND `tidbgo_m0`.`id` = ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("SQL = %q, want fragment %q", sqlText, fragment)
+		}
+	}
+	if strings.Contains(sqlText, "`tidbgo_t0`.`deleted_at` IS NULL") {
+		t.Fatalf("SQL = %q, want no root soft-delete scope", sqlText)
+	}
+}
+
+func TestManyToManyRelationFirstTopNPreservesNestedTargetPredicate(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := Query[preloadGraph]().
+		Where(Has(
+			"Tags",
+			Equal("ID", uint64(7)),
+			Has("Node", Equal("Value", "active")),
+		)).
+		OrderBy(Desc("ID")).
+		Limit(20).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, fragment := range []string{
+		"FROM `preload_graph_tags` AS `tidbgo_a0` JOIN `preload_graph_tag_targets` AS `tidbgo_m0`",
+		"WHERE `tidbgo_m0`.`id` = ? AND EXISTS (SELECT 1 FROM `preload_graph_nodes` AS `tidbgo_r1`",
+		"(`tidbgo_r1`.`id` = `tidbgo_m0`.`node_id`) AND `tidbgo_r1`.`value` = ?",
+		"ORDER BY `tidbgo_a0`.`graph_id` DESC LIMIT ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("SQL = %q, want fragment %q", sqlText, fragment)
+		}
+	}
+	if got, want := arguments, []any{uint64(7), "active", int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestManyToManyRelationFirstTopNJoinsTargetForAdditionalPredicate(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := Query[preloadUser]().
+		Where(Has("Roles", Equal("ID", uint64(7)), Equal("Name", "admin"))).
+		OrderBy(Desc("ID")).
+		Limit(20).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, fragment := range []string{
+		"FROM `preload_user_roles` AS `tidbgo_a0` JOIN `preload_roles` AS `tidbgo_m0`",
+		"WHERE `tidbgo_m0`.`id` = ? AND `tidbgo_m0`.`name` = ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("SQL = %q, want fragment %q", sqlText, fragment)
+		}
+	}
+	if got, want := arguments, []any{uint64(7), "admin", int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
 }
@@ -80,7 +244,7 @@ func TestRelationFirstTopNPreservesOffsetAndCompositeKeyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`tenant_id`, `tidbgo_t0`.`id` FROM (SELECT `tidbgo_a0`.`tenant_id`, `tidbgo_a0`.`video_id` FROM `relation_topn_tenant_video_links` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`video_id` DESC LIMIT ? OFFSET ?) AS `tidbgo_k0` JOIN `relation_topn_tenant_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`tenant_id` = `tidbgo_t0`.`tenant_id` AND `tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`tenant_id` DESC, `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`tenant_id`, `tidbgo_t0`.`id` FROM (SELECT `tidbgo_a0`.`tenant_id`, `tidbgo_a0`.`video_id` FROM `relation_topn_tenant_video_links` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`video_id` DESC LIMIT ? OFFSET ?) AS `tidbgo_k0` JOIN `relation_topn_tenant_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`tenant_id` = `tidbgo_t0`.`tenant_id` AND `tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`tenant_id` DESC, `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -182,7 +346,7 @@ func TestRelationTopNQueryShapeRecordsFallbackReasons(t *testing.T) {
 				Where(Has("Links", Equal("GenreID", "private-genre"))).
 				OrderBy(Desc("ID")).
 				Limit(20)),
-			reason: "does not prove at most one matching row",
+			reason: "candidate unique key proves at most one matching row",
 		},
 		{
 			name: "different order",
@@ -245,7 +409,7 @@ func TestRelationTopNQueryShapeRecordsFallbackReasons(t *testing.T) {
 				Where(Has("Roles", Equal("Name", "private-role"))).
 				OrderBy(Desc("ID")).
 				Limit(20)),
-			reason: "many-to-many junction",
+			reason: "candidate unique key",
 		},
 	}
 

@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-02
+- Last updated: 2026-09-03
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -116,7 +116,8 @@ The currently implemented surface provides:
 - Cached offline scalar metadata for named Go structs and pointer forms
 - Positional `tidbgo` scalar tags, `tidbgo:"-"` ignored fields, snake_case
   defaults, and embedded structs
-- Deterministic table names, explicit table overrides, and ordered primary keys
+- Deterministic table names, explicit table overrides, ordered primary keys,
+  and primary-key-independent candidate unique-key groups
 - TiDB `AUTO_RANDOM` integer primary keys and raw-result-only computed fields
 - Direct and many-to-many relation metadata with deterministic key mappings
 - Ordinary pointer and slice relation fields without lazy loading
@@ -134,7 +135,10 @@ The currently implemented surface provides:
 - Logical direct and pure `ManyToMany` relation predicates compiled offline as
   `EXISTS`, with TiDB semi-join hints for filtered positive collections and a
   metadata-proven relation-first TopN rewrite for eligible direct `HasMany`
-  pages, without implicit preloading
+  and pure `ManyToMany` pages, using a complete target primary or declared
+  candidate unique key and an outer derived-key-first `LEADING` hint without
+  implicit preloading or a forced join algorithm, plus relation-only Count for
+  eligible unpaginated collection filters under the same integrity contract
 - TiDB-default NULL ordering and primary-key-backed deterministic keyset
   validation
 - Typed slice `IN` and `NOT IN` predicates
@@ -165,10 +169,10 @@ The currently implemented surface provides:
 - Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
   snapshots, including SHOW CREATE TABLE executable comments
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
-  columns, type families, nullability, primary keys, `AUTO_RANDOM`, generated
-  columns, required database-only columns, Relation target identity,
-  many-to-many junction pair uniqueness and insert shape, and deterministic
-  collection-relation index prefixes
+  columns, type families, nullability, primary and candidate unique keys,
+  `AUTO_RANDOM`, generated columns, required database-only columns, Relation
+  target identity, many-to-many junction pair uniqueness and insert shape, and
+  deterministic collection-relation index prefixes
 - Shared diagnostic data types and offline model and schema checks
 - The `tidbgo version` command, offline `tidbgo analyze` runtime-capture and
   optional SQL-snapshot index command, deterministic versioned
@@ -218,7 +222,7 @@ The implemented diagnostic representation has a code, a severity of `info`,
 `warning`, or `error`, a human-readable explanation, evidence, a suggestion,
 an optional source location, and an optional reference. Offline model checks
 use `MOD001` through `MOD007`, offline physical schema compatibility checks use
-`CMP001` through `CMP014`, and executed typed-query analysis uses `QRY002`
+`CMP001` through `CMP015`, and executed typed-query analysis uses `QRY002`
 through `QRY007` without bind values.
 
 The implemented offline model and schema checks cover executable model

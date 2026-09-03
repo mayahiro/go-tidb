@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/mayahiro/go-tidb/check"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 const (
@@ -38,15 +39,53 @@ type Statistics struct {
 	Files               int `json:"files"`
 	ModelTypes          int `json:"model_types"`
 	ResultQueries       int `json:"result_queries"`
+	QueryPatterns       int `json:"query_patterns"`
 	ExplicitProjections int `json:"explicit_projections"`
 	Analyzed            int `json:"analyzed"`
 	Uncertain           int `json:"uncertain"`
+	AnalyzedPatterns    int `json:"analyzed_patterns"`
+	UncertainPatterns   int `json:"uncertain_patterns"`
+	// RelationTopNPatterns counts ordered positive-limit query patterns that
+	// contain a root Has predicate.
+	RelationTopNPatterns int `json:"relation_topn_patterns"`
+	// AnalyzedRelationTopNPatterns counts patterns with a deterministic
+	// relation-first compiler decision.
+	AnalyzedRelationTopNPatterns int `json:"analyzed_relation_topn_patterns"`
+	// UncertainRelationTopNPatterns counts patterns whose compiler decision
+	// cannot be derived without guessing.
+	UncertainRelationTopNPatterns int `json:"uncertain_relation_topn_patterns"`
+	// IndexPatterns counts ordered positive-limit candidates only when
+	// WithSchema enables schema-aware analysis.
+	IndexPatterns int `json:"index_patterns"`
+	// AnalyzedIndexPatterns counts candidates converted to a neutral index
+	// access and compared with the supplied catalog.
+	AnalyzedIndexPatterns int `json:"analyzed_index_patterns"`
+	// UncertainIndexPatterns counts candidates that were not safe to convert
+	// to a neutral index access.
+	UncertainIndexPatterns int `json:"uncertain_index_patterns"`
 }
 
 // Analysis contains deterministic source statistics and diagnostics.
 type Analysis struct {
 	Statistics  Statistics         `json:"statistics"`
 	Diagnostics []check.Diagnostic `json:"diagnostics"`
+}
+
+// AnalysisOption configures offline source analysis.
+type AnalysisOption func(*analysisConfiguration)
+
+type analysisConfiguration struct {
+	catalog       *physicalschema.Catalog
+	schemaEnabled bool
+}
+
+// WithSchema enables physical index-prefix diagnostics using a catalog parsed
+// from an offline SQL schema snapshot.
+func WithSchema(catalog *physicalschema.Catalog) AnalysisOption {
+	return func(configuration *analysisConfiguration) {
+		configuration.catalog = catalog
+		configuration.schemaEnabled = true
+	}
 }
 
 type sourceInput struct {
@@ -71,12 +110,12 @@ type sourceFile struct {
 // AnalyzePath recursively analyzes one directory or analyzes one Go source
 // file. Directory analysis excludes tests, generated files, vendor, testdata,
 // hidden directories, and files outside the current build context.
-func AnalyzePath(path string) (Analysis, error) {
+func AnalyzePath(path string, options ...AnalysisOption) (Analysis, error) {
 	inputs, err := collectSourceInputs(path)
 	if err != nil {
 		return Analysis{}, err
 	}
-	return analyzeInputs(inputs)
+	return analyzeInputs(inputs, options...)
 }
 
 func collectSourceInputs(path string) ([]sourceInput, error) {
@@ -152,7 +191,13 @@ func excludedSourceDirectory(name string) bool {
 	return name == "vendor" || name == "testdata" || strings.HasPrefix(name, ".")
 }
 
-func analyzeInputs(inputs []sourceInput) (Analysis, error) {
+func analyzeInputs(inputs []sourceInput, options ...AnalysisOption) (Analysis, error) {
+	configuration := analysisConfiguration{}
+	for _, option := range options {
+		if option != nil {
+			option(&configuration)
+		}
+	}
 	fileSet := token.NewFileSet()
 	files := make([]*sourceFile, 0, len(inputs))
 	moduleCache := make(map[string]moduleInfo)
@@ -186,7 +231,7 @@ func analyzeInputs(inputs []sourceInput) (Analysis, error) {
 		return Analysis{}, ErrNoSourceFiles
 	}
 
-	analyzer := newSourceAnalyzer(fileSet, files)
+	analyzer := newSourceAnalyzer(fileSet, files, configuration)
 	return analyzer.analyze(), nil
 }
 
@@ -283,12 +328,21 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d explicit_projections=%d analyzed=%d uncertain=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
+		statistics.QueryPatterns,
 		statistics.ExplicitProjections,
 		statistics.Analyzed,
 		statistics.Uncertain,
+		statistics.AnalyzedPatterns,
+		statistics.UncertainPatterns,
+		statistics.RelationTopNPatterns,
+		statistics.AnalyzedRelationTopNPatterns,
+		statistics.UncertainRelationTopNPatterns,
+		statistics.IndexPatterns,
+		statistics.AnalyzedIndexPatterns,
+		statistics.UncertainIndexPatterns,
 	)
 }

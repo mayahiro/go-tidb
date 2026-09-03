@@ -46,13 +46,13 @@ func Diagnostics(shape queryshape.Query) []check.Diagnostic {
 
 	diagnostics := make([]check.Diagnostic, 0, diagnosticCount)
 	if returnsRows && shape.Offset.Set && shape.Offset.Positive {
-		diagnostics = append(diagnostics, offsetPaginationDiagnostic(shape.Model, shape.Offset.Value))
+		diagnostics = append(diagnostics, OffsetPaginationDiagnostic(shape.Model, shape.Offset.Value))
 	}
 	if returnsRows && shape.Limit.Set && shape.Limit.Positive && len(shape.Order) == 0 {
-		diagnostics = append(diagnostics, unorderedPaginationDiagnostic(shape.Model))
+		diagnostics = append(diagnostics, UnorderedPaginationDiagnostic(shape.Model))
 	}
 	if returnsRows && shape.Compiler.Rewrite == queryshape.CompilerRewriteRelationTopNFallback {
-		diagnostics = append(diagnostics, relationTopNFallbackDiagnostic(
+		diagnostics = append(diagnostics, RelationTopNFallbackDiagnostic(
 			shape.Model,
 			shape.Compiler.Relation,
 			shape.Compiler.Reason,
@@ -61,7 +61,8 @@ func Diagnostics(shape queryshape.Query) []check.Diagnostic {
 	return appendLeadingWildcardDiagnostics(diagnostics, shape.Predicates, shape.Model)
 }
 
-func offsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
+// OffsetPaginationDiagnostic describes one positive OFFSET use.
+func OffsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
 	message := "SELECT for " + model + " uses a positive OFFSET and skips rows before returning a page"
 	if offset > 0 {
 		message = "SELECT for " + model + " skips " + strconv.FormatInt(offset, 10) + " rows before returning a page"
@@ -77,7 +78,8 @@ func offsetPaginationDiagnostic(model string, offset int64) check.Diagnostic {
 	}
 }
 
-func unorderedPaginationDiagnostic(model string) check.Diagnostic {
+// UnorderedPaginationDiagnostic describes one positive LIMIT without ORDER BY.
+func UnorderedPaginationDiagnostic(model string) check.Diagnostic {
 	return check.Diagnostic{
 		Code:         CodeUnorderedPagination,
 		Severity:     check.SeverityWarning,
@@ -89,7 +91,9 @@ func unorderedPaginationDiagnostic(model string) check.Diagnostic {
 	}
 }
 
-func relationTopNFallbackDiagnostic(model, relation, reason string) check.Diagnostic {
+// RelationTopNFallbackDiagnostic describes one deterministic compiler
+// fallback without requiring a complete runtime query shape.
+func RelationTopNFallbackDiagnostic(model, relation, reason string) check.Diagnostic {
 	message := "SELECT for " + model + " combines a collection relation with ORDER BY and LIMIT, but the compiler could not safely move TopN to the relation source"
 	if relation != "" {
 		message = "SELECT for " + model + " combines collection relation " + relation + " with ORDER BY and LIMIT, but the compiler could not safely move TopN to the relation source"
@@ -104,7 +108,7 @@ func relationTopNFallbackDiagnostic(model, relation, reason string) check.Diagno
 		Title:        "Relation-filter TopN uses the EXISTS fallback",
 		Message:      message,
 		Evidence:     evidence,
-		Suggestion:   "Verify the fallback with Explain or ExplainAnalyze and make the relation target primary key and root ordering explicit when the same semantics allow it",
+		Suggestion:   "Verify the fallback with Explain or ExplainAnalyze and declare a valid target primary or candidate unique key when the same semantics allow it",
 		Suppressible: true,
 		Reference:    RelationTopNReference,
 	}
@@ -127,7 +131,7 @@ func appendLeadingWildcardDiagnostics(diagnostics []check.Diagnostic, predicates
 		current := predicates[index]
 		switch current.Operator {
 		case queryshape.PredicateContains, queryshape.PredicateHasSuffix:
-			diagnostics = append(diagnostics, leadingWildcardDiagnostic(
+			diagnostics = append(diagnostics, LeadingWildcardDiagnostic(
 				scope,
 				current.Field,
 				current.Operator == queryshape.PredicateHasSuffix,
@@ -141,7 +145,8 @@ func appendLeadingWildcardDiagnostics(diagnostics []check.Diagnostic, predicates
 	return diagnostics
 }
 
-func leadingWildcardDiagnostic(scope, field string, suffix bool) check.Diagnostic {
+// LeadingWildcardDiagnostic describes one Contains or HasSuffix predicate.
+func LeadingWildcardDiagnostic(scope, field string, suffix bool) check.Diagnostic {
 	constructor := "Contains"
 	if suffix {
 		constructor = "HasSuffix"

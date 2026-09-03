@@ -59,6 +59,17 @@ without including bind or pagination values.
 | `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
 | `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
+`tidbgo lint` also applies `QRY002` through `QRY005` to source query terminals
+whose relevant builder flow can be resolved without package loading
+`tidbgo lint --schema schema.sql` additionally applies `QRY006` and `QRY007`
+to resolved root ordered positive-limit accesses using only conjunctive
+`Equal` filters and one uniform ordering direction, and to association
+accesses produced by a resolved relation-first TopN compiler decision
+This covers code that was not exercised during RuntimeCapture
+Dynamic relation names, unresolved relation metadata, non-equality association
+filters, mixed ordering, and separately mutated builders remain visible in
+source coverage statistics instead of being guessed
+
 `QRY006` is not suppressible because the requested schema-aware check cannot
 be completed. The other diagnostics describe valid query shapes and set
 `Suppressible` to true. TiDB's
@@ -74,8 +85,8 @@ matching behavior is defined by TiDB's
 The schema-aware rule applies only when one index candidate is structurally
 clear: a positive `Limit`, a uniform-direction `OrderBy`, and only
 conjunctive `Equal` filters for a root access, or the association access
-produced by relation-first TopN. An active default soft-delete scope contributes
-its generated `IS NULL` column to the equality prefix. Equality columns can
+produced by a runtime or source relation-first TopN decision. An active default soft-delete scope
+contributes its generated `IS NULL` column to the equality prefix. Equality columns can
 occupy the leading prefix in any order and must be followed by the ordered
 columns. An expression or prefix-length index does not prove this coverage. A
 simple unique key fully constrained by the equality filters also satisfies the
@@ -99,12 +110,12 @@ retain the same fingerprint when the compiler decision remains unchanged
 because they use the same SQL placeholder shape.
 
 `QRY005` reports the metadata-only reason that relation-first TopN could not be
-applied, such as an unproven one-row-per-root condition, a different root
-order, a root predicate or active root soft-delete scope, a logical group,
-multiple collection predicates, `SeekAfter`, or `many_to_many`. It never
-includes target predicate values. The fallback remains a valid relation
-existence query; use `Explain` or `ExplainAnalyze` to decide whether its actual
-plan is acceptable.
+applied, such as an unproven one-row-per-root condition, a pure many-to-many
+filter that does not fix a complete target primary or candidate unique key, a
+different root order, a root predicate or active root soft-delete scope, a logical group,
+multiple collection predicates, or `SeekAfter`. It never includes target
+predicate values. The fallback remains a valid relation existence query; use
+`Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
 
 ## Soft-delete scope
 
@@ -190,37 +201,83 @@ Hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite).
 
 The compiler goes further for this metadata-proven TopN shape:
 
-- The builder has one top-level direct `has_many` `Has` and no other root
+- The builder has one top-level direct collection `Has` and no other root
   predicate
 - A positive `Limit` and `OrderBy` are explicit, with the order exactly equal
   to the complete root primary key
 - The relation source key is the complete root primary key
-- The relation target primary key is fully covered by the target key plus
-  conjunctive `Equal` predicates, proving at most one matching target row per
-  root
+- For direct `has_many`, one complete target primary or declared candidate
+  unique key is covered by the target key plus conjunctive `Equal` predicates,
+  proving at most one matching target row per root
+- For pure `many_to_many`, conjunctive `Equal` predicates fix one complete
+  target primary or declared candidate unique key, and the pure-junction
+  contract makes that source-target pair unique
 - `SeekAfter` and the root default soft-delete scope are not active
 
-For that shape, the compiler filters and orders the relation target in a
-derived query, applies `LIMIT` there, then joins only those keys to the root
-table and inline to-one preloads. This is designed to let TiDB push Limit to an
-ordered association index before root lookups. TiDB's [TopN and Limit pushdown
+For that shape, the compiler builds a derived relation-first query, applies
+`LIMIT` there, then joins only those keys to the root table and inline to-one
+preloads. The outer query includes `LEADING(tidbgo_k0, tidbgo_t0)`, naming only
+the swappable derived-key and root inner-join pair. This keeps the limited key
+set as the driving input before root lookups without constraining later inline
+`LEFT JOIN` preloads. The compiler deliberately does not add `INL_JOIN`:
+`LEADING` controls join order, while TiDB remains responsible for selecting an
+applicable join algorithm. Direct `has_many` filters and orders the target
+table. Pure `many_to_many` filters the junction target columns directly when
+the target relation key is itself a complete primary or candidate unique key
+and no other target condition is needed; otherwise it joins the fixed target
+before ordering the junction source key. This is designed to let TiDB push
+Limit to an ordered association index before root lookups. TiDB's [TopN and Limit pushdown
 guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/) explains why
 placing these operators close to the data source reduces work.
+TiDB's [`LEADING` documentation](https://docs.pingcap.com/tidb/stable/optimizer-hints/#leadingt1_name--tl_name-)
+describes its join-order semantics and the cases that produce an inapplicable
+hint warning. Verify generated statements with `SHOW WARNINGS` immediately
+after the statement on the same connection, and use `ExplainAnalyze` on
+representative data.
 
 Relation mappings are a data-integrity contract even when the physical schema
-does not declare a foreign key: every target key represented by a direct
-relation must reference an existing source row. `go-tidb` does not create or
-check that constraint during a query. Relation-first TopN relies on this
-contract; orphan target rows can otherwise consume a page slot before the root
-join and underfill the result. Enforce the invariant with schema constraints
-or application writes as appropriate for the workload.
+does not declare a foreign key. Every target key represented by a direct
+relation must reference an existing source row. A pure junction must reference
+existing source and target rows and enforce exact uniqueness across the full
+source-target column pair. `go-tidb` does not create or check those constraints
+during a query. Relation-first TopN and relation-only Count rely on this
+contract. An orphan source can consume a TopN page slot before the root join.
+When the compiler filters a junction without joining its target, an orphan
+target can also make relation existence a false positive. Relation-only Count
+can include an orphan association row because it intentionally omits the root
+join. Duplicate direct edges or pure-junction pairs can overcount or duplicate
+a root result. Enforce the invariant with schema constraints or application
+writes as appropriate for the workload.
 
-The compiler cannot inspect physical indexes offline. For efficient
-relation-first TopN, an index normally needs equality-filter columns followed
-by the relation target key in root-order sequence, such as
+A payload-bearing edge model can keep its surrogate primary key while
+declaring relation cardinality separately:
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+For `Has("VideoGenres", Equal("GenreID", ...))`, relation correlation fixes
+`VideoID` and the predicate fixes `GenreID`, so the complete candidate key
+proves one matching edge per Video. Offline SQL compilation trusts this
+declaration; verify it against the SQL snapshot with `check.Schema` before
+using the model.
+
+The compiler cannot inspect physical indexes offline. For efficient direct
+`has_many` relation-first TopN, an index normally needs equality-filter columns
+followed by the relation target key in root-order sequence, such as
 `(genre_id, video_id)` for `Equal("GenreID", ...)` plus
-`OrderBy(Desc("ID"))`. Confirm the actual ordered range scan, pushed Limit,
-and RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
+`OrderBy(Desc("ID"))`. For pure `many_to_many`, the junction normally needs
+its target columns followed by its source columns, such as
+`(role_id, user_id)`. Confirm the actual ordered range scan, pushed Limit, and
+RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
+The uniqueness constraint and ordered access index have separate roles: for
+the edge example, `UNIQUE(video_id, genre_id)` proves cardinality while
+`INDEX(genre_id, video_id)` supports the filtered ordered Limit.
 
 When the target model has a soft-delete field, `Has` considers active target
 rows only. Use `Raw[T]` when an existence condition must explicitly inspect
@@ -320,6 +377,33 @@ cursor predicate. Without `Limit` or `Offset`, `Count` uses a direct
 `COUNT(*)`. With `Limit` or `Offset`, it counts a derived `SELECT 1` so the
 pagination remains part of the result. Omit `Limit` and `Offset` when the total
 number of matching rows is required.
+
+For one metadata-proven relation shape, the direct `COUNT(*)` is rooted at the
+association instead of the selected model. The compiler applies this rewrite
+when all of the following are true:
+
+- The query has no `Limit`, `Offset`, or `SeekAfter`
+- Its only root predicate is one direct, positive collection `Has`
+- No default root soft-delete scope is active
+- The relation source key is the complete root primary key
+- Relation correlation plus conjunctive, non-null `Equal` predicates cover a
+  complete target primary or declared candidate unique key, proving at most
+  one matching association row per root
+- For pure `many_to_many`, every target predicate maps directly to the target
+  key columns of its junction and the target has no soft-delete scope
+
+For example, a `Clip` query filtered by one `ClipGenre.GenreID` can compile its
+Count independently from the relation-first TopN List:
+
+```sql
+SELECT COUNT(*) FROM `clip_genres` WHERE `genre_id` = ?
+```
+
+This removes the root lookup and can let TiDB satisfy the Count from an
+association covering index. It relies on the relation-integrity contract
+described above. If any proof condition is unavailable, the compiler preserves
+the root `EXISTS` query. Ordinary `OrderBy` terms remain irrelevant to Count
+and do not prevent the rewrite.
 
 `Explain` executes `EXPLAIN` for the root SELECT represented by `Build` and
 returns TiDB's default row-format operators as `[]orm.ExplainRow`. It is

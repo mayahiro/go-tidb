@@ -55,18 +55,31 @@ The `integration` module owns the
 uses the current root checkout through a local module replacement. The root
 module and its users do not inherit that test dependency
 
-## Source projection analysis benchmark
+## Source analysis benchmark
 
 Measure recursive collection, Go parsing, model indexing, query-flow analysis,
-and diagnostic construction for one file containing 100 local result queries:
+and diagnostic construction for files containing 100 local queries:
 
 ```sh
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLocalQueries$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
 ```
 
 The benchmark is offline and does not load packages, run application code,
 open a database connection, or consume RU. Temporary fixture creation occurs
 before timing
+
+The second workload exercises constant pagination, ordering, nested predicate
+inspection, source locations, deduplication, and query-pattern diagnostics
+The third adds pre-parsed schema metadata, physical model-name resolution, and
+the shared index-prefix checker for 100 ordered-limit queries
+The fourth resolves direct relation metadata, applies the shared relation-first
+TopN compiler decision, and checks 100 association index accesses
+The fifth resolves pure many-to-many relation and junction metadata, applies
+the same compiler decision, and checks 100 junction index accesses
 
 ## Schema compatibility client benchmarks
 

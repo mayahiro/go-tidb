@@ -6,17 +6,22 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 	"github.com/mayahiro/go-tidb/model"
 )
 
 const (
 	relationTopNAssociationAlias = "tidbgo_a0"
+	relationTopNManyTargetAlias  = "tidbgo_m0"
 	relationTopNKeyAlias         = "tidbgo_k0"
+	relationTopNLeadingHint      = "/*+ LEADING(" + relationTopNKeyAlias + ", " + inlinePreloadRootAlias + ") */ "
+	relationTopNManySQLCapacity  = 128
 )
 
 type relationTopNPlan struct {
-	predicate predicate
-	metadata  *relationTopNMetadata
+	predicate    predicate
+	metadata     *relationTopNMetadata
+	junctionOnly bool
 }
 
 type relationTopNAnalysis struct {
@@ -34,8 +39,15 @@ type relationTopNMetadata struct {
 	sourceColumns          []string
 	targetKeyGoNames       []string
 	targetColumns          []string
-	targetPrimaryGoNames   []string
+	targetUniqueGoNames    [][]string
 	sourceIsRootPrimaryKey bool
+	junction               *relationTopNJunctionMetadata
+}
+
+type relationTopNJunctionMetadata struct {
+	tableName     string
+	sourceColumns []string
+	targetColumns []string
 }
 
 type relationTopNMetadataKey struct {
@@ -86,32 +98,59 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	if selection.pagination.offsetSet {
 		argumentCount++
 	}
-	sqlCapacity += len(base.sql) + inlinePreloadSQLCapacity(inline) + 256
+	sqlCapacity += len(base.sql) + len(relationTopNLeadingHint) + inlinePreloadSQLCapacity(inline) + 256
+	associationTable := metadata.target.TableName()
+	associationColumns := metadata.targetColumns
+	predicateAlias := relationTopNAssociationAlias
+	if metadata.junction != nil {
+		associationTable = metadata.junction.tableName
+		associationColumns = metadata.junction.sourceColumns
+		sqlCapacity += relationTopNManySQLCapacity
+		if !plan.junctionOnly {
+			predicateAlias = relationTopNManyTargetAlias
+		}
+	}
 
 	var query strings.Builder
 	query.Grow(sqlCapacity)
 	query.WriteString("SELECT ")
+	query.WriteString(relationTopNLeadingHint)
 	writeRelationTopNColumns(&query, inlinePreloadRootAlias, base.scanPlan.columns)
 	writeInlinePreloadColumns(&query, inline)
 	query.WriteString(" FROM (SELECT ")
-	writeRelationTopNColumns(&query, relationTopNAssociationAlias, metadata.targetColumns)
+	writeRelationTopNColumns(&query, relationTopNAssociationAlias, associationColumns)
 	query.WriteString(" FROM ")
-	writeQuotedIdentifier(&query, metadata.target.TableName())
+	writeQuotedIdentifier(&query, associationTable)
 	query.WriteString(" AS ")
 	writeQuotedIdentifier(&query, relationTopNAssociationAlias)
+	if metadata.junction != nil && !plan.junctionOnly {
+		query.WriteString(" JOIN ")
+		writeQuotedIdentifier(&query, metadata.target.TableName())
+		query.WriteString(" AS ")
+		writeQuotedIdentifier(&query, relationTopNManyTargetAlias)
+		query.WriteString(" ON (")
+		writeRelationColumnEqualities(
+			&query,
+			relationTopNManyTargetAlias,
+			metadata.targetColumns,
+			relationTopNAssociationAlias,
+			metadata.junction.targetColumns,
+		)
+		query.WriteByte(')')
+	}
 
 	arguments := make([]any, 0, argumentCount)
 	wroteWhere := false
 	if softDeleteField, exists := metadata.target.SoftDeleteField(); exists {
 		query.WriteString(" WHERE ")
-		writePreloadSoftDeletePredicate(&query, relationTopNAssociationAlias, softDeleteField.ColumnName())
+		writePreloadSoftDeletePredicate(&query, predicateAlias, softDeleteField.ColumnName())
 		wroteWhere = true
 	}
 	targetPredicates := predicateCompiler{
 		descriptor: metadata.target,
 		query:      &query,
 		arguments:  arguments,
-		qualifier:  relationTopNAssociationAlias,
+		qualifier:  predicateAlias,
 	}
 	for index := range plan.predicate.children {
 		if wroteWhere {
@@ -120,12 +159,18 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 			query.WriteString(" WHERE ")
 			wroteWhere = true
 		}
-		if err := targetPredicates.write(plan.predicate.children[index]); err != nil {
+		var err error
+		if plan.junctionOnly {
+			err = targetPredicates.writeRelationTopNJunctionPredicate(plan.predicate.children[index], metadata)
+		} else {
+			err = targetPredicates.write(plan.predicate.children[index])
+		}
+		if err != nil {
 			return compiledSelect{}, false, fmt.Errorf("orm: SELECT relation TopN predicate %s.%s: %w", descriptor.Name(), metadata.relationName, err)
 		}
 	}
 
-	writeRelationTopNOrder(&query, relationTopNAssociationAlias, metadata.targetColumns, selection.orderBy)
+	writeRelationTopNOrder(&query, relationTopNAssociationAlias, associationColumns, selection.orderBy)
 	query.WriteString(" LIMIT ?")
 	targetPredicates.arguments = append(targetPredicates.arguments, selection.pagination.limit)
 	if selection.pagination.offsetSet {
@@ -142,7 +187,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	writeRelationColumnEqualities(
 		&query,
 		relationTopNKeyAlias,
-		metadata.targetColumns,
+		associationColumns,
 		inlinePreloadRootAlias,
 		metadata.sourceColumns,
 	)
@@ -174,55 +219,52 @@ func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (
 	if search.count == 0 {
 		return relationTopNAnalysis{}, nil
 	}
-	analysis := relationTopNAnalysis{candidate: true, relationName: search.first.relation.GoName()}
-	if search.count != 1 {
-		analysis.reason = "the query contains more than one collection Has predicate"
-		return analysis, nil
-	}
 	candidate := search.first
-	if !candidate.direct {
-		analysis.reason = "the collection Has predicate is nested in a logical group"
-		return analysis, nil
-	}
-	if candidate.relation.Kind() != model.RelationHasMany {
-		analysis.reason = "the relation uses a many-to-many junction whose pair uniqueness is not available to the offline query compiler"
-		return analysis, nil
-	}
-	if selection.seekAfter != nil {
-		analysis.reason = "the query uses SeekAfter, which is not yet supported by the relation-first TopN compiler"
-		return analysis, nil
-	}
-	if len(selection.predicates) != 1 {
-		analysis.reason = "the query contains a root predicate that must be evaluated before LIMIT"
-		return analysis, nil
-	}
+	relationName := candidate.relation.GoName()
+	rootSoftDelete := false
 	if _, filterSoftDeleted := activeSoftDeleteField(descriptor, selection.withDeleted); filterSoftDeleted {
-		analysis.reason = "the root default soft-delete scope must be evaluated before LIMIT"
-		return analysis, nil
+		rootSoftDelete = true
+	}
+	outcome := relationtopn.DecideStructural(
+		search.count,
+		candidate.direct,
+		selection.seekAfter != nil,
+		len(selection.predicates),
+		rootSoftDelete,
+	)
+	if outcome != relationtopn.OutcomeNeedsMetadata {
+		decision := relationtopn.Decision(outcome, relationName)
+		return relationTopNAnalysis{
+			candidate:    outcome != relationtopn.OutcomeNone,
+			relationName: decision.Relation,
+			reason:       decision.Reason,
+		}, nil
 	}
 
 	metadata, err := relationTopNMetadataFor(descriptor, candidate.relation)
 	if err != nil {
 		return relationTopNAnalysis{}, err
 	}
-	if !metadata.sourceIsRootPrimaryKey {
-		analysis.reason = "the relation source key is not the complete root primary key"
-		return analysis, nil
+	outcome = relationtopn.DecideMetadata(
+		metadata.sourceIsRootPrimaryKey,
+		relationTopNOrderMatches(metadata.sourceGoNames, selection.orderBy),
+		relationTopNUniquePerRoot(metadata, candidate.predicate.children),
+	)
+	analysis := relationTopNAnalysis{
+		optimized:    outcome == relationtopn.OutcomeOptimized,
+		candidate:    true,
+		relationName: relationName,
 	}
-	if !relationTopNOrderMatches(metadata.sourceGoNames, selection.orderBy) {
-		analysis.reason = "ORDER BY does not exactly match the relation source key"
-		return analysis, nil
+	if !analysis.optimized {
+		analysis.reason = relationtopn.Decision(outcome, relationName).Reason
 	}
-	if !relationTopNUniquePerRoot(metadata, candidate.predicate.children) {
-		analysis.reason = "the relation target primary key does not prove at most one matching row per root"
-		return analysis, nil
+	if analysis.optimized {
+		analysis.plan = relationTopNPlan{
+			predicate:    candidate.predicate,
+			metadata:     metadata,
+			junctionOnly: relationTopNCanFilterJunction(metadata, candidate.predicate.children),
+		}
 	}
-
-	analysis.plan = relationTopNPlan{
-		predicate: candidate.predicate,
-		metadata:  metadata,
-	}
-	analysis.optimized = true
 	return analysis, nil
 }
 
@@ -262,7 +304,7 @@ func relationTopNMetadataFor(source *model.Descriptor, relation model.Relation) 
 func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relation) (*relationTopNMetadata, error) {
 	target, err := model.DescribeType(relation.TargetType())
 	if err != nil {
-		return nil, fmt.Errorf("orm: describe SELECT relation TopN target %s.%s: %w", source.Name(), relation.GoName(), err)
+		return nil, fmt.Errorf("orm: describe SELECT relation target %s.%s: %w", source.Name(), relation.GoName(), err)
 	}
 	sourceKey := relation.SourceKey()
 	targetKey := relation.TargetKey()
@@ -273,10 +315,43 @@ func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relati
 		sourceColumns:          relationFieldColumns(sourceKey),
 		targetKeyGoNames:       relationFieldGoNames(targetKey),
 		targetColumns:          relationFieldColumns(targetKey),
-		targetPrimaryGoNames:   relationFieldGoNames(target.PrimaryKeyFields()),
+		targetUniqueGoNames:    relationTopNUniqueGoNames(target),
 		sourceIsRootPrimaryKey: sameRelationFields(sourceKey, source.PrimaryKeyFields()),
 	}
+	if relation.Kind() == model.RelationManyToMany {
+		junction, ok := relation.Junction()
+		if !ok {
+			return nil, fmt.Errorf("orm: SELECT relation %s.%s has no junction metadata", source.Name(), relation.GoName())
+		}
+		junctionSourceColumns := junction.SourceColumns()
+		junctionTargetColumns := junction.TargetColumns()
+		if len(junctionSourceColumns) != len(sourceKey) || len(junctionTargetColumns) != len(targetKey) {
+			return nil, fmt.Errorf("orm: SELECT relation %s.%s has invalid junction metadata", source.Name(), relation.GoName())
+		}
+		metadata.junction = &relationTopNJunctionMetadata{
+			tableName:     junction.TableName(),
+			sourceColumns: junctionSourceColumns,
+			targetColumns: junctionTargetColumns,
+		}
+	}
 	return metadata, nil
+}
+
+func relationTopNUniqueGoNames(descriptor *model.Descriptor) [][]string {
+	primary := relationFieldGoNames(descriptor.PrimaryKeyFields())
+	uniqueKeys := descriptor.UniqueKeys()
+	capacity := len(uniqueKeys)
+	if len(primary) != 0 {
+		capacity++
+	}
+	result := make([][]string, 0, capacity)
+	if len(primary) != 0 {
+		result = append(result, primary)
+	}
+	for _, key := range uniqueKeys {
+		result = append(result, relationFieldGoNames(key.Fields()))
+	}
+	return result
 }
 
 func relationFieldGoNames(fields []model.Field) []string {
@@ -288,16 +363,136 @@ func relationFieldGoNames(fields []model.Field) []string {
 }
 
 func relationTopNUniquePerRoot(metadata *relationTopNMetadata, predicates []predicate) bool {
-	if len(metadata.targetPrimaryGoNames) == 0 {
+	fixedByRelation := metadata.targetKeyGoNames
+	if metadata.junction != nil {
+		// A many-to-many target key varies by root. One complete target unique
+		// key must therefore be fixed by Equal predicates; the pure-junction
+		// contract then makes the source-target pair unique.
+		fixedByRelation = nil
+	}
+	for _, key := range metadata.targetUniqueGoNames {
+		covered := true
+		for _, field := range key {
+			if relationTopNFieldNameExists(fixedByRelation, field) || conjunctiveEqualFieldExists(predicates, field) {
+				continue
+			}
+			covered = false
+			break
+		}
+		if covered && len(key) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func relationTopNCanFilterJunction(metadata *relationTopNMetadata, predicates []predicate) bool {
+	if metadata.junction == nil {
 		return false
 	}
-	for _, field := range metadata.targetPrimaryGoNames {
-		if relationTopNFieldNameExists(metadata.targetKeyGoNames, field) || conjunctiveEqualFieldExists(predicates, field) {
-			continue
-		}
+	if _, softDelete := metadata.target.SoftDeleteField(); softDelete {
 		return false
+	}
+	if !relationTopNMatchesUniqueKey(metadata.targetKeyGoNames, metadata.targetUniqueGoNames) {
+		return false
+	}
+	for _, field := range metadata.targetKeyGoNames {
+		if _, exists := relationTopNJunctionTargetColumn(metadata, field); !exists {
+			return false
+		}
+	}
+	for index := range predicates {
+		if !relationTopNJunctionPredicateOnly(metadata, predicates[index]) {
+			return false
+		}
 	}
 	return true
+}
+
+func relationTopNMatchesUniqueKey(fields []string, keys [][]string) bool {
+	for _, key := range keys {
+		if len(fields) != len(key) {
+			continue
+		}
+		matches := true
+		for _, field := range fields {
+			if !relationTopNFieldNameExists(key, field) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func relationTopNJunctionPredicateOnly(metadata *relationTopNMetadata, current predicate) bool {
+	switch current.operator {
+	case predicateEqual:
+		_, exists := relationTopNJunctionTargetColumn(metadata, current.field)
+		return exists
+	case predicateAnd:
+		if len(current.children) < 2 {
+			return false
+		}
+		for index := range current.children {
+			if !relationTopNJunctionPredicateOnly(metadata, current.children[index]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func relationTopNJunctionTargetColumn(metadata *relationTopNMetadata, field string) (string, bool) {
+	for index := range metadata.targetKeyGoNames {
+		if metadata.targetKeyGoNames[index] == field {
+			return metadata.junction.targetColumns[index], true
+		}
+	}
+	return "", false
+}
+
+func (c *predicateCompiler) writeRelationTopNJunctionPredicate(current predicate, metadata *relationTopNMetadata) error {
+	switch current.operator {
+	case predicateEqual:
+		field, exists := c.descriptor.FieldByGoName(current.field)
+		if !exists || field.IsComputed() {
+			return fmt.Errorf("orm: %s predicate field %s.%s is not a mapped scalar field", c.operationName(), c.descriptor.Name(), current.field)
+		}
+		if err := c.requireValues(current, field, 1); err != nil {
+			return err
+		}
+		column, exists := relationTopNJunctionTargetColumn(metadata, current.field)
+		if !exists {
+			return fmt.Errorf("orm: %s relation target field %s.%s has no junction column", c.operationName(), c.descriptor.Name(), current.field)
+		}
+		writeMaybeQualifiedIdentifier(c.query, c.qualifier, column)
+		c.query.WriteString(" = ?")
+		c.arguments = append(c.arguments, current.values[0])
+		return nil
+	case predicateAnd:
+		if current.field != "" || len(current.values) != 0 || len(current.children) < 2 {
+			return fmt.Errorf("orm: AND %s predicate must contain at least two children", c.operationName())
+		}
+		c.query.WriteByte('(')
+		for index := range current.children {
+			if index != 0 {
+				c.query.WriteString(" AND ")
+			}
+			if err := c.writeRelationTopNJunctionPredicate(current.children[index], metadata); err != nil {
+				return err
+			}
+		}
+		c.query.WriteByte(')')
+		return nil
+	default:
+		return fmt.Errorf("orm: %s relation junction predicate has unsupported operator %d", c.operationName(), current.operator)
+	}
 }
 
 func relationTopNFieldNameExists(fields []string, name string) bool {

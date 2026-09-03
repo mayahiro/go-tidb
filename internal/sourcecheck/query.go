@@ -36,6 +36,7 @@ type sourceQuerySummary struct {
 	model      sourceTypeKey
 	projection queryProjection
 	preload    bool
+	pattern    sourceQueryPattern
 }
 
 type sourceFunctionContext struct {
@@ -45,20 +46,24 @@ type sourceFunctionContext struct {
 }
 
 type sourceAnalyzer struct {
-	fileSet        *token.FileSet
-	files          []*sourceFile
-	models         map[sourceTypeKey]*sourceModel
-	queryFunctions map[sourceFunctionKey]*sourceQueryFunction
-	functionCache  map[sourceFunctionKey]sourceQuerySummary
-	seenModels     map[sourceTypeKey]struct{}
-	analysis       Analysis
+	configuration          analysisConfiguration
+	fileSet                *token.FileSet
+	files                  []*sourceFile
+	models                 map[sourceTypeKey]*sourceModel
+	queryFunctions         map[sourceFunctionKey]*sourceQueryFunction
+	functionCache          map[sourceFunctionKey]sourceQuerySummary
+	relationCache          map[sourceRelationKey]sourceRelationResult
+	seenModels             map[sourceTypeKey]struct{}
+	seenPatternDiagnostics map[sourceDiagnosticKey]struct{}
+	analysis               Analysis
 }
 
-func newSourceAnalyzer(fileSet *token.FileSet, files []*sourceFile) *sourceAnalyzer {
+func newSourceAnalyzer(fileSet *token.FileSet, files []*sourceFile, configuration analysisConfiguration) *sourceAnalyzer {
 	analyzer := &sourceAnalyzer{
+		configuration:  configuration,
 		fileSet:        fileSet,
 		files:          files,
-		models:         indexSourceModels(files),
+		models:         indexSourceModels(files, configuration.schemaEnabled),
 		queryFunctions: make(map[sourceFunctionKey]*sourceQueryFunction),
 		functionCache:  make(map[sourceFunctionKey]sourceQuerySummary),
 		seenModels:     make(map[sourceTypeKey]struct{}),
@@ -144,7 +149,7 @@ func selectQueryResultModel(file *sourceFile, results *ast.FieldList) (sourceTyp
 		return sourceTypeKey{}, false
 	}
 	identifier, ok := selector.X.(*ast.Ident)
-	if !ok || file.ormAlias == "" || identifier.Name != file.ormAlias {
+	if !ok || identifier.Obj != nil || file.ormAlias == "" || identifier.Name != file.ormAlias {
 		return sourceTypeKey{}, false
 	}
 	return file.sourceType(modelExpression)
@@ -180,7 +185,7 @@ func (finder *sourceTerminalFinder) Visit(node ast.Node) ast.Visitor {
 		return finder
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if ok && sourceResultTerminal(selector.Sel.Name) {
+	if ok && sourceQueryPatternTerminal(selector.Sel.Name) {
 		finder.found = true
 	}
 	return finder
@@ -203,14 +208,27 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 		return visitor
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || !sourceResultTerminal(selector.Sel.Name) {
+	if !ok || !sourceQueryPatternTerminal(selector.Sel.Name) {
 		return visitor
 	}
 	summary := visitor.analyzer.summarizeQueryExpression(visitor.context, selector.X, call.Pos(), nil, nil)
-	if summary.recognized {
+	if !summary.recognized {
+		return visitor
+	}
+	visitor.analyzer.recordQueryPattern(call, summary)
+	if sourceResultTerminal(selector.Sel.Name) {
 		visitor.analyzer.recordResultQuery(visitor.context, call, selector.Sel.Name, summary)
 	}
 	return visitor
+}
+
+func sourceQueryPatternTerminal(name string) bool {
+	switch name {
+	case "All", "First", "Only", "Build", "Explain", "ExplainAnalyze":
+		return true
+	default:
+		return false
+	}
 }
 
 func sourceResultTerminal(name string) bool {
@@ -541,11 +559,11 @@ func (analyzer *sourceAnalyzer) summarizeQueryExpression(
 		return analyzer.summarizeBuilderObject(context, current, before, functionStack, objectStack)
 	case *ast.CallExpr:
 		if model, ok := sourceQueryFactoryModel(context.file, current); ok {
-			return sourceQuerySummary{recognized: true, model: model, projection: queryProjectionDefault}
+			return newSourceQuerySummary(model, analyzer.configuration.schemaEnabled)
 		}
 		if selector, ok := current.Fun.(*ast.SelectorExpr); ok {
 			summary := analyzer.summarizeQueryExpression(context, selector.X, before, functionStack, objectStack)
-			return applySourceQueryMethod(summary, selector.Sel.Name)
+			return analyzer.applySourceQueryMethod(context, summary, current, before)
 		}
 		if identifier, ok := current.Fun.(*ast.Ident); ok && (identifier.Obj == nil || identifier.Obj.Kind == ast.Fun) {
 			key := sourceFunctionKey{packagePath: context.file.packageKey, name: identifier.Name}
@@ -576,21 +594,85 @@ func sourceQueryFactoryModel(file *sourceFile, call *ast.CallExpr) (sourceTypeKe
 		return sourceTypeKey{}, false
 	}
 	identifier, ok := selector.X.(*ast.Ident)
-	if !ok || file.ormAlias == "" || identifier.Name != file.ormAlias {
+	if !ok || identifier.Obj != nil || file.ormAlias == "" || identifier.Name != file.ormAlias {
 		return sourceTypeKey{}, false
 	}
 	return file.sourceType(modelExpression)
 }
 
-func applySourceQueryMethod(summary sourceQuerySummary, method string) sourceQuerySummary {
+func newSourceQuerySummary(model sourceTypeKey, schemaEnabled bool) sourceQuerySummary {
+	result := sourceQuerySummary{
+		recognized: true,
+		model:      model,
+		projection: queryProjectionDefault,
+		pattern: sourceQueryPattern{
+			limit:           sourceBound{state: sourceBoundUnset},
+			offset:          sourceBound{state: sourceBoundUnset},
+			order:           sourceOrderAbsent,
+			orderTermsKnown: true,
+			predicatesKnown: true,
+			rootCountKnown:  true,
+			seekAfter:       sourceToggleAbsent,
+			withDeleted:     sourceToggleAbsent,
+		},
+	}
+	if schemaEnabled {
+		result.pattern.index = &sourceIndexPattern{
+			indexPredicatesKnown: true,
+		}
+	}
+	return result
+}
+
+func (analyzer *sourceAnalyzer) applySourceQueryMethod(
+	context sourceFunctionContext,
+	summary sourceQuerySummary,
+	call *ast.CallExpr,
+	before token.Pos,
+) sourceQuerySummary {
 	if !summary.recognized {
 		return summary
 	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return summary
+	}
+	method := selector.Sel.Name
 	switch method {
 	case "Select":
 		summary.projection = queryProjectionExplicit
 	case "Preload":
 		summary.preload = true
+	case "Limit":
+		summary.pattern.limit = sourceBoundFromCall(call, selector.Sel.Pos())
+	case "Offset":
+		summary.pattern.offset = sourceBoundFromCall(call, selector.Sel.Pos())
+	case "OrderBy":
+		summary.pattern = analyzer.applySourceOrderCall(context, summary.pattern, call, before)
+	case "SeekAfter":
+		summary.pattern.seekAfter = sourceTogglePresent
+	case "Where":
+		predicates := analyzer.sourceWherePredicates(context, call, before)
+		summary.pattern.wildcards = appendSourceWildcards(summary.pattern.wildcards, predicates.wildcards)
+		summary.pattern.predicatesKnown = summary.pattern.predicatesKnown && predicates.known
+		summary.pattern.rootPredicateCount += predicates.rootPredicateCount
+		summary.pattern.rootCountKnown = summary.pattern.rootCountKnown && predicates.rootCountKnown
+		summary.pattern.hasPredicates = append(summary.pattern.hasPredicates, predicates.hasPredicates...)
+		if len(predicates.hasPredicates) != 0 && summary.pattern.deferredOrderCalls.count != 0 {
+			summary.pattern = analyzer.resolveDeferredSourceOrderCalls(summary.pattern)
+		}
+		if summary.pattern.index != nil {
+			index := summary.pattern.index
+			index.equalityFields = append(index.equalityFields, predicates.equalityFields...)
+			index.indexPredicatesKnown = index.indexPredicatesKnown && predicates.indexExact
+			summary.pattern.index = index
+		}
+	case "WithDeleted":
+		if len(call.Args) == 0 && !call.Ellipsis.IsValid() {
+			summary.pattern.withDeleted = sourceTogglePresent
+		} else {
+			summary.pattern.withDeleted = sourceToggleUnknown
+		}
 	}
 	return summary
 }
@@ -601,7 +683,7 @@ func (analyzer *sourceAnalyzer) summarizeQueryFunction(key sourceFunctionKey, st
 		return sourceQuerySummary{}
 	}
 	if cached, exists := analyzer.functionCache[key]; exists {
-		return cached
+		return cloneSourceQuerySummaryIndex(cached)
 	}
 	if stack == nil {
 		stack = make(map[sourceFunctionKey]bool)
@@ -648,6 +730,24 @@ func (analyzer *sourceAnalyzer) summarizeQueryFunction(key sourceFunctionKey, st
 		}
 	}
 	analyzer.functionCache[key] = result
+	return cloneSourceQuerySummaryIndex(result)
+}
+
+func cloneSourceQuerySummaryIndex(summary sourceQuerySummary) sourceQuerySummary {
+	summary.pattern.orderTerms = summary.pattern.orderTerms.clone()
+	summary.pattern.deferredOrderCalls = summary.pattern.deferredOrderCalls.clone()
+	summary.pattern.hasPredicates = cloneSourceHasPredicates(summary.pattern.hasPredicates)
+	summary.pattern.wildcards = append([]sourceWildcardPredicate(nil), summary.pattern.wildcards...)
+	summary.pattern.index = cloneSourceIndexPattern(summary.pattern.index)
+	return summary
+}
+
+func cloneSourceHasPredicates(values []sourceHasPredicate) []sourceHasPredicate {
+	result := make([]sourceHasPredicate, len(values))
+	for index := range values {
+		result[index] = values[index]
+		result[index].equalityFields = append([]string(nil), values[index].equalityFields...)
+	}
 	return result
 }
 
@@ -660,6 +760,7 @@ func mergeSourceQuerySummaries(left, right sourceQuerySummary, model sourceTypeK
 		result.projection = left.projection
 	}
 	result.preload = left.preload || right.preload
+	result.pattern = mergeSourceQueryPatterns(left.pattern, right.pattern)
 	return result
 }
 
@@ -708,15 +809,45 @@ func (analyzer *sourceAnalyzer) summarizeBuilderObject(
 		return result
 	}
 
-	selectCall, preloadCall, safe := sourceBuilderCalls(context, object, before, identifier.Pos())
-	if !safe {
+	calls := sourceBuilderCalls(context, object, before, identifier.Pos())
+	if !calls.safe {
+		result.projection = queryProjectionUnknown
+		result.pattern = sourceQueryPattern{}
+	}
+	if calls.selectCall && result.projection == queryProjectionDefault {
 		result.projection = queryProjectionUnknown
 	}
-	if selectCall && result.projection == queryProjectionDefault {
-		result.projection = queryProjectionUnknown
-	}
-	if preloadCall {
+	if calls.preloadCall {
 		result.preload = true
+	}
+	if calls.limitCall {
+		result.pattern.limit = sourceBound{state: sourceBoundUnknown}
+	}
+	if calls.offsetCall {
+		result.pattern.offset = sourceBound{state: sourceBoundUnknown}
+	}
+	if calls.orderCall {
+		if result.pattern.order != sourceOrderPresent {
+			result.pattern.order = sourceOrderUnknown
+		}
+		result.pattern.orderTermsKnown = false
+	}
+	if calls.whereCall {
+		result.pattern.predicatesKnown = false
+		result.pattern.rootCountKnown = false
+	}
+	if calls.seekAfterCall {
+		result.pattern.seekAfter = sourceToggleUnknown
+	}
+	if calls.withDeletedCall {
+		result.pattern.withDeleted = sourceToggleUnknown
+	}
+	if result.pattern.index != nil && (calls.orderCall || calls.whereCall || calls.withDeletedCall) {
+		index := result.pattern.index
+		if calls.whereCall {
+			index.indexPredicatesKnown = false
+		}
+		result.pattern.index = index
 	}
 	return result
 }
@@ -782,24 +913,34 @@ func (analyzer *sourceAnalyzer) summarizeBuilderDefinition(
 		if selector, ok := value.Fun.(*ast.SelectorExpr); ok {
 			base := analyzer.summarizeBuilderDefinition(context, selector.X, object, current, before, functionStack, objectStack)
 			if base.recognized {
-				return applySourceQueryMethod(base, selector.Sel.Name)
+				return analyzer.applySourceQueryMethod(context, base, value, before)
 			}
 		}
 	}
 	return analyzer.summarizeQueryExpression(context, expression, before, functionStack, objectStack)
 }
 
-func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, before, allowed token.Pos) (bool, bool, bool) {
-	selectCall := false
-	preloadCall := false
-	safe := true
+type sourceBuilderCallSet struct {
+	selectCall      bool
+	preloadCall     bool
+	limitCall       bool
+	offsetCall      bool
+	orderCall       bool
+	whereCall       bool
+	seekAfterCall   bool
+	withDeletedCall bool
+	safe            bool
+}
+
+func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, before, allowed token.Pos) sourceBuilderCallSet {
+	result := sourceBuilderCallSet{safe: true}
 	ast.Inspect(context.body, func(node ast.Node) bool {
-		if !safe || node == nil {
-			return safe
+		if !result.safe || node == nil {
+			return result.safe
 		}
 		if literal, nested := node.(*ast.FuncLit); nested {
 			if sourceObjectReferenced(literal.Body, object) {
-				safe = false
+				result.safe = false
 			}
 			return false
 		}
@@ -818,20 +959,32 @@ func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, befor
 		}
 		methods, receiver := sourceReceiverMethods(context.parents, identifier)
 		if !receiver {
-			safe = false
+			result.safe = false
 			return false
 		}
 		for _, method := range methods {
 			switch method {
 			case "Select":
-				selectCall = true
+				result.selectCall = true
 			case "Preload":
-				preloadCall = true
+				result.preloadCall = true
+			case "Limit":
+				result.limitCall = true
+			case "Offset":
+				result.offsetCall = true
+			case "OrderBy":
+				result.orderCall = true
+			case "Where":
+				result.whereCall = true
+			case "SeekAfter":
+				result.seekAfterCall = true
+			case "WithDeleted":
+				result.withDeletedCall = true
 			}
 		}
 		return true
 	})
-	return selectCall, preloadCall, safe
+	return result
 }
 
 func sourceObjectReferenced(root ast.Node, object *ast.Object) bool {

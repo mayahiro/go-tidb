@@ -67,6 +67,27 @@ form a composite primary key in struct declaration order. No field name is
 implicitly treated as a primary key, and a model without a declared key
 remains valid for metadata inspection.
 
+Declare a candidate unique key independently from the primary key by repeating
+one logical group name on its scalar fields:
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+The group name is a simple identifier of at most 64 bytes and does not name a
+physical SQL index. Its fields follow struct declaration order. A field can
+belong to multiple keys by repeating `unique=<group>` with different names.
+The declaration does not replace or change the primary key; it tells the query
+compiler that non-NULL equality values for the complete group identify at most
+one row. `check.Schema` verifies this correctness contract against an
+unconditional physical primary or unique key and reports `CMP015` when the SQL
+snapshot does not prove it.
+
 Add `auto_random` to the one TiDB `AUTO_RANDOM` primary-key field. It must be
 a non-pointer signed or unsigned integer and must also have `pk`. A single-row
 `orm.Insert` omits the field and assigns `sql.Result.LastInsertId` back to it.
@@ -74,8 +95,8 @@ A bulk insert omits it but cannot populate individual generated IDs.
 
 Use `computed` for a field populated only by an aliased raw-query result, such
 as `COUNT(*) AS order_count`. Computed fields are excluded from base-table
-SELECT, INSERT, and UPDATE statements and cannot be used as primary keys,
-predicates, ordering fields, or relation keys.
+SELECT, INSERT, and UPDATE statements and cannot be used as primary or
+candidate unique keys, predicates, ordering fields, or relation keys.
 
 Use `soft_delete` on at most one `time.Time` or `*time.Time` field when a
 nullable deletion timestamp controls logical deletion:
@@ -152,6 +173,8 @@ existing row on the other side. `go-tidb` does not create, inspect, or enforce
 physical foreign keys at runtime. Preloads and relation predicates naturally
 ignore unreachable rows, and the relation-first TopN query optimization can
 apply Limit before the root join, so orphan target rows can underfill a page.
+An eligible relation-only Count intentionally omits that root join, so an
+orphan target or junction row can overcount when the contract is violated.
 Use physical constraints or application write rules to maintain the contract.
 
 Relation fields do not perform I/O or lazy loading, and assigning a field does
@@ -176,6 +199,7 @@ for _, field := range metadata.Fields() {
 
 fmt.Println(metadata.TableName())
 primaryKey := metadata.PrimaryKeyFields()
+uniqueKeys := metadata.UniqueKeys()
 softDeleteField, hasSoftDelete := metadata.SoftDeleteField()
 
 for _, relation := range metadata.Relations() {

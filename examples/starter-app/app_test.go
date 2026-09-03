@@ -1,6 +1,7 @@
 package starterapp
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,7 +61,12 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 	if !exists || clipGenres.Kind() != model.RelationHasMany || !reflect.DeepEqual(columnsFromFields(clipGenres.TargetKey()), []string{"clip_id"}) {
 		t.Fatalf("Clip.ClipGenres metadata = %#v, exists = %t", clipGenres, exists)
 	}
-	requireDescription[ClipGenre](t, "clip_genres", []string{"clip_id", "genre_id"})
+	clipGenre := requireDescription[ClipGenre](t, "clip_genres", []string{"id"})
+	uniqueKeys := clipGenre.UniqueKeys()
+	if len(uniqueKeys) != 1 || uniqueKeys[0].Name() != "clip_genre" ||
+		!reflect.DeepEqual(columnsFromFields(uniqueKeys[0].Fields()), []string{"clip_id", "genre_id"}) {
+		t.Fatalf("ClipGenre unique keys = %#v", uniqueKeys)
+	}
 	video := requireDescription[Video](t, "videos", []string{"id"})
 	deletedAt, exists := video.SoftDeleteField()
 	if !exists || deletedAt.GoName() != "DeletedAt" || !deletedAt.IsSoftDelete() {
@@ -130,6 +136,35 @@ CREATE TABLE user_roles (
 	}
 }
 
+func TestPublishedSchemaSnapshotMatchesApplicationModels(t *testing.T) {
+	t.Parallel()
+
+	schemaSQL, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatalf("os.ReadFile(schema.sql) error = %v", err)
+	}
+	catalog, err := physicalschema.Parse(string(schemaSQL))
+	if err != nil {
+		t.Fatalf("schema.Parse(schema.sql) error = %v", err)
+	}
+	checks := [][]check.Diagnostic{
+		check.Schema[User](catalog),
+		check.Schema[Order](catalog),
+		check.Schema[Role](catalog),
+		check.Schema[UserRole](catalog),
+		check.Schema[Clip](catalog),
+		check.Schema[ClipGenre](catalog),
+		check.Schema[JobLease](catalog),
+		check.Schema[Video](catalog),
+		check.Schema[WatchLater](catalog),
+	}
+	for index, diagnostics := range checks {
+		if len(diagnostics) != 0 {
+			t.Fatalf("schema check %d = %#v, want no diagnostics", index, diagnostics)
+		}
+	}
+}
+
 func TestApplicationRelationsUseOrdinaryGoValues(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +228,7 @@ func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRecentClipsInGenreQuery() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title` FROM (SELECT `tidbgo_a0`.`clip_id` FROM `clip_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`clip_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `clips` AS `tidbgo_t0` ON (`tidbgo_k0`.`clip_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`title` FROM (SELECT `tidbgo_a0`.`clip_id` FROM `clip_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`clip_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `clips` AS `tidbgo_t0` ON (`tidbgo_k0`.`clip_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -409,6 +444,22 @@ func TestApplicationBuildsRelationPredicateOffline(t *testing.T) {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
 	if got, want := arguments, []any{"admin"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplicationBuildsManyToManyRelationFirstTopNOffline(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := BuildRecentUsersWithRoleQuery(11)
+	if err != nil {
+		t.Fatalf("BuildRecentUsersWithRoleQuery() error = %v", err)
+	}
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`email` FROM (SELECT `tidbgo_a0`.`user_id` FROM `user_roles` AS `tidbgo_a0` WHERE `tidbgo_a0`.`role_id` = ? ORDER BY `tidbgo_a0`.`user_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `users` AS `tidbgo_t0` ON (`tidbgo_k0`.`user_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(11), int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
 }
