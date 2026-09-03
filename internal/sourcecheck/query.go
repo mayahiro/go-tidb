@@ -46,6 +46,7 @@ type sourceFunctionContext struct {
 }
 
 type sourceAnalyzer struct {
+	configuration          analysisConfiguration
 	fileSet                *token.FileSet
 	files                  []*sourceFile
 	models                 map[sourceTypeKey]*sourceModel
@@ -56,11 +57,12 @@ type sourceAnalyzer struct {
 	analysis               Analysis
 }
 
-func newSourceAnalyzer(fileSet *token.FileSet, files []*sourceFile) *sourceAnalyzer {
+func newSourceAnalyzer(fileSet *token.FileSet, files []*sourceFile, configuration analysisConfiguration) *sourceAnalyzer {
 	analyzer := &sourceAnalyzer{
+		configuration:  configuration,
 		fileSet:        fileSet,
 		files:          files,
-		models:         indexSourceModels(files),
+		models:         indexSourceModels(files, configuration.schemaEnabled),
 		queryFunctions: make(map[sourceFunctionKey]*sourceQueryFunction),
 		functionCache:  make(map[sourceFunctionKey]sourceQuerySummary),
 		seenModels:     make(map[sourceTypeKey]struct{}),
@@ -556,7 +558,7 @@ func (analyzer *sourceAnalyzer) summarizeQueryExpression(
 		return analyzer.summarizeBuilderObject(context, current, before, functionStack, objectStack)
 	case *ast.CallExpr:
 		if model, ok := sourceQueryFactoryModel(context.file, current); ok {
-			return newSourceQuerySummary(model)
+			return newSourceQuerySummary(model, analyzer.configuration.schemaEnabled)
 		}
 		if selector, ok := current.Fun.(*ast.SelectorExpr); ok {
 			summary := analyzer.summarizeQueryExpression(context, selector.X, before, functionStack, objectStack)
@@ -597,8 +599,8 @@ func sourceQueryFactoryModel(file *sourceFile, call *ast.CallExpr) (sourceTypeKe
 	return file.sourceType(modelExpression)
 }
 
-func newSourceQuerySummary(model sourceTypeKey) sourceQuerySummary {
-	return sourceQuerySummary{
+func newSourceQuerySummary(model sourceTypeKey, schemaEnabled bool) sourceQuerySummary {
+	result := sourceQuerySummary{
 		recognized: true,
 		model:      model,
 		projection: queryProjectionDefault,
@@ -609,6 +611,14 @@ func newSourceQuerySummary(model sourceTypeKey) sourceQuerySummary {
 			predicatesKnown: true,
 		},
 	}
+	if schemaEnabled {
+		result.pattern.index = &sourceIndexPattern{
+			orderTermsKnown:      true,
+			indexPredicatesKnown: true,
+			withDeleted:          sourceToggleAbsent,
+		}
+	}
+	return result
 }
 
 func (analyzer *sourceAnalyzer) applySourceQueryMethod(
@@ -635,11 +645,31 @@ func (analyzer *sourceAnalyzer) applySourceQueryMethod(
 	case "Offset":
 		summary.pattern.offset = sourceBoundFromCall(call, selector.Sel.Pos())
 	case "OrderBy":
-		summary.pattern.order = applySourceOrderCall(summary.pattern.order, call)
+		if analyzer.configuration.schemaEnabled {
+			summary.pattern = analyzer.applySourceOrderCall(context, summary.pattern, call, before)
+		} else {
+			summary.pattern.order = applySourceOrderPresence(summary.pattern.order, call)
+		}
 	case "Where":
-		wildcards, known := analyzer.sourceWherePredicates(context, call, before)
-		summary.pattern.wildcards = appendSourceWildcards(summary.pattern.wildcards, wildcards)
-		summary.pattern.predicatesKnown = summary.pattern.predicatesKnown && known
+		predicates := analyzer.sourceWherePredicates(context, call, before)
+		summary.pattern.wildcards = appendSourceWildcards(summary.pattern.wildcards, predicates.wildcards)
+		summary.pattern.predicatesKnown = summary.pattern.predicatesKnown && predicates.known
+		if summary.pattern.index != nil {
+			index := summary.pattern.index
+			index.equalityFields = append(index.equalityFields, predicates.equalityFields...)
+			index.indexPredicatesKnown = index.indexPredicatesKnown && predicates.indexExact
+			summary.pattern.index = index
+		}
+	case "WithDeleted":
+		if summary.pattern.index != nil {
+			index := summary.pattern.index
+			if len(call.Args) == 0 && !call.Ellipsis.IsValid() {
+				index.withDeleted = sourceTogglePresent
+			} else {
+				index.withDeleted = sourceToggleUnknown
+			}
+			summary.pattern.index = index
+		}
 	}
 	return summary
 }
@@ -650,7 +680,7 @@ func (analyzer *sourceAnalyzer) summarizeQueryFunction(key sourceFunctionKey, st
 		return sourceQuerySummary{}
 	}
 	if cached, exists := analyzer.functionCache[key]; exists {
-		return cached
+		return cloneSourceQuerySummaryIndex(cached)
 	}
 	if stack == nil {
 		stack = make(map[sourceFunctionKey]bool)
@@ -697,7 +727,12 @@ func (analyzer *sourceAnalyzer) summarizeQueryFunction(key sourceFunctionKey, st
 		}
 	}
 	analyzer.functionCache[key] = result
-	return result
+	return cloneSourceQuerySummaryIndex(result)
+}
+
+func cloneSourceQuerySummaryIndex(summary sourceQuerySummary) sourceQuerySummary {
+	summary.pattern.index = cloneSourceIndexPattern(summary.pattern.index)
+	return summary
 }
 
 func mergeSourceQuerySummaries(left, right sourceQuerySummary, model sourceTypeKey) sourceQuerySummary {
@@ -758,28 +793,43 @@ func (analyzer *sourceAnalyzer) summarizeBuilderObject(
 		return result
 	}
 
-	selectCall, preloadCall, limitCall, offsetCall, orderCall, whereCall, safe := sourceBuilderCalls(context, object, before, identifier.Pos())
-	if !safe {
+	calls := sourceBuilderCalls(context, object, before, identifier.Pos())
+	if !calls.safe {
 		result.projection = queryProjectionUnknown
 		result.pattern = sourceQueryPattern{}
 	}
-	if selectCall && result.projection == queryProjectionDefault {
+	if calls.selectCall && result.projection == queryProjectionDefault {
 		result.projection = queryProjectionUnknown
 	}
-	if preloadCall {
+	if calls.preloadCall {
 		result.preload = true
 	}
-	if limitCall {
+	if calls.limitCall {
 		result.pattern.limit = sourceBound{state: sourceBoundUnknown}
 	}
-	if offsetCall {
+	if calls.offsetCall {
 		result.pattern.offset = sourceBound{state: sourceBoundUnknown}
 	}
-	if orderCall && result.pattern.order != sourceOrderPresent {
-		result.pattern.order = sourceOrderUnknown
+	if calls.orderCall {
+		if result.pattern.order != sourceOrderPresent {
+			result.pattern.order = sourceOrderUnknown
+		}
 	}
-	if whereCall {
+	if calls.whereCall {
 		result.pattern.predicatesKnown = false
+	}
+	if result.pattern.index != nil && (calls.orderCall || calls.whereCall || calls.withDeletedCall) {
+		index := result.pattern.index
+		if calls.orderCall {
+			index.orderTermsKnown = false
+		}
+		if calls.whereCall {
+			index.indexPredicatesKnown = false
+		}
+		if calls.withDeletedCall {
+			index.withDeleted = sourceToggleUnknown
+		}
+		result.pattern.index = index
 	}
 	return result
 }
@@ -852,21 +902,26 @@ func (analyzer *sourceAnalyzer) summarizeBuilderDefinition(
 	return analyzer.summarizeQueryExpression(context, expression, before, functionStack, objectStack)
 }
 
-func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, before, allowed token.Pos) (bool, bool, bool, bool, bool, bool, bool) {
-	selectCall := false
-	preloadCall := false
-	limitCall := false
-	offsetCall := false
-	orderCall := false
-	whereCall := false
-	safe := true
+type sourceBuilderCallSet struct {
+	selectCall      bool
+	preloadCall     bool
+	limitCall       bool
+	offsetCall      bool
+	orderCall       bool
+	whereCall       bool
+	withDeletedCall bool
+	safe            bool
+}
+
+func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, before, allowed token.Pos) sourceBuilderCallSet {
+	result := sourceBuilderCallSet{safe: true}
 	ast.Inspect(context.body, func(node ast.Node) bool {
-		if !safe || node == nil {
-			return safe
+		if !result.safe || node == nil {
+			return result.safe
 		}
 		if literal, nested := node.(*ast.FuncLit); nested {
 			if sourceObjectReferenced(literal.Body, object) {
-				safe = false
+				result.safe = false
 			}
 			return false
 		}
@@ -885,28 +940,30 @@ func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, befor
 		}
 		methods, receiver := sourceReceiverMethods(context.parents, identifier)
 		if !receiver {
-			safe = false
+			result.safe = false
 			return false
 		}
 		for _, method := range methods {
 			switch method {
 			case "Select":
-				selectCall = true
+				result.selectCall = true
 			case "Preload":
-				preloadCall = true
+				result.preloadCall = true
 			case "Limit":
-				limitCall = true
+				result.limitCall = true
 			case "Offset":
-				offsetCall = true
+				result.offsetCall = true
 			case "OrderBy":
-				orderCall = true
+				result.orderCall = true
 			case "Where":
-				whereCall = true
+				result.whereCall = true
+			case "WithDeleted":
+				result.withDeletedCall = true
 			}
 		}
 		return true
 	})
-	return selectCall, preloadCall, limitCall, offsetCall, orderCall, whereCall, safe
+	return result
 }
 
 func sourceObjectReferenced(root ast.Node, object *ast.Object) bool {

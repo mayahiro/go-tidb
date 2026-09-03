@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mayahiro/go-tidb/internal/querycheck"
+	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 func TestAnalyzeInputsReportsNarrowLocalDefaultProjection(t *testing.T) {
@@ -506,6 +507,175 @@ func build() {
 	}
 }
 
+func TestAnalyzeInputsChecksResolvedRootIndexPatternAgainstSchema(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSourceWithOptions(t, `package repository
+
+import (
+	"time"
+	"github.com/mayahiro/go-tidb/model"
+	"github.com/mayahiro/go-tidb/orm"
+)
+
+type ActivityEvent struct {
+	model.Meta `+"`tidbgo:\"table=activity_events\"`"+`
+	ID int64 `+"`tidbgo:\"event_id,pk\"`"+`
+	TenantID int64 `+"`tidbgo:\"tenant_id\"`"+`
+	DeletedAt *time.Time `+"`tidbgo:\"deleted_at,soft_delete\"`"+`
+}
+
+func build() {
+	order := orm.Desc("ID")
+	_, _, _ = orm.Query[ActivityEvent]().
+		Where(orm.And(orm.Equal("TenantID", 7), orm.Equal("TenantID", 7))).
+		OrderBy(order).
+		Limit(20).
+		Build()
+}
+`, WithSchema(parseSourceSchema(t, `CREATE TABLE activity_events (
+  event_id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  deleted_at DATETIME NULL,
+  KEY wrong_index (tenant_id)
+);`)))
+	if got, want := analysis.Statistics.IndexPatterns, 1; got != want {
+		t.Fatalf("IndexPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedIndexPatterns, 1; got != want {
+		t.Fatalf("AnalyzedIndexPatterns = %d, want %d", got, want)
+	}
+	if got := analysis.Statistics.UncertainIndexPatterns; got != 0 {
+		t.Fatalf("UncertainIndexPatterns = %d, want 0", got)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	diagnostic := analysis.Diagnostics[0]
+	if diagnostic.Location.Path != "query.go" || diagnostic.Location.Line == 0 || diagnostic.Location.Column == 0 {
+		t.Fatalf("diagnostic location = %#v, want Go source location", diagnostic.Location)
+	}
+	joined := diagnostic.Message
+	for _, evidence := range diagnostic.Evidence {
+		joined += "\n" + evidence.Message
+	}
+	for _, want := range []string{"activity_events", "tenant_id, deleted_at, event_id", "Schema table declaration"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostic text = %q, want substring %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "Query fingerprint") {
+		t.Fatalf("source diagnostic must not claim a runtime query fingerprint: %q", joined)
+	}
+}
+
+func TestAnalyzeInputsAcceptsMatchingSourceIndexAndWithDeletedScope(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSourceWithOptions(t, `package repository
+
+import (
+	"time"
+	"github.com/mayahiro/go-tidb/orm"
+)
+
+type ActivityEvent struct {
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	TenantID int64
+	DeletedAt *time.Time `+"`tidbgo:\",soft_delete\"`"+`
+}
+
+func active() {
+	_, _, _ = orm.Query[ActivityEvent]().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+
+func all() {
+	_, _, _ = orm.Query[ActivityEvent]().WithDeleted().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`, WithSchema(parseSourceSchema(t, `CREATE TABLE activity_event (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  deleted_at DATETIME NULL,
+  KEY active_page (deleted_at, tenant_id, id),
+  KEY all_page (tenant_id, id)
+);`)))
+	if got, want := analysis.Statistics.IndexPatterns, 2; got != want {
+		t.Fatalf("IndexPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedIndexPatterns, 2; got != want {
+		t.Fatalf("AnalyzedIndexPatterns = %d, want %d", got, want)
+	}
+	if len(analysis.Diagnostics) != 0 {
+		t.Fatalf("Diagnostics = %#v, want none", analysis.Diagnostics)
+	}
+}
+
+func TestAnalyzeInputsReportsUnavailableSourceIndexSchema(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSourceWithOptions(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64 }
+
+func build() {
+	_, _, _ = orm.Query[User]().OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`, WithSchema(parseSourceSchema(t, `CREATE TABLE other_users (id BIGINT PRIMARY KEY);`)))
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeIndexCheckUnavailable}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	if diagnostic := analysis.Diagnostics[0]; diagnostic.Suppressible || diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, `table "user" is absent`) {
+		t.Fatalf("Diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestAnalyzeInputsCountsUncertainSourceIndexPatternsWithoutGuessing(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSourceWithOptions(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type Order struct { ID int64; UserID int64 }
+type User struct {
+	ID int64
+	TenantID int64
+	Name string
+	Orders []Order `+"`tidbgo:\"has_many,join=ID:UserID\"`"+`
+}
+
+func queries(order orm.OrderTerm) {
+	_, _, _ = orm.Query[User]().Where(orm.HasPrefix("Name", "A")).OrderBy(orm.Desc("ID")).Limit(20).Build()
+	_, _, _ = orm.Query[User]().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Asc("TenantID"), orm.Desc("ID")).Limit(20).Build()
+	_, _, _ = orm.Query[User]().Where(orm.Equal("TenantID", 7)).OrderBy(order).Limit(20).Build()
+	_, _, _ = orm.Query[User]().Where(orm.Has("Orders", orm.Equal("ID", 1))).OrderBy(orm.Desc("ID")).Limit(20).Build()
+	_, _, _ = orm.Query[User]().Where(orm.And(orm.Equal("TenantID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build()
+	query := orm.Query[User]().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Desc("ID")).Limit(20)
+	query.WithDeleted()
+	_, _, _ = query.Build()
+}
+`, WithSchema(parseSourceSchema(t, `CREATE TABLE user (
+  id BIGINT PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  KEY tenant_id_id (tenant_id, id)
+);`)))
+	if got, want := analysis.Statistics.IndexPatterns, 6; got != want {
+		t.Fatalf("IndexPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.UncertainIndexPatterns, 6; got != want {
+		t.Fatalf("UncertainIndexPatterns = %d, want %d", got, want)
+	}
+	if got := analysis.Statistics.AnalyzedIndexPatterns; got != 0 {
+		t.Fatalf("AnalyzedIndexPatterns = %d, want 0", got)
+	}
+	if len(analysis.Diagnostics) != 0 {
+		t.Fatalf("Diagnostics = %#v, want none", analysis.Diagnostics)
+	}
+}
+
 func TestAnalyzePathResolvesModuleLocalModelAndSkipsNonProductionFiles(t *testing.T) {
 	t.Parallel()
 
@@ -541,6 +711,48 @@ func ignoredGenerated() { users, _ := orm.Query[domain.User]().All(ctx, db); _ =
 	}
 	if len(analysis.Diagnostics) != 1 {
 		t.Fatalf("Diagnostics = %#v, want one", analysis.Diagnostics)
+	}
+	if got, want := analysis.Diagnostics[0].Location.Path, "repository/query.go"; got != want {
+		t.Fatalf("Location.Path = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzePathChecksModuleLocalModelAgainstSchema(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeSourceTestFile(t, filepath.Join(directory, "go.mod"), "module example.test/application\n\ngo 1.26\n")
+	writeSourceTestFile(t, filepath.Join(directory, "domain", "user.go"), `package domain
+import "github.com/mayahiro/go-tidb/model"
+type User struct {
+	model.Meta `+"`tidbgo:\"table=user_accounts\"`"+`
+	ID int64 `+"`tidbgo:\"user_id,pk\"`"+`
+	TenantID int64
+}
+`)
+	writeSourceTestFile(t, filepath.Join(directory, "repository", "query.go"), `package repository
+import (
+	"example.test/application/domain"
+	"github.com/mayahiro/go-tidb/orm"
+)
+func build() {
+	_, _, _ = orm.Query[domain.User]().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`)
+	catalog := parseSourceSchema(t, `CREATE TABLE user_accounts (
+  user_id BIGINT PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  KEY tenant_only (tenant_id)
+);`)
+	analysis, err := AnalyzePath(directory, WithSchema(catalog))
+	if err != nil {
+		t.Fatalf("AnalyzePath() error = %v", err)
+	}
+	if got, want := analysis.Statistics.AnalyzedIndexPatterns, 1; got != want {
+		t.Fatalf("AnalyzedIndexPatterns = %d, want %d", got, want)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
 	if got, want := analysis.Diagnostics[0].Location.Path, "repository/query.go"; got != want {
 		t.Fatalf("Location.Path = %q, want %q", got, want)
@@ -584,27 +796,81 @@ func TestAnalyzePathRejectsMissingOrInvalidSource(t *testing.T) {
 	}
 }
 
+func TestAnalyzeInputsKeepsCachedQueryHelperIndexMetadataImmutable(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSourceWithOptions(t, `package repository
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64; TenantID int64; Name string }
+
+func base() *orm.SelectQuery[User] {
+	return orm.Query[User]().Where(orm.Equal("TenantID", 7))
+}
+
+func byID() {
+	_, _, _ = base().OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+
+func byName() {
+	_, _, _ = base().OrderBy(orm.Desc("Name")).Limit(20).Build()
+}
+`, WithSchema(parseSourceSchema(t, `CREATE TABLE user (
+  id BIGINT PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  KEY tenant_id_id (tenant_id, id)
+);`)))
+	if got, want := analysis.Statistics.AnalyzedIndexPatterns, 2; got != want {
+		t.Fatalf("AnalyzedIndexPatterns = %d, want %d", got, want)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	joined := analysis.Diagnostics[0].Message
+	for _, evidence := range analysis.Diagnostics[0].Evidence {
+		joined += "\n" + evidence.Message
+	}
+	if !strings.Contains(joined, "user(tenant_id, name)") || strings.Contains(joined, "tenant_id, id, name") {
+		t.Fatalf("diagnostic text = %q, want isolated helper order", joined)
+	}
+}
+
 func TestFormatStatistics(t *testing.T) {
 	t.Parallel()
 
 	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, QueryPatterns: 6, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2, AnalyzedPatterns: 4, UncertainPatterns: 2}
-	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2"
+	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0"
 	if got := FormatStatistics(statistics); got != want {
 		t.Fatalf("FormatStatistics() = %q, want %q", got, want)
 	}
 }
 
 func analyzeSource(t testing.TB, source string) Analysis {
+	return analyzeSourceWithOptions(t, source)
+}
+
+func analyzeSourceWithOptions(t testing.TB, source string, options ...AnalysisOption) Analysis {
 	t.Helper()
 	analysis, err := analyzeInputs([]sourceInput{{
 		absolutePath: filepath.Join(t.TempDir(), "query.go"),
 		displayPath:  "query.go",
 		source:       []byte(source),
-	}})
+	}}, options...)
 	if err != nil {
 		t.Fatalf("analyzeInputs() error = %v", err)
 	}
 	return analysis
+}
+
+func parseSourceSchema(t testing.TB, source string) *physicalschema.Catalog {
+	t.Helper()
+	catalog, err := physicalschema.Parse(source)
+	if err != nil {
+		t.Fatalf("schema.Parse() error = %v", err)
+	}
+	return catalog
 }
 
 func sourceDiagnosticCodes(analysis Analysis) []string {

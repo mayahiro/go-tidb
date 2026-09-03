@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
 
 type relationPair struct {
@@ -99,7 +101,7 @@ func parseRelationTag(value string, collection bool) (relationDeclaration, error
 			if declaration.through != "" {
 				return relationDeclaration{}, errors.New("through option must not be repeated")
 			}
-			if !validSQLIdentifier(current) {
+			if !modelmeta.ValidSQLIdentifier(current) {
 				return relationDeclaration{}, fmt.Errorf("junction table name %q must be a simple SQL identifier of at most 64 bytes", current)
 			}
 			declaration.through = current
@@ -108,7 +110,7 @@ func parseRelationTag(value string, collection bool) (relationDeclaration, error
 			if err != nil {
 				return relationDeclaration{}, fmt.Errorf("invalid source option: %w", err)
 			}
-			if !validSQLIdentifier(pair.right) {
+			if !modelmeta.ValidSQLIdentifier(pair.right) {
 				return relationDeclaration{}, fmt.Errorf("junction source column %q must be a simple SQL identifier of at most 64 bytes", pair.right)
 			}
 			declaration.sourcePairs = append(declaration.sourcePairs, pair)
@@ -117,7 +119,7 @@ func parseRelationTag(value string, collection bool) (relationDeclaration, error
 			if err != nil {
 				return relationDeclaration{}, fmt.Errorf("invalid target option: %w", err)
 			}
-			if !validSQLIdentifier(pair.left) {
+			if !modelmeta.ValidSQLIdentifier(pair.left) {
 				return relationDeclaration{}, fmt.Errorf("junction target column %q must be a simple SQL identifier of at most 64 bytes", pair.left)
 			}
 			declaration.targetPairs = append(declaration.targetPairs, pair)

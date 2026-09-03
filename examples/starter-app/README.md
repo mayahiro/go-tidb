@@ -24,7 +24,8 @@ It demonstrates the current struct-first foundation:
 - Offline scalar SQL construction with predicates and keyset pagination
 - Executed query-shape and query-to-index diagnostics through RuntimeCapture
   and `tidbgo analyze`, without bind values
-- Offline source query-pattern and projection analysis through `tidbgo lint`
+- Offline source query-pattern, projection, and optional schema-aware root
+  index analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
@@ -66,10 +67,12 @@ Scan the example's production Go source without a database connection:
 
 ```sh
 go run ./cmd/tidbgo lint ./examples/starter-app
+go run ./cmd/tidbgo lint ./examples/starter-app --schema ./examples/starter-app/schema.sql
 ```
 
-The report includes recognized query and uncertainty counts even when no
-projection warning is emitted
+The second command also compares statically resolved ordered positive-LIMIT
+root accesses with the example's TiDB schema snapshot. Both reports include
+recognized query and uncertainty counts even when no diagnostic is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural

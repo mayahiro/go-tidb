@@ -63,9 +63,11 @@ schema-aware形式はbind valueとpagination valueを含まないversion付きqu
 
 `tidbgo lint` もpackage loadなしで関連builder flowを解決できるsource query terminalへ `QRY002` から `QRY004` を適用します
 
+`tidbgo lint --schema schema.sql` はconjunctiveな `Equal` filterと同じ方向のorderだけを持つ解決済みroot ordered positive-limit accessへ `QRY006` と `QRY007` も適用します
+
 RuntimeCaptureで実行されなかったcodeも対象になります
 
-dynamic valueと別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
+dynamic value、Relation predicate、non-equality filter、mixed order、別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
 
 要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
@@ -81,7 +83,7 @@ applicationでstable cursorを保持できる場合は `SeekAfter` を優先し�
 
 schema-aware ruleは1個のindex候補を構造的に決定できる場合だけ適用します
 
-root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcompilerが生成したassociation accessを対象にします
+root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcaptureされたcompiler decisionが生成したassociation accessを対象にします
 
 activeなdefault soft-delete scopeがある場合は、生成される `IS NULL` のcolumnもequality prefixへ含めます
 

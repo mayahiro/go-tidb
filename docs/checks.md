@@ -94,6 +94,7 @@ Run source analysis without compiling or executing the application
 ```sh
 tidbgo lint .
 tidbgo lint . --json
+tidbgo lint . --schema schema.sql
 ```
 
 Source analysis applies `QRY002` through `QRY004` to resolved `Build`, `All`,
@@ -107,15 +108,30 @@ Dynamic `Limit` or `Offset` values, variadic ordering, unresolved predicate
 helpers, separately mutated builders, and captured builders are counted as
 `uncertain_patterns` and are not guessed
 
+With `--schema`, source analysis also derives physical table and column names
+from the same `tidbgo` metadata and default naming rule as the runtime model
+descriptor. It sends only resolved root shapes with a positive explicit
+`Limit`, uniform-direction `OrderBy`, and conjunctive `Equal` filters to the
+same neutral index-prefix checker used by runtime analysis. The default active
+soft-delete column participates in the equality prefix unless `WithDeleted`
+is resolved on the query
+
+`index_patterns` counts ordered positive-limit candidates while
+`analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that
+could and could not be checked. Relation predicates, non-equality filters,
+mixed directions, unknown fields, embedded model shapes, and separately
+mutated builders remain uncertain rather than receiving a speculative index
+diagnostic
+
 `SRC001` proposes a narrower projection only when one function proves the
 complete result use
 Repository returns, aliases, model methods, and unresolved result flows remain
 explicitly uncertain in the separate `analyzed` and `uncertain` projection
 counters
 
-`QRY005` requires the compiler's normalized relation decision, while `QRY006`
-and `QRY007` require physical schema metadata
-They remain runtime-capture analysis rules instead of syntax heuristics
+`QRY005` and relation-first index analysis require the compiler's normalized
+relation decision and therefore remain runtime-capture rules. Source
+`QRY006` and `QRY007` cover only the high-confidence root access above
 
 ## Runtime plan diagnostics
 
@@ -164,8 +180,10 @@ Invalid input returns status `2`, and I/O or internal failures return status
   derived context
 - Source lint applies `QRY002` through `QRY004` only to statically resolved
   builder flows
-- `QRY005` through `QRY007` require captured compiler decisions or a physical
-  schema
+- Source lint with `--schema` applies `QRY006` and `QRY007` only to resolved
+  root ordered-limit accesses
+- `QRY005` and relation-first index analysis require captured compiler
+  decisions
 - `EXPLAIN ANALYZE` executes the SELECT and consumes RU
 - ServerRU collection adds one same-session diagnostic round trip per
   recognized DML statement

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/internal/querycheck"
+	"github.com/mayahiro/go-tidb/internal/queryshape"
 )
 
 type sourceBoundState uint8
@@ -41,12 +42,41 @@ type sourceWildcardPredicate struct {
 	position  token.Pos
 }
 
+type sourceOrderTerm struct {
+	field     string
+	direction queryshape.OrderDirection
+}
+
+type sourceToggleState uint8
+
+const (
+	sourceToggleUnknown sourceToggleState = iota
+	sourceToggleAbsent
+	sourceTogglePresent
+)
+
+type sourcePredicatePattern struct {
+	wildcards      []sourceWildcardPredicate
+	equalityFields []string
+	known          bool
+	indexExact     bool
+}
+
+type sourceIndexPattern struct {
+	orderTerms           []sourceOrderTerm
+	orderTermsKnown      bool
+	equalityFields       []string
+	indexPredicatesKnown bool
+	withDeleted          sourceToggleState
+}
+
 type sourceQueryPattern struct {
 	limit           sourceBound
 	offset          sourceBound
 	order           sourceOrderState
 	wildcards       []sourceWildcardPredicate
 	predicatesKnown bool
+	index           *sourceIndexPattern
 }
 
 type sourceDiagnosticKey struct {
@@ -92,6 +122,9 @@ func (analyzer *sourceAnalyzer) recordQueryPattern(call *ast.CallExpr, summary s
 		diagnostic := querycheck.LeadingWildcardDiagnostic(scope, wildcard.field, wildcard.suffix)
 		diagnostic.Location = analyzer.sourcePatternLocation(wildcard.position, call.Pos())
 		analyzer.appendPatternDiagnostic(diagnostic)
+	}
+	if analyzer.configuration.schemaEnabled {
+		analyzer.recordSchemaIndexPattern(call, summary)
 	}
 }
 
@@ -226,36 +259,117 @@ func sourceConstantExpression(identifier *ast.Ident) (ast.Expr, bool) {
 	return nil, false
 }
 
-func applySourceOrderCall(current sourceOrderState, call *ast.CallExpr) sourceOrderState {
+func (analyzer *sourceAnalyzer) applySourceOrderCall(
+	context sourceFunctionContext,
+	pattern sourceQueryPattern,
+	call *ast.CallExpr,
+	before token.Pos,
+) sourceQueryPattern {
+	if len(call.Args) == 0 {
+		return pattern
+	}
+	index := pattern.index
+	if index == nil {
+		pattern.order = applySourceOrderPresence(pattern.order, call)
+		return pattern
+	}
+	if call.Ellipsis.IsValid() {
+		pattern.order = applySourceOrderPresence(pattern.order, call)
+		index.orderTermsKnown = false
+		return pattern
+	}
+	pattern.order = sourceOrderPresent
+	for _, argument := range call.Args {
+		term, ok := analyzer.sourceOrderExpression(context, argument, before, nil)
+		if !ok {
+			index.orderTermsKnown = false
+			continue
+		}
+		index.orderTerms = append(index.orderTerms, term)
+	}
+	return pattern
+}
+
+func applySourceOrderPresence(current sourceOrderState, call *ast.CallExpr) sourceOrderState {
 	if len(call.Args) == 0 {
 		return current
 	}
-	if call.Ellipsis.IsValid() {
-		if current == sourceOrderPresent {
-			return current
-		}
+	if call.Ellipsis.IsValid() && current != sourceOrderPresent {
 		return sourceOrderUnknown
 	}
 	return sourceOrderPresent
+}
+
+func (analyzer *sourceAnalyzer) sourceOrderExpression(
+	context sourceFunctionContext,
+	expression ast.Expr,
+	before token.Pos,
+	visiting map[*ast.Object]bool,
+) (sourceOrderTerm, bool) {
+	switch current := expression.(type) {
+	case *ast.ParenExpr:
+		return analyzer.sourceOrderExpression(context, current.X, before, visiting)
+	case *ast.Ident:
+		if current.Obj == nil || visiting[current.Obj] {
+			return sourceOrderTerm{}, false
+		}
+		definitions := sourceBuilderDefinitions(context.body, current.Obj, before)
+		if len(definitions) != 1 {
+			return sourceOrderTerm{}, false
+		}
+		if visiting == nil {
+			visiting = make(map[*ast.Object]bool)
+		}
+		visiting[current.Obj] = true
+		result, ok := analyzer.sourceOrderExpression(context, definitions[0].expr, definitions[0].position, visiting)
+		delete(visiting, current.Obj)
+		return result, ok
+	case *ast.CallExpr:
+		selector, ok := current.Fun.(*ast.SelectorExpr)
+		if !ok || len(current.Args) != 1 || current.Ellipsis.IsValid() {
+			return sourceOrderTerm{}, false
+		}
+		identifier, ok := selector.X.(*ast.Ident)
+		if !ok || identifier.Obj != nil || context.file.ormAlias == "" || identifier.Name != context.file.ormAlias {
+			return sourceOrderTerm{}, false
+		}
+		field, ok := sourceStringConstant(current.Args[0], nil)
+		if !ok {
+			return sourceOrderTerm{}, false
+		}
+		direction := queryshape.OrderAscending
+		switch selector.Sel.Name {
+		case "Asc":
+		case "Desc":
+			direction = queryshape.OrderDescending
+		default:
+			return sourceOrderTerm{}, false
+		}
+		return sourceOrderTerm{field: field, direction: direction}, true
+	default:
+		return sourceOrderTerm{}, false
+	}
 }
 
 func (analyzer *sourceAnalyzer) sourceWherePredicates(
 	context sourceFunctionContext,
 	call *ast.CallExpr,
 	before token.Pos,
-) ([]sourceWildcardPredicate, bool) {
-	var wildcards []sourceWildcardPredicate
-	known := true
+) sourcePredicatePattern {
+	result := sourcePredicatePattern{known: true, indexExact: true}
 	for index, argument := range call.Args {
 		if call.Ellipsis.IsValid() && index == len(call.Args)-1 {
-			known = false
+			result.known = false
+			result.indexExact = false
 			continue
 		}
 		current, resolved := analyzer.sourcePredicateExpression(context, argument, before, nil, nil)
-		wildcards = appendSourceWildcards(wildcards, current)
-		known = known && resolved
+		result.wildcards = appendSourceWildcards(result.wildcards, current.wildcards)
+		result.equalityFields = append(result.equalityFields, current.equalityFields...)
+		result.known = result.known && resolved && current.known
+		result.indexExact = result.indexExact && current.indexExact
 	}
-	return wildcards, known
+	return result
 }
 
 func (analyzer *sourceAnalyzer) sourcePredicateExpression(
@@ -264,17 +378,17 @@ func (analyzer *sourceAnalyzer) sourcePredicateExpression(
 	before token.Pos,
 	relations []string,
 	visiting map[*ast.Object]bool,
-) ([]sourceWildcardPredicate, bool) {
+) (sourcePredicatePattern, bool) {
 	switch current := expression.(type) {
 	case *ast.ParenExpr:
 		return analyzer.sourcePredicateExpression(context, current.X, before, relations, visiting)
 	case *ast.Ident:
 		if current.Obj == nil || visiting[current.Obj] {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		definitions := sourceBuilderDefinitions(context.body, current.Obj, before)
 		if len(definitions) != 1 {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		if visiting == nil {
 			visiting = make(map[*ast.Object]bool)
@@ -286,15 +400,15 @@ func (analyzer *sourceAnalyzer) sourcePredicateExpression(
 	case *ast.CallExpr:
 		selector, ok := current.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		identifier, ok := selector.X.(*ast.Ident)
 		if !ok || identifier.Obj != nil || context.file.ormAlias == "" || identifier.Name != context.file.ormAlias {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		return analyzer.sourcePredicateCall(context, current, selector.Sel.Name, before, relations, visiting)
 	default:
-		return nil, false
+		return sourcePredicatePattern{}, false
 	}
 }
 
@@ -305,37 +419,61 @@ func (analyzer *sourceAnalyzer) sourcePredicateCall(
 	before token.Pos,
 	relations []string,
 	visiting map[*ast.Object]bool,
-) ([]sourceWildcardPredicate, bool) {
+) (sourcePredicatePattern, bool) {
 	switch constructor {
 	case "Contains", "HasSuffix":
 		if len(call.Args) != 2 || call.Ellipsis.IsValid() {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		field := "<dynamic>"
 		if resolved, ok := sourceStringConstant(call.Args[0], nil); ok {
 			field = resolved
 		}
-		return []sourceWildcardPredicate{{
-			relations: append([]string(nil), relations...),
-			field:     field,
-			suffix:    constructor == "HasSuffix",
-			position:  call.Pos(),
-		}}, true
-	case "Equal", "NotEqual", "GreaterThan", "GreaterThanOrEqual", "LessThan", "LessThanOrEqual", "In", "NotIn", "IsNull", "IsNotNull", "Between", "HasPrefix":
-		return nil, true
-	case "And", "Or", "Not":
+		return sourcePredicatePattern{
+			wildcards: []sourceWildcardPredicate{{
+				relations: append([]string(nil), relations...),
+				field:     field,
+				suffix:    constructor == "HasSuffix",
+				position:  call.Pos(),
+			}},
+			known: true,
+		}, true
+	case "Equal":
+		if len(call.Args) != 2 || call.Ellipsis.IsValid() {
+			return sourcePredicatePattern{}, false
+		}
+		if !analyzer.configuration.schemaEnabled {
+			return sourcePredicatePattern{known: true}, true
+		}
+		field, ok := sourceStringConstant(call.Args[0], nil)
+		if !ok || len(relations) != 0 {
+			return sourcePredicatePattern{known: true}, true
+		}
+		return sourcePredicatePattern{equalityFields: []string{field}, known: true, indexExact: true}, true
+	case "NotEqual", "GreaterThan", "GreaterThanOrEqual", "LessThan", "LessThanOrEqual", "In", "NotIn", "IsNull", "IsNotNull", "Between", "HasPrefix":
+		return sourcePredicatePattern{known: true}, true
+	case "And":
+		if len(call.Args) < 2 || call.Ellipsis.IsValid() {
+			return sourcePredicatePattern{}, false
+		}
 		return analyzer.sourcePredicateArguments(context, call, before, relations, visiting, 0)
+	case "Or", "Not":
+		result, ok := analyzer.sourcePredicateArguments(context, call, before, relations, visiting, 0)
+		result.indexExact = false
+		return result, ok
 	case "Has":
 		if len(call.Args) == 0 {
-			return nil, false
+			return sourcePredicatePattern{}, false
 		}
 		relation := "<dynamic>"
 		if resolved, ok := sourceStringConstant(call.Args[0], nil); ok {
 			relation = resolved
 		}
-		return analyzer.sourcePredicateArguments(context, call, before, append(relations, relation), visiting, 1)
+		result, ok := analyzer.sourcePredicateArguments(context, call, before, append(relations, relation), visiting, 1)
+		result.indexExact = false
+		return result, ok
 	default:
-		return nil, false
+		return sourcePredicatePattern{}, false
 	}
 }
 
@@ -346,19 +484,21 @@ func (analyzer *sourceAnalyzer) sourcePredicateArguments(
 	relations []string,
 	visiting map[*ast.Object]bool,
 	first int,
-) ([]sourceWildcardPredicate, bool) {
-	var wildcards []sourceWildcardPredicate
-	known := true
+) (sourcePredicatePattern, bool) {
+	result := sourcePredicatePattern{known: true, indexExact: true}
 	for index := first; index < len(call.Args); index++ {
 		if call.Ellipsis.IsValid() && index == len(call.Args)-1 {
-			known = false
+			result.known = false
+			result.indexExact = false
 			continue
 		}
 		current, resolved := analyzer.sourcePredicateExpression(context, call.Args[index], before, relations, visiting)
-		wildcards = appendSourceWildcards(wildcards, current)
-		known = known && resolved
+		result.wildcards = appendSourceWildcards(result.wildcards, current.wildcards)
+		result.equalityFields = append(result.equalityFields, current.equalityFields...)
+		result.known = result.known && resolved && current.known
+		result.indexExact = result.indexExact && current.indexExact
 	}
-	return wildcards, known
+	return result, result.known
 }
 
 func sourceStringConstant(expression ast.Expr, visiting map[*ast.Object]bool) (string, bool) {
@@ -415,7 +555,57 @@ func mergeSourceQueryPatterns(left, right sourceQueryPattern) sourceQueryPattern
 		order:           mergeSourceOrder(left.order, right.order),
 		wildcards:       wildcards,
 		predicatesKnown: left.predicatesKnown && right.predicatesKnown && sameWildcards,
+		index:           mergeSourceIndexPatterns(left.index, right.index),
 	}
+}
+
+func cloneSourceIndexPattern(current *sourceIndexPattern) *sourceIndexPattern {
+	if current == nil {
+		return nil
+	}
+	result := *current
+	result.orderTerms = append([]sourceOrderTerm(nil), current.orderTerms...)
+	result.equalityFields = append([]string(nil), current.equalityFields...)
+	return &result
+}
+
+func mergeSourceIndexPatterns(left, right *sourceIndexPattern) *sourceIndexPattern {
+	if left == nil || right == nil {
+		return nil
+	}
+	equalityFields, sameEqualities := commonSourceStrings(left.equalityFields, right.equalityFields)
+	orderTerms, sameOrderTerms := commonSourceOrderTerms(left.orderTerms, right.orderTerms)
+	return &sourceIndexPattern{
+		orderTerms:           orderTerms,
+		orderTermsKnown:      left.orderTermsKnown && right.orderTermsKnown && sameOrderTerms,
+		equalityFields:       equalityFields,
+		indexPredicatesKnown: left.indexPredicatesKnown && right.indexPredicatesKnown && sameEqualities,
+		withDeleted:          mergeSourceToggle(left.withDeleted, right.withDeleted),
+	}
+}
+
+func commonSourceStrings(left, right []string) ([]string, bool) {
+	if len(left) != len(right) {
+		return nil, false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return nil, false
+		}
+	}
+	return append([]string(nil), left...), true
+}
+
+func commonSourceOrderTerms(left, right []sourceOrderTerm) ([]sourceOrderTerm, bool) {
+	if len(left) != len(right) {
+		return nil, false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return nil, false
+		}
+	}
+	return append([]sourceOrderTerm(nil), left...), true
 }
 
 func commonSourceWildcards(left, right []sourceWildcardPredicate) ([]sourceWildcardPredicate, bool) {
@@ -473,4 +663,11 @@ func mergeSourceOrder(left, right sourceOrderState) sourceOrderState {
 		return left
 	}
 	return sourceOrderUnknown
+}
+
+func mergeSourceToggle(left, right sourceToggleState) sourceToggleState {
+	if left == right {
+		return left
+	}
+	return sourceToggleUnknown
 }

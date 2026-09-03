@@ -18,6 +18,7 @@ import (
 const (
 	lintInputID    = "path"
 	lintJSONID     = "lint-json"
+	lintSchemaID   = "lint-schema"
 	lintSuppressID = "lint-suppress"
 )
 
@@ -29,6 +30,12 @@ func lintCommand() *cli.Command {
 			cli.Flag(lintJSONID).
 				Long("json").
 				Help("Write the source analysis as JSON"),
+		).
+		Option(
+			cli.ValueOption(lintSchemaID).
+				Long("schema").
+				Parser(cli.StringParser()).
+				Help("Check resolved source query index shapes against a TiDB SQL schema snapshot"),
 		).
 		Option(
 			cli.ValueOption(lintSuppressID).
@@ -46,6 +53,10 @@ func lintCommand() *cli.Command {
 }
 
 func runLint(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
+	options, diagnostic := lintOptions(context, invocation)
+	if diagnostic != nil {
+		return cli.Outcome{}, diagnostic
+	}
 	input, present := cli.ValueAs[string](invocation, lintInputID)
 	if !present {
 		input = "."
@@ -55,7 +66,7 @@ func runLint(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, err
 		path = filepath.Join(context.CurrentDirectory(), path)
 	}
 
-	analysis, err := sourcecheck.AnalyzePath(path)
+	analysis, err := sourcecheck.AnalyzePath(path, options...)
 	if err != nil {
 		return cli.Outcome{}, lintInputDiagnostic(input, err)
 	}
@@ -78,6 +89,14 @@ func runLint(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, err
 		return cli.NewOutcome(exitDiagnosticFailure), nil
 	}
 	return cli.Success(), nil
+}
+
+func lintOptions(context *cli.Context, invocation *cli.Invocation) ([]sourcecheck.AnalysisOption, *cli.Diagnostic) {
+	catalog, present, diagnostic := schemaFromOption(context, invocation, lintSchemaID)
+	if diagnostic != nil || !present {
+		return nil, diagnostic
+	}
+	return []sourcecheck.AnalysisOption{sourcecheck.WithSchema(catalog)}, nil
 }
 
 func lintInputDiagnostic(input string, err error) *cli.Diagnostic {

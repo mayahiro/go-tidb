@@ -13,7 +13,6 @@ import (
 	"github.com/mayahiro/go-tidb/check"
 	"github.com/mayahiro/go-tidb/internal/diagnosticreport"
 	"github.com/mayahiro/go-tidb/internal/runtimecapture"
-	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
 const (
@@ -153,25 +152,9 @@ func analyzeBaseline(context *cli.Context, invocation *cli.Invocation) (*runtime
 }
 
 func analyzeOptions(context *cli.Context, invocation *cli.Invocation) ([]runtimecapture.AnalysisOption, *cli.Diagnostic) {
-	input, present := cli.ValueAs[string](invocation, analyzeSchemaID)
-	if !present {
-		return nil, nil
-	}
-	path := input
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(context.CurrentDirectory(), path)
-	}
-	schemaSQL, err := os.ReadFile(path)
-	if err != nil {
-		return nil, cli.NewDiagnostic(
-			cli.CodeIOError,
-			fmt.Sprintf("read schema snapshot %q: %s", input, inputOpenErrorReason(err)),
-		).WithTarget(cli.OptionTarget(analyzeSchemaID))
-	}
-	catalog, err := physicalschema.Parse(string(schemaSQL))
-	if err != nil {
-		return nil, cli.NewDiagnostic(cli.CodeInvalidValue, "parse schema snapshot: "+err.Error()).
-			WithTarget(cli.OptionTarget(analyzeSchemaID))
+	catalog, present, diagnostic := schemaFromOption(context, invocation, analyzeSchemaID)
+	if diagnostic != nil || !present {
+		return nil, diagnostic
 	}
 	return []runtimecapture.AnalysisOption{runtimecapture.WithSchema(catalog)}, nil
 }

@@ -61,9 +61,13 @@ without including bind or pagination values.
 
 `tidbgo lint` also applies `QRY002` through `QRY004` to source query terminals
 whose relevant builder flow can be resolved without package loading
+`tidbgo lint --schema schema.sql` additionally applies `QRY006` and `QRY007`
+to resolved root ordered positive-limit accesses using only conjunctive
+`Equal` filters and one uniform ordering direction
 This covers code that was not exercised during RuntimeCapture
-Dynamic values and separately mutated builders remain visible in source
-coverage statistics instead of being guessed
+Dynamic values, relation predicates, non-equality filters, mixed ordering, and
+separately mutated builders remain visible in source coverage statistics
+instead of being guessed
 
 `QRY006` is not suppressible because the requested schema-aware check cannot
 be completed. The other diagnostics describe valid query shapes and set
@@ -80,8 +84,8 @@ matching behavior is defined by TiDB's
 The schema-aware rule applies only when one index candidate is structurally
 clear: a positive `Limit`, a uniform-direction `OrderBy`, and only
 conjunctive `Equal` filters for a root access, or the association access
-produced by relation-first TopN. An active default soft-delete scope contributes
-its generated `IS NULL` column to the equality prefix. Equality columns can
+produced by captured relation-first TopN. An active default soft-delete scope
+contributes its generated `IS NULL` column to the equality prefix. Equality columns can
 occupy the leading prefix in any order and must be followed by the ordered
 columns. An expression or prefix-length index does not prove this coverage. A
 simple unique key fully constrained by the equality filters also satisfies the

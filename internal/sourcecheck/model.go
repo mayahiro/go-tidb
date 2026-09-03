@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
 
 type sourceTypeKey struct {
@@ -16,10 +18,18 @@ type sourceModel struct {
 	name      string
 	fields    []string
 	fieldSet  map[string]struct{}
+	physical  *sourcePhysicalModel
 	ambiguous bool
 }
 
-func indexSourceModels(files []*sourceFile) map[sourceTypeKey]*sourceModel {
+type sourcePhysicalModel struct {
+	table            string
+	columns          map[string]string
+	softDeleteColumn string
+	ambiguous        bool
+}
+
+func indexSourceModels(files []*sourceFile, physical bool) map[sourceTypeKey]*sourceModel {
 	models := make(map[sourceTypeKey]*sourceModel)
 	for _, file := range files {
 		for _, declaration := range file.file.Decls {
@@ -37,93 +47,183 @@ func indexSourceModels(files []*sourceFile) map[sourceTypeKey]*sourceModel {
 					continue
 				}
 				key := sourceTypeKey{packagePath: file.packageKey, name: typeSpecification.Name.Name}
-				models[key] = describeSourceModel(file, key, structure)
+				models[key] = describeSourceModel(file, key, structure, physical)
 			}
 		}
 	}
 	return models
 }
 
-func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.StructType) *sourceModel {
+func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.StructType, physical bool) *sourceModel {
 	result := &sourceModel{
 		name:     key.name,
 		fields:   make([]string, 0, len(structure.Fields.List)),
 		fieldSet: make(map[string]struct{}, len(structure.Fields.List)),
 	}
+	var columnSet map[string]struct{}
+	if physical {
+		result.physical = &sourcePhysicalModel{
+			table:   modelmeta.SnakeCase(key.name),
+			columns: make(map[string]string, len(structure.Fields.List)),
+		}
+		columnSet = make(map[string]struct{}, len(structure.Fields.List))
+	}
+	metaSeen := false
 	for _, field := range structure.Fields.List {
-		if sourceModelMetaField(file, field.Type) {
+		if meta, exact := sourceModelMetaField(file, field); meta {
+			if !physical {
+				continue
+			}
+			if metaSeen || !exact {
+				result.ambiguous = true
+				result.physical.ambiguous = true
+				continue
+			}
+			metaSeen = true
+			tag, present, tagOK := sourceModelTag(field)
+			table, err := modelmeta.ParseTable(tag, present)
+			if !tagOK || err != nil {
+				result.ambiguous = true
+				result.physical.ambiguous = true
+				continue
+			}
+			if table != "" {
+				result.physical.table = table
+			}
 			continue
 		}
-		tag, tagOK := sourceModelTag(field)
+		tag, present, tagOK := sourceModelTag(field)
 		if !tagOK {
 			result.ambiguous = true
-			continue
-		}
-		if tag == "-" {
-			continue
-		}
-		parts := strings.Split(tag, ",")
-		if len(parts) != 0 && sourceRelationKind(parts[0]) {
-			continue
-		}
-		computed := false
-		for _, option := range parts[1:] {
-			if option == "computed" {
-				computed = true
-				break
+			if physical {
+				result.physical.ambiguous = true
 			}
+			continue
 		}
-		if computed {
+		ignored, err := modelmeta.ParseIgnore(tag, present)
+		if err != nil {
+			result.ambiguous = true
+			if physical {
+				result.physical.ambiguous = true
+			}
+			continue
+		}
+		if ignored {
+			continue
+		}
+		first, _, _ := strings.Cut(tag, ",")
+		if sourceRelationKind(first) {
 			continue
 		}
 		if len(field.Names) == 0 {
 			result.ambiguous = true
+			if physical {
+				result.physical.ambiguous = true
+			}
 			continue
 		}
 		if !sourceScalarShape(field.Type) {
 			result.ambiguous = true
+			if physical {
+				result.physical.ambiguous = true
+			}
 			continue
 		}
 		for _, name := range field.Names {
 			if !ast.IsExported(name.Name) {
 				continue
 			}
+			var options modelmeta.FieldTag
+			if physical || present && tag != "" {
+				var err error
+				options, err = modelmeta.ParseField(name.Name, tag, present)
+				if err != nil {
+					result.ambiguous = true
+					if physical {
+						result.physical.ambiguous = true
+					}
+					continue
+				}
+			}
+			if options.Computed {
+				continue
+			}
 			if _, exists := result.fieldSet[name.Name]; exists {
 				result.ambiguous = true
+				if physical {
+					result.physical.ambiguous = true
+				}
+				continue
+			}
+			if !physical {
+				result.fieldSet[name.Name] = struct{}{}
+				result.fields = append(result.fields, name.Name)
+				continue
+			}
+			column := options.Column
+			if !modelmeta.ValidSQLIdentifier(column) {
+				result.ambiguous = true
+				result.physical.ambiguous = true
+				continue
+			}
+			if _, exists := columnSet[column]; exists {
+				result.ambiguous = true
+				result.physical.ambiguous = true
 				continue
 			}
 			result.fieldSet[name.Name] = struct{}{}
 			result.fields = append(result.fields, name.Name)
+			result.physical.columns[name.Name] = column
+			columnSet[column] = struct{}{}
+			if options.SoftDelete {
+				if result.physical.softDeleteColumn != "" {
+					result.ambiguous = true
+					result.physical.ambiguous = true
+					continue
+				}
+				result.physical.softDeleteColumn = column
+			}
 		}
+	}
+	if physical && !modelmeta.ValidSQLIdentifier(result.physical.table) {
+		result.ambiguous = true
+		result.physical.ambiguous = true
 	}
 	return result
 }
 
-func sourceModelMetaField(file *sourceFile, expression ast.Expr) bool {
+func sourceModelMetaField(file *sourceFile, field *ast.Field) (bool, bool) {
+	expression := field.Type
+	pointer := false
 	for {
-		pointer, ok := expression.(*ast.StarExpr)
+		current, ok := expression.(*ast.StarExpr)
 		if !ok {
 			break
 		}
-		expression = pointer.X
+		pointer = true
+		expression = current.X
 	}
 	selector, ok := expression.(*ast.SelectorExpr)
 	if !ok || selector.Sel.Name != "Meta" {
-		return false
+		return false, false
 	}
 	identifier, ok := selector.X.(*ast.Ident)
-	return ok && identifier.Name == file.modelAlias && file.modelAlias != ""
+	if !ok || identifier.Name != file.modelAlias || file.modelAlias == "" {
+		return false, false
+	}
+	return true, !pointer && len(field.Names) == 0
 }
 
-func sourceModelTag(field *ast.Field) (string, bool) {
+func sourceModelTag(field *ast.Field) (string, bool, bool) {
 	if field.Tag == nil {
-		return "", true
+		return "", false, true
 	}
 	value, err := strconv.Unquote(field.Tag.Value)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
-	return reflect.StructTag(value).Get("tidbgo"), true
+	tag, present := reflect.StructTag(value).Lookup("tidbgo")
+	return tag, present, true
 }
 
 func sourceRelationKind(value string) bool {

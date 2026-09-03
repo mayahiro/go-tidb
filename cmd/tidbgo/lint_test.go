@@ -77,6 +77,115 @@ func build() {
 	}
 }
 
+func TestApplicationLintChecksResolvedIndexPatternAgainstSchema(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeLintFile(t, filepath.Join(directory, "repository.go"), `package application
+
+import (
+	"github.com/mayahiro/go-tidb/model"
+	"github.com/mayahiro/go-tidb/orm"
+)
+
+type User struct {
+	model.Meta `+"`tidbgo:\"table=users\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	TenantID int64
+}
+
+func build() {
+	_, _, _ = orm.Query[User]().Where(orm.Equal("TenantID", 7)).OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`)
+	writeLintFile(t, filepath.Join(directory, "schema.sql"), `CREATE TABLE users (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  KEY tenant_only (tenant_id)
+);`)
+
+	result := runApplicationAt(t, directory, nil, "lint", "--schema", "schema.sql")
+	if got, want := result.Status(), cli.StatusSuccess; got != want {
+		t.Fatalf("status = %d, want %d, stderr = %q", got, want, result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	for _, want := range []string{
+		"WARNING[QRY007] Ordered limited access has no matching index prefix",
+		"Candidate index prefix: users(tenant_id, id)",
+		"at: repository.go:",
+		"index_patterns=1 analyzed_index_patterns=1 uncertain_index_patterns=0",
+		"summary: errors=0 warnings=1 info=0 suppressed=0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "Query fingerprint") {
+		t.Fatalf("stdout = %q, must not claim a runtime fingerprint", stdout)
+	}
+}
+
+func TestApplicationLintFailsWhenSchemaCannotDescribeResolvedIndexPattern(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeLintFile(t, filepath.Join(directory, "repository.go"), `package application
+
+import "github.com/mayahiro/go-tidb/orm"
+
+type User struct { ID int64 }
+
+func build() {
+	_, _, _ = orm.Query[User]().OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`)
+	writeLintFile(t, filepath.Join(directory, "schema.sql"), `CREATE TABLE other_users (id BIGINT PRIMARY KEY);`)
+
+	result := runApplicationAt(t, directory, nil, "lint", "--schema", "schema.sql")
+	if got, want := result.Status(), exitDiagnosticFailure; got != want {
+		t.Fatalf("status = %d, want %d, stdout = %q, stderr = %q", got, want, result.Stdout(), result.Stderr())
+	}
+	stdout := string(result.Stdout())
+	if !strings.Contains(stdout, "ERROR[QRY006] Query index check is unavailable") || !strings.Contains(stdout, `table \"user\" is absent`) {
+		t.Fatalf("stdout = %q, want QRY006", stdout)
+	}
+}
+
+func TestApplicationLintRejectsInvalidSchemaWithoutResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	directory := writeLintFixture(t)
+	writeLintFile(t, filepath.Join(directory, "schema.sql"), "CREATE TABLE")
+	result := runApplicationAt(t, directory, nil, "lint", "--schema", "schema.sql")
+	if got, want := result.Status(), exitUsage; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if stdout := result.Stdout(); len(stdout) != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	stderr := string(result.Stderr())
+	if !strings.Contains(stderr, "parse schema snapshot") || strings.Contains(stderr, directory) {
+		t.Fatalf("stderr = %q, want parse error without resolved directory", stderr)
+	}
+}
+
+func TestApplicationLintReportsMissingSchemaWithoutResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	directory := writeLintFixture(t)
+	result := runApplicationAt(t, directory, nil, "lint", "--schema", "missing.sql")
+	if got, want := result.Status(), exitInternalError; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if stdout := result.Stdout(); len(stdout) != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	stderr := string(result.Stderr())
+	if !strings.Contains(stderr, `read schema snapshot "missing.sql": file does not exist`) || strings.Contains(stderr, directory) {
+		t.Fatalf("stderr = %q, want supplied path without resolved directory", stderr)
+	}
+}
+
 func TestApplicationLintWritesStructuredJSON(t *testing.T) {
 	t.Parallel()
 

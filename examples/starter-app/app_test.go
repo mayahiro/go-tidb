@@ -1,6 +1,7 @@
 package starterapp
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,6 +128,35 @@ CREATE TABLE user_roles (
 	diagnostics := check.Schema[User](catalog)
 	if len(diagnostics) != 0 {
 		t.Fatalf("check.Schema() = %#v, want no diagnostics", diagnostics)
+	}
+}
+
+func TestPublishedSchemaSnapshotMatchesApplicationModels(t *testing.T) {
+	t.Parallel()
+
+	schemaSQL, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatalf("os.ReadFile(schema.sql) error = %v", err)
+	}
+	catalog, err := physicalschema.Parse(string(schemaSQL))
+	if err != nil {
+		t.Fatalf("schema.Parse(schema.sql) error = %v", err)
+	}
+	checks := [][]check.Diagnostic{
+		check.Schema[User](catalog),
+		check.Schema[Order](catalog),
+		check.Schema[Role](catalog),
+		check.Schema[UserRole](catalog),
+		check.Schema[Clip](catalog),
+		check.Schema[ClipGenre](catalog),
+		check.Schema[JobLease](catalog),
+		check.Schema[Video](catalog),
+		check.Schema[WatchLater](catalog),
+	}
+	for index, diagnostics := range checks {
+		if len(diagnostics) != 0 {
+			t.Fatalf("schema check %d = %#v, want no diagnostics", index, diagnostics)
+		}
 	}
 }
 

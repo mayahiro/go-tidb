@@ -207,6 +207,8 @@ offline schema snapshotを `tidbgo analyze` へ渡すと `QRY006` と `QRY007` �
 
 `tidbgo lint` はapplicationをcompileまたは実行せず、`Build` を含むsource上の解決済みquery terminalへ `QRY002` から `QRY004` を適用します
 
+optionalな `--schema` は高確度なroot ordered-limit shapeへ同じ `QRY006` と `QRY007` のindex ruleを適用します
+
 dynamicな値と別statementで変更されたbuilder flowは明示的にuncertainとします
 
 indexの存在はoptimizerが選ぶplanを予測しないため、`Explain` または `ExplainAnalyze` で確認します
@@ -586,6 +588,7 @@ tidbgo baseline runtime.jsonl > server-ru-baseline.json
 ```sh
 tidbgo lint
 tidbgo lint ./internal/repository --json
+tidbgo lint ./internal/repository --schema schema.sql
 ```
 
 pathを省略するとcurrent directoryを使用します
@@ -596,7 +599,11 @@ application codeの実行、package load、DB接続、source変更は行いま�
 
 `All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
 
-dynamic value、別statementで変更されたbuilder、return、別functionへの引き渡し、alias、preloadなど不確実なflowは推測せず種類別に数え、全reportへcoverage statisticsを含めます
+`--schema` を指定した場合、明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterだけを使う解決済みroot queryを物理index prefixと照合します
+
+index解析ではdynamic value、Relation predicate、range filter、mixed order、別statementで変更されたbuilderをuncertainとします
+
+projection解析ではreturn、別functionへの引き渡し、alias、preloadをuncertainとし、全reportへcoverage statisticsを含めます
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
@@ -630,7 +637,8 @@ command helpは `tidbgo --help` で表示できます
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
-- source lintは関連するbuilder flowを静的に解決できる場合だけ `QRY002` から `QRY004` を適用し、`QRY005` から `QRY007` にはcaptured compiler decisionまたはphysical schemaが引き続き必要
+- source lintは関連するbuilder flowを静的に解決できる場合だけ `QRY002` から `QRY004` を適用し、`--schema` を指定した高確度なroot ordered-limit shapeへ `QRY006` と `QRY007` を適用する
+- source上の `QRY005` とrelation-first index解析にはcaptured compiler decisionが引き続き必要
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License

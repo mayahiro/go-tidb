@@ -206,8 +206,10 @@ Runtime capture applies `QRY002` through `QRY005` automatically to executed
 typed query shapes. Passing an offline schema snapshot to `tidbgo analyze`
 adds `QRY006` and `QRY007` index checks. `tidbgo lint` applies `QRY002` through
 `QRY004` to statically resolved source query terminals, including `Build`,
-without compiling or executing the application. Dynamic and separately
-mutated builder flows remain explicitly uncertain.
+without compiling or executing the application. Its optional `--schema`
+applies the same `QRY006` and `QRY007` index rules to high-confidence root
+ordered-limit shapes. Dynamic and separately mutated builder flows remain
+explicitly uncertain.
 Index presence does not predict the optimizer's selected plan, so verify it
 with `Explain` or `ExplainAnalyze`.
 
@@ -561,6 +563,7 @@ projections that can be proven wider than their local result use:
 ```sh
 tidbgo lint
 tidbgo lint ./internal/repository --json
+tidbgo lint ./internal/repository --schema schema.sql
 ```
 
 The optional path defaults to the current directory. The command does not
@@ -568,10 +571,13 @@ execute application code, load packages, connect to a database, or modify
 source. `QRY002` through `QRY004` cover resolved `Offset`, `Limit` plus
 ordering, and leading-wildcard predicates. `SRC001` is emitted only when every
 use of an `All`, `First`, or `Only` result is understood within the same
-function. Dynamic values, separately mutated builders, returned or passed
-results, aliases, preloads, and other unresolved flows are counted separately
-and are not guessed. Every report includes coverage statistics. See the
-[analysis guide](docs/checks.md#go-source-analysis)
+function. With `--schema`, resolved root queries using a positive explicit
+`Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
+checked for a matching physical index prefix. That index check leaves dynamic
+values, relation predicates, range filters, mixed ordering, and separately
+mutated builders uncertain. Projection analysis also leaves returned or passed
+results, aliases, and preloads uncertain. Every report includes coverage
+statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
 
 Print version information with:
 
@@ -614,8 +620,9 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
 - Source lint applies `QRY002` through `QRY004` only when the relevant builder
-  flow is statically resolved. `QRY005` through `QRY007` still require captured
-  compiler decisions or a physical schema.
+  flow is statically resolved. `--schema` adds `QRY006` and `QRY007` for
+  high-confidence root ordered-limit shapes. Source `QRY005` and
+  relation-first index analysis still require a captured compiler decision.
 - No database connection constructor, bundled protocol driver, migration
   application API, or live-schema introspection API is available yet.
 
