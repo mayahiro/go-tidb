@@ -173,6 +173,8 @@ existing row on the other side. `go-tidb` does not create, inspect, or enforce
 physical foreign keys at runtime. Preloads and relation predicates naturally
 ignore unreachable rows, and the relation-first TopN query optimization can
 apply Limit before the root join, so orphan target rows can underfill a page.
+An eligible relation-only Count intentionally omits that root join, so an
+orphan target or junction row can overcount when the contract is violated.
 Use physical constraints or application write rules to maintain the contract.
 
 Relation fields do not perform I/O or lazy loading, and assigning a field does

@@ -1373,16 +1373,38 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 		}
 	}
 
-	count, err := orm.Query[starterTopNVideo]().
-		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
-		Count(ctx, relationTopNConnection)
+	countQuery := orm.Query[starterTopNVideo]().
+		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7))))
+	var countEvent orm.StatementEvent
+	countContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+		countEvent = event
+	})
+	count, err := countQuery.Count(countContext, relationTopNConnection)
 	if err != nil {
-		fatalDatabaseError(t, dsn, "count relation-filtered videos through the semi-join rewrite", err)
+		fatalDatabaseError(t, dsn, "count relation-filtered videos through the relation-only rewrite", err)
 	}
 	if count != 50 {
 		t.Fatalf("relation-filtered video count = %d, want 50", count)
 	}
-	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "relation-filter count")
+	wantCountSQL := "SELECT COUNT(*) FROM `tidbgo_it_topn_video_genres` WHERE `genre_id` = ?"
+	if countEvent.SQL != wantCountSQL || countEvent.Operation != orm.StatementSelect || countEvent.ArgumentCount != 1 || countEvent.Error != nil {
+		t.Fatalf("relation-filter count event = %#v, want relation-only SQL %q", countEvent, wantCountSQL)
+	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "relation-only count")
+	requireRelationOnlyCountPlan(t, ctx, relationTopNConnection, dsn, countEvent.SQL, int64(7))
+
+	var countRUEvent orm.StatementEvent
+	countRUContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+		countRUEvent = event
+	}, orm.CollectServerRU())
+	countWithRU, err := countQuery.Count(countRUContext, relationTopNConnection)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "measure relation-only count ServerRU", err)
+	}
+	if countWithRU != count || countRUEvent.ServerRU == nil || !countRUEvent.ServerRU.Known || countRUEvent.ServerRU.Value <= 0 || countRUEvent.ServerRU.Error != nil {
+		t.Fatalf("relation-only count with ServerRU = (%d, %#v), want count %d and one positive sample", countWithRU, countRUEvent, count)
+	}
+	t.Logf("relation-only count ServerRU=%f", countRUEvent.ServerRU.Value)
 
 	plan, err := query.ExplainAnalyze(ctx, relationTopNConnection)
 	if err != nil {
@@ -1465,6 +1487,47 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	}
 	if !foundManyToManyJunction || !foundManyToManyRU {
 		t.Fatalf("many-to-many relation TopN plan lacks resolved junction or RU data: %#v", manyToManyPlan)
+	}
+}
+
+func requireRelationOnlyCountPlan(t *testing.T, ctx context.Context, connection *sql.Conn, dsn, statement string, arguments ...any) {
+	t.Helper()
+
+	rows, err := connection.QueryContext(ctx, "EXPLAIN "+statement, arguments...)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain relation-only count", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close relation-only count plan: %s", redact.Error(closeErr, dsn))
+		}
+	}()
+	foundAssociation := false
+	foundIndex := false
+	for rows.Next() {
+		var id string
+		var estimatedRows float64
+		var task string
+		var accessObject string
+		var operatorInfo string
+		if scanErr := rows.Scan(&id, &estimatedRows, &task, &accessObject, &operatorInfo); scanErr != nil {
+			fatalDatabaseError(t, dsn, "scan relation-only count plan", scanErr)
+		}
+		if strings.Contains(accessObject, "table:tidbgo_it_topn_videos") {
+			t.Fatalf("relation-only count plan accessed the root table: id=%q access=%q", id, accessObject)
+		}
+		if strings.Contains(accessObject, "table:tidbgo_it_topn_video_genres") {
+			foundAssociation = true
+		}
+		if strings.Contains(accessObject, "index:tidbgo_it_topn_video_genres_genre_video") {
+			foundIndex = true
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		fatalDatabaseError(t, dsn, "iterate relation-only count plan", rowsErr)
+	}
+	if !foundAssociation || !foundIndex {
+		t.Fatalf("relation-only count plan lacks the association covering index")
 	}
 }
 

@@ -265,6 +265,12 @@ orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は�
 
 schema-awareなruntime解析とsource解析はassociation index prefixの不足を `QRY007` で出力します
 
+unpaginatedな `Count` でdirectかつpositiveなcollection `Has` が1件、root predicateとactiveなroot soft-delete scopeがなく、同じ1 row性を証明できる場合はassociation tableを直接数えます
+
+pure many-to-many Countは全target predicateをjunctionのtarget key columnへ移せる場合だけjunctionを直接数え、それ以外のCount shapeはroot `EXISTS` を維持します
+
+このCount変換はrelation-first TopNと同じRelation data integrity contractを前提とします
+
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
 Relation名とtarget field名にはexported Go field名を使い、`Build` はDB接続なしでvalidationとcompileを行います

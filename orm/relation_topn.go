@@ -304,7 +304,7 @@ func relationTopNMetadataFor(source *model.Descriptor, relation model.Relation) 
 func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relation) (*relationTopNMetadata, error) {
 	target, err := model.DescribeType(relation.TargetType())
 	if err != nil {
-		return nil, fmt.Errorf("orm: describe SELECT relation TopN target %s.%s: %w", source.Name(), relation.GoName(), err)
+		return nil, fmt.Errorf("orm: describe SELECT relation target %s.%s: %w", source.Name(), relation.GoName(), err)
 	}
 	sourceKey := relation.SourceKey()
 	targetKey := relation.TargetKey()
@@ -321,12 +321,12 @@ func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relati
 	if relation.Kind() == model.RelationManyToMany {
 		junction, ok := relation.Junction()
 		if !ok {
-			return nil, fmt.Errorf("orm: SELECT relation TopN %s.%s has no junction metadata", source.Name(), relation.GoName())
+			return nil, fmt.Errorf("orm: SELECT relation %s.%s has no junction metadata", source.Name(), relation.GoName())
 		}
 		junctionSourceColumns := junction.SourceColumns()
 		junctionTargetColumns := junction.TargetColumns()
 		if len(junctionSourceColumns) != len(sourceKey) || len(junctionTargetColumns) != len(targetKey) {
-			return nil, fmt.Errorf("orm: SELECT relation TopN %s.%s has invalid junction metadata", source.Name(), relation.GoName())
+			return nil, fmt.Errorf("orm: SELECT relation %s.%s has invalid junction metadata", source.Name(), relation.GoName())
 		}
 		metadata.junction = &relationTopNJunctionMetadata{
 			tableName:     junction.TableName(),
@@ -469,9 +469,9 @@ func (c *predicateCompiler) writeRelationTopNJunctionPredicate(current predicate
 		}
 		column, exists := relationTopNJunctionTargetColumn(metadata, current.field)
 		if !exists {
-			return fmt.Errorf("orm: SELECT relation TopN target field %s.%s has no junction column", c.descriptor.Name(), current.field)
+			return fmt.Errorf("orm: %s relation target field %s.%s has no junction column", c.operationName(), c.descriptor.Name(), current.field)
 		}
-		writeQualifiedIdentifier(c.query, c.qualifier, column)
+		writeMaybeQualifiedIdentifier(c.query, c.qualifier, column)
 		c.query.WriteString(" = ?")
 		c.arguments = append(c.arguments, current.values[0])
 		return nil
@@ -491,7 +491,7 @@ func (c *predicateCompiler) writeRelationTopNJunctionPredicate(current predicate
 		c.query.WriteByte(')')
 		return nil
 	default:
-		return fmt.Errorf("orm: SELECT relation TopN junction predicate has unsupported operator %d", current.operator)
+		return fmt.Errorf("orm: %s relation junction predicate has unsupported operator %d", c.operationName(), current.operator)
 	}
 }
 

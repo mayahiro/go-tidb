@@ -24,7 +24,9 @@ var countBaseCache sync.Map
 //
 // Count ignores projection and ordinary ordering because they do not change
 // the number of rows. Predicates, Limit, Offset, and SeekAfter remain
-// effective. OrderBy still defines an active SeekAfter cursor.
+// effective. OrderBy still defines an active SeekAfter cursor. For a narrow,
+// metadata-proven unpaginated collection Has predicate, Count can count the
+// relation table directly under the documented relation-integrity contract.
 func (q *SelectQuery[T]) Count(ctx context.Context, executor QueryExecutor) (int64, error) {
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return 0, err
@@ -59,6 +61,14 @@ func (q *SelectQuery[T]) compileCount() (compiledCount, error) {
 
 	selection := q.selection
 	selection.modelType = modelType
+	if err := validateWithDeleted(descriptor, selection.withDeleted, "SELECT"); err != nil {
+		return compiledCount{}, err
+	}
+	if compiled, optimized, compileErr := compileRelationCount(descriptor, &selection); compileErr != nil {
+		return compiledCount{}, compileErr
+	} else if optimized {
+		return compiled, nil
+	}
 	paginated := selection.pagination.limitSet || selection.pagination.offsetSet
 	baseSQL := countBase(descriptor)
 	if paginated {

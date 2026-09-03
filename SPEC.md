@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-02
+- Last updated: 2026-09-03
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -137,7 +137,8 @@ The currently implemented surface provides:
   metadata-proven relation-first TopN rewrite for eligible direct `HasMany`
   and pure `ManyToMany` pages, using a complete target primary or declared
   candidate unique key and an outer derived-key-first `LEADING` hint without
-  implicit preloading or a forced join algorithm
+  implicit preloading or a forced join algorithm, plus relation-only Count for
+  eligible unpaginated collection filters under the same integrity contract
 - TiDB-default NULL ordering and primary-key-backed deterministic keyset
   validation
 - Typed slice `IN` and `NOT IN` predicates

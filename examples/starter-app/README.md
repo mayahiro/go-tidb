@@ -34,7 +34,8 @@ It demonstrates the current struct-first foundation:
   projection, collection ordering, and relation-scoped deleted-row inclusion
 - Logical direct and pure many-to-many relation predicates, including TiDB
   semi-join hints and relation-first TopN for eligible direct and pure
-  many-to-many collections, without hydrating relations
+  many-to-many collections, plus relation-only Count for eligible unpaginated
+  collection filters, without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
@@ -84,7 +85,9 @@ compiler uses the `ClipGenre` candidate key to prove one matching edge per
 clip, then filters and limits `clip_genres` before loading root rows. Its outer
 `LEADING(tidbgo_k0, tidbgo_t0)` hint keeps that limited key set as the root
 lookup's driving input. The edge keeps its surrogate primary key and required
-`Priority` payload.
+`Priority` payload. `CountClipsInGenre` starts from the same natural
+`Clip`-rooted relation predicate while the Count compiler reads only
+`clip_genres` when the candidate key proves one edge per Clip.
 `BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
 many-to-many shape: fixing the complete Role primary key lets the compiler
 filter the junction directly and limit `(role_id, user_id)` access before
@@ -93,8 +96,9 @@ loading User rows. Both
 `EXISTS` fallback or a missing association index prefix without another
 application wrapper.
 `FirstRecentOrder`, `FindUserByEmail`,
-`HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
-`Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates
+`HasUserWithEmail`, `CountOrdersForUser`, and `CountClipsInGenre` demonstrate
+connected `First`, `Only`, `Exists`, and scalar or relation-only `Count`
+terminals. `ListUsersWithOrders` demonstrates
 projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
 SELECT and joining each User into that statement.
 `ListUsersWithRoles` demonstrates a pure

@@ -131,7 +131,7 @@ column順はunique性の証明へ影響せず、subsetに対する物理unique k
 
 TiDBのunique constraintはnon-NULL valueへ適用されるため、compilerはRelation correlationとnon-nilな `Equal` predicateが宣言field全体をcoverする場合だけcandidate keyを使用します
 
-unique constraintはcardinalityを証明し、効率的なrelation-first TopN accessには別順序のindexが必要な場合があります
+unique constraintはcardinalityを証明し、効率的なrelation-first TopN accessまたはrelation-only Countには別順序のindexが必要な場合があります
 
 ## Type checkの境界
 

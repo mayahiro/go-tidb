@@ -239,11 +239,13 @@ pure junctionは既存sourceとtarget rowを参照し、source-target column全�
 
 `go-tidb` はquery実行時にこれらのconstraintを作成または検査しません
 
-relation-first TopNはこのcontractを前提とします
+relation-first TopNとrelation-only Countはこのcontractを前提とします
 
 orphan sourceはroot joinより前にpage slotを消費する可能性があり、compilerがtargetをjoinせずjunctionをfilterする場合のorphan targetはRelation existenceを誤ってtrueにする可能性があります
 
-duplicateなpure-junction pairがある場合はroot resultが重複する可能性があります
+relation-only Countはroot joinを意図的に省略するため、orphan association rowを件数へ含める可能性があります
+
+duplicate direct edgeまたはpure-junction pairは件数を過大に数えるかroot resultを重複させる可能性があります
 
 workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
 
@@ -390,6 +392,31 @@ activeな `SeekAfter` がある場合は `OrderBy` をcursor predicateの定義�
 `Limit` または `Offset` がある場合はderived `SELECT 1` を数え、paginationを結果へ反映します
 
 条件に一致する全row数が必要な場合は `Limit` と `Offset` を指定しません
+
+metadataから証明できる1つのRelation shapeでは、直接の `COUNT(*)` をselected modelではなくassociation起点へ変換します
+
+compilerは次の条件を全て満たす場合にこの変換を適用します
+
+- `Limit`、`Offset`、`SeekAfter` がない
+- root predicateがdirectかつpositiveなcollection `Has` 1件だけ
+- default root soft-delete scopeがactiveではない
+- Relation source keyがroot primary key全体
+- Relation correlationとconjunctiveかつnon-nullな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique key全体をcoverし、rootごとのmatching association rowが最大1件であることを証明できる
+- pure `many_to_many` では全target predicateをjunctionのtarget key columnへ直接移せて、target soft-delete scopeがない
+
+例えば1つの `ClipGenre.GenreID` でfilterする `Clip` queryのCountは、relation-first TopN Listとは独立して次へcompileできます
+
+```sql
+SELECT COUNT(*) FROM `clip_genres` WHERE `genre_id` = ?
+```
+
+これによりroot lookupを除き、TiDBがassociation covering indexだけでCountを処理できる可能性があります
+
+この変換は前述のRelation data integrity contractを前提とします
+
+いずれかの証明条件を満たさない場合はroot `EXISTS` queryを維持します
+
+通常の `OrderBy` はCountへ影響しないため、この変換を妨げません
 
 `Explain` は `Build` が表すroot SELECTへ `EXPLAIN` を実行し、TiDBのdefault row-format operatorを `[]orm.ExplainRow` として返します
 

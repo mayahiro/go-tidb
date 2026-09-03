@@ -259,7 +259,13 @@ lookups; it does not force a join algorithm. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a
-missing association index prefix. Pass target
+missing association index prefix. An unpaginated `Count` with one direct
+positive collection `Has`, no root predicate or active root soft-delete scope,
+and the same one-row proof counts the association table directly. Pure
+many-to-many Count uses the junction directly only when every target predicate
+maps to its target-key columns. Other Count shapes retain the root `EXISTS`.
+The direct Count rewrite relies on the same documented relation-integrity
+contract as relation-first TopN. Pass target
 predicates to require a matching related row, or omit them for existence only.
 Relation and target field names are exported Go field names. `Build` validates
 and compiles them entirely offline. See the [scalar query

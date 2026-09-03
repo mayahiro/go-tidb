@@ -86,8 +86,9 @@ func HasSuffix(field string, value any) Predicate {
 // Without target predicates, Has only requires relation existence. Relation
 // and target fields use exported Go field names, and nested relation
 // predicates are allowed in the target scope. The compiler can emit EXISTS,
-// TiDB semi-join hints, or a metadata-proven relation-first TopN query while
-// preserving this logical predicate for relation-consistent data.
+// TiDB semi-join hints, a metadata-proven relation-first TopN query, or a
+// relation-only Count while preserving this logical predicate for
+// relation-consistent data.
 func Has(relation string, predicates ...Predicate) Predicate {
 	children := make([]predicate, len(predicates))
 	for index := range predicates {

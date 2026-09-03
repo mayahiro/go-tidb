@@ -152,10 +152,14 @@ func BuildRecentUsersWithRoleQuery(roleID int64) (string, []any, error) {
 	return recentUsersWithRoleQuery(roleID).Build()
 }
 
-func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+func clipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
+		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID)))
+}
+
+func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
+	return clipsInGenreQuery(genreID).
 		Select("ID", "Title").
-		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID))).
 		OrderBy(orm.Desc("ID")).
 		Limit(20)
 }
@@ -164,6 +168,13 @@ func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 // ClipGenre row through an explicitly supplied database/sql executor.
 func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
 	return recentClipsInGenreQuery(genreID).All(ctx, executor)
+}
+
+// CountClipsInGenre returns the total number of clips having one matching
+// ClipGenre row. The compiler can count the candidate-key-proven edge rows
+// directly without requiring a caller-authored junction query.
+func CountClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) (int64, error) {
+	return clipsInGenreQuery(genreID).Count(ctx, executor)
 }
 
 // FirstRecentOrder returns the newest order for a user through an explicitly

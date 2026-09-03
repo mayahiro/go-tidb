@@ -141,7 +141,7 @@ constraint. TiDB unique constraints apply to non-NULL values; the compiler
 therefore uses a candidate key only when relation correlation and non-nil
 `Equal` predicates cover every declared field. The unique constraint proves
 cardinality, while a separately ordered index can still be required for an
-efficient relation-first TopN access path.
+efficient relation-first TopN access path or a relation-only Count.
 
 ## Type-check boundary
 

@@ -187,6 +187,8 @@ mappingが表すnon-NULL foreign keyまたはtarget key valueは、反対側の�
 
 preloadとRelation predicateは到達できないrowを自然に無視し、relation-first TopN query optimizationはroot joinより前にLimitを適用できるため、orphan target rowがpageをLimit未満にする可能性があります
 
+条件を満たすrelation-only Countはroot joinを省略するため、contract違反のorphan targetまたはjunction rowがあると件数を過大に数える可能性があります
+
 物理constraintまたはapplication write ruleでcontractを維持してください
 
 Relation fieldはI/Oとlazy loadingを行わず、fieldへの代入でRelationを永続化しません

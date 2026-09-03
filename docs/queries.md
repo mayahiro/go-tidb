@@ -240,12 +240,14 @@ does not declare a foreign key. Every target key represented by a direct
 relation must reference an existing source row. A pure junction must reference
 existing source and target rows and enforce exact uniqueness across the full
 source-target column pair. `go-tidb` does not create or check those constraints
-during a query. Relation-first TopN relies on this contract. An orphan source
-can consume a page slot before the root join. When the compiler filters a
-junction without joining its target, an orphan target can also make relation
-existence a false positive. Duplicate pure-junction pairs can duplicate a root
-result. Enforce the invariant with schema constraints or application writes as
-appropriate for the workload.
+during a query. Relation-first TopN and relation-only Count rely on this
+contract. An orphan source can consume a TopN page slot before the root join.
+When the compiler filters a junction without joining its target, an orphan
+target can also make relation existence a false positive. Relation-only Count
+can include an orphan association row because it intentionally omits the root
+join. Duplicate direct edges or pure-junction pairs can overcount or duplicate
+a root result. Enforce the invariant with schema constraints or application
+writes as appropriate for the workload.
 
 A payload-bearing edge model can keep its surrogate primary key while
 declaring relation cardinality separately:
@@ -375,6 +377,33 @@ cursor predicate. Without `Limit` or `Offset`, `Count` uses a direct
 `COUNT(*)`. With `Limit` or `Offset`, it counts a derived `SELECT 1` so the
 pagination remains part of the result. Omit `Limit` and `Offset` when the total
 number of matching rows is required.
+
+For one metadata-proven relation shape, the direct `COUNT(*)` is rooted at the
+association instead of the selected model. The compiler applies this rewrite
+when all of the following are true:
+
+- The query has no `Limit`, `Offset`, or `SeekAfter`
+- Its only root predicate is one direct, positive collection `Has`
+- No default root soft-delete scope is active
+- The relation source key is the complete root primary key
+- Relation correlation plus conjunctive, non-null `Equal` predicates cover a
+  complete target primary or declared candidate unique key, proving at most
+  one matching association row per root
+- For pure `many_to_many`, every target predicate maps directly to the target
+  key columns of its junction and the target has no soft-delete scope
+
+For example, a `Clip` query filtered by one `ClipGenre.GenreID` can compile its
+Count independently from the relation-first TopN List:
+
+```sql
+SELECT COUNT(*) FROM `clip_genres` WHERE `genre_id` = ?
+```
+
+This removes the root lookup and can let TiDB satisfy the Count from an
+association covering index. It relies on the relation-integrity contract
+described above. If any proof condition is unavailable, the compiler preserves
+the root `EXISTS` query. Ordinary `OrderBy` terms remain irrelevant to Count
+and do not prevent the rewrite.
 
 `Explain` executes `EXPLAIN` for the root SELECT represented by `Build` and
 returns TiDB's default row-format operators as `[]orm.ExplainRow`. It is
