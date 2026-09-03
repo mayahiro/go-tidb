@@ -108,7 +108,7 @@ func RelationTopNFallbackDiagnostic(model, relation, reason string) check.Diagno
 		Title:        "Relation-filter TopN uses the EXISTS fallback",
 		Message:      message,
 		Evidence:     evidence,
-		Suggestion:   "Verify the fallback with Explain or ExplainAnalyze and make the relation target primary key and root ordering explicit when the same semantics allow it",
+		Suggestion:   "Verify the fallback with Explain or ExplainAnalyze and declare a valid target primary or candidate unique key when the same semantics allow it",
 		Suppressible: true,
 		Reference:    RelationTopNReference,
 	}

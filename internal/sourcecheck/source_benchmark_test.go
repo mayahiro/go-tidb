@@ -137,8 +137,10 @@ type Video struct {
 }
 type VideoLink struct {
 	model.Meta ` + "`tidbgo:\"table=video_links\"`" + `
-	VideoID int64 ` + "`tidbgo:\",pk\"`" + `
-	GenreID int64 ` + "`tidbgo:\",pk\"`" + `
+	ID int64 ` + "`tidbgo:\",pk\"`" + `
+	VideoID int64 ` + "`tidbgo:\",unique=video_genre\"`" + `
+	GenreID int64 ` + "`tidbgo:\",unique=video_genre\"`" + `
+	Priority int64
 }
 `)
 	for index := range 100 {
@@ -157,9 +159,12 @@ func query%d() (string, []any, error) {
   id BIGINT PRIMARY KEY
 );
 CREATE TABLE video_links (
+  id BIGINT NOT NULL,
   video_id BIGINT NOT NULL,
   genre_id BIGINT NOT NULL,
-  PRIMARY KEY (video_id, genre_id),
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY video_genre (video_id, genre_id),
   KEY genre_video (genre_id, video_id)
 );`)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/queryshape"
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 	"github.com/mayahiro/go-tidb/model"
 )
 
@@ -66,6 +67,37 @@ func TestSelectQueryBuildsRelationFirstTopN(t *testing.T) {
 	if got, want := arguments, []any{int64(7), int64(20)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
+	descriptor, err := model.Describe[relationTopNVideoGenre]()
+	if err != nil {
+		t.Fatalf("Describe[relationTopNVideoGenre]() error = %v", err)
+	}
+	if got, want := relationFieldGoNames(descriptor.PrimaryKeyFields()), []string{"ID"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("target primary key = %#v, want %#v", got, want)
+	}
+	if keys := descriptor.UniqueKeys(); len(keys) != 1 || keys[0].Name() != "video_genre" ||
+		!reflect.DeepEqual(relationFieldGoNames(keys[0].Fields()), []string{"VideoID", "GenreID"}) {
+		t.Fatalf("target unique keys = %#v", keys)
+	}
+}
+
+func TestRelationFirstTopNRequiresEveryCandidateUniqueKeyField(t *testing.T) {
+	t.Parallel()
+
+	query := Query[relationTopNVideo]().
+		Where(Has("VideoGenres")).
+		OrderBy(Desc("ID")).
+		Limit(20)
+	compiler := relationTopNShapeForTest(query)(t).Compiler
+	if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || compiler.Reason != relationtopn.ReasonTargetUniqueness {
+		t.Fatalf("compiler decision = %#v", compiler)
+	}
+	sqlText, _, err := query.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(sqlText, "WHERE EXISTS") || strings.Contains(sqlText, "FROM (SELECT") {
+		t.Fatalf("SQL = %q, want EXISTS fallback", sqlText)
+	}
 }
 
 func TestSelectQueryBuildsManyToManyRelationFirstTopN(t *testing.T) {
@@ -116,7 +148,7 @@ func TestManyToManyRelationFirstTopNRequiresCompleteTargetPrimaryKeyEquality(t *
 		OrderBy(Desc("TenantID"), Desc("ID")).
 		Limit(20)
 	compiler := relationTopNShapeForTest(fallback)(t).Compiler
-	if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || !strings.Contains(compiler.Reason, "target primary key") {
+	if compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || !strings.Contains(compiler.Reason, "candidate unique key") {
 		t.Fatalf("partial target key compiler decision = %#v", compiler)
 	}
 }
@@ -314,7 +346,7 @@ func TestRelationTopNQueryShapeRecordsFallbackReasons(t *testing.T) {
 				Where(Has("Links", Equal("GenreID", "private-genre"))).
 				OrderBy(Desc("ID")).
 				Limit(20)),
-			reason: "does not prove at most one matching row",
+			reason: "candidate unique key proves at most one matching row",
 		},
 		{
 			name: "different order",
@@ -377,7 +409,7 @@ func TestRelationTopNQueryShapeRecordsFallbackReasons(t *testing.T) {
 				Where(Has("Roles", Equal("Name", "private-role"))).
 				OrderBy(Desc("ID")).
 				Limit(20)),
-			reason: "target primary key",
+			reason: "candidate unique key",
 		},
 	}
 

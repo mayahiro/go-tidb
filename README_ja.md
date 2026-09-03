@@ -119,6 +119,12 @@ column名を省略したfieldには決定的なsnake_caseを使用します
 
 primary keyは推定columnなら `tidbgo:",pk"`、明示columnなら `tidbgo:"column_name,pk"` で指定し、複数指定した場合は宣言順のcomposite keyになります
 
+primary keyとは独立したcandidate unique keyは、対象scalar fieldへ `tidbgo:",unique=<group>"` を同じ論理group名で繰り返して宣言します
+
+group名は物理index名ではありません
+
+`model.Descriptor.UniqueKeys()` で宣言を参照でき、applicationがこのcontractへ依存する前に `check.Schema` がunconditionalな物理primary keyまたはunique keyとの一致を要求します
+
 `db` を含む `tidbgo` 以外のstruct tag namespaceは無視し、column名の変更やfieldの除外には使用しません
 
 default table名はGo type名のsnake_caseです
@@ -172,7 +178,7 @@ databaseだけに存在する必須columnはmodel insertが失敗する可能性
 
 ordered primary key、`AUTO_RANDOM`、native GoとSQLのtype family、nullability、writableなgenerated column、物理Relation targetもcheckします
 
-collection checkはmany-to-many junction keyと必須column、target identity、決定的な `has_many` と `many_to_many` lookupが使うindex prefixをstableな `CMP001` から `CMP014` で検査します
+collection checkはmany-to-many junction keyと必須column、target identity、決定的な `has_many` と `many_to_many` lookupが使うindex prefixをstableな `CMP001` から `CMP015` で検査します
 
 Relationを持つmodelでは、渡すsnapshotにtarget tableとjunction tableも必要です
 
@@ -251,7 +257,7 @@ admins, err := orm.Query[User]().
 
 metadataから証明できる限定的な `has_many` またはpure `many_to_many`、root primary key order、positive Limitのshapeでは、Relation filterとLimitをroot rowのloadより先へ適用します
 
-pure many-to-manyの変換では、target primary key全体を固定するconjunctiveな `Equal` predicateも必要です
+1 rowの証明にはtarget primary key、またはRelationとconjunctiveな `Equal` predicateがfield全体を固定する明示的なcandidate unique keyを使用できます
 
 orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
 

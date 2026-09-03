@@ -43,6 +43,7 @@ type Descriptor struct {
 	byColumn   map[string]int
 	byGoName   map[string]int
 	primaryKey []int
+	uniqueKeys []UniqueKey
 	softDelete int
 	relations  []Relation
 	byRelation map[string]int
@@ -121,6 +122,20 @@ func (d *Descriptor) PrimaryKeyFields() []Field {
 		fields[index] = d.fields[fieldIndex].clone()
 	}
 	return fields
+}
+
+// UniqueKeys returns explicitly declared candidate unique keys in first-group
+// appearance order. Fields within each key follow struct declaration order.
+// PrimaryKeyFields remains the separate physical primary-key declaration.
+func (d *Descriptor) UniqueKeys() []UniqueKey {
+	if d == nil {
+		return nil
+	}
+	keys := make([]UniqueKey, len(d.uniqueKeys))
+	for index, key := range d.uniqueKeys {
+		keys[index] = key.clone()
+	}
+	return keys
 }
 
 // SoftDeleteField returns the time field that marks logically deleted rows.
@@ -228,4 +243,25 @@ func (f Field) CanValue() bool { return f.native || f.usesValuer }
 func (f Field) clone() Field {
 	f.index = append([]int(nil), f.index...)
 	return f
+}
+
+// UniqueKey is immutable metadata for one candidate unique key declared by
+// repeating `tidbgo:",unique=<group>"` on its scalar fields.
+//
+// The group name is logical model metadata and does not name a physical SQL
+// index. Use check.Schema to verify that the SQL snapshot enforces the claim.
+type UniqueKey struct {
+	name   string
+	fields []Field
+}
+
+// Name returns the logical candidate-key group name.
+func (k UniqueKey) Name() string { return k.name }
+
+// Fields returns candidate-key fields in struct declaration order.
+func (k UniqueKey) Fields() []Field { return cloneFields(k.fields) }
+
+func (k UniqueKey) clone() UniqueKey {
+	k.fields = cloneFields(k.fields)
+	return k
 }

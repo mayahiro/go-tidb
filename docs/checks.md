@@ -40,7 +40,7 @@ Both checks are offline and return `[]check.Diagnostic`
 
 `check.Model` validates model intent and tags through `MOD001` to `MOD007`
 `check.Schema` applies directional compatibility rules through `CMP001` to
-`CMP014`
+`CMP015`, including candidate unique-key declarations used by query rewrites
 
 ## Executed query diagnostics
 
@@ -115,6 +115,11 @@ TopN decision as the runtime compiler. `relation_topn_patterns`,
 `uncertain_relation_topn_patterns` expose that rule's coverage. A resolved
 fallback emits `QRY005`; an unresolved relation name, model, key, order, or
 builder flow remains uncertain instead of being guessed
+
+The source decision recognizes `unique=<group>` candidate keys in the same way
+as runtime model metadata. Source lint does not replace model-to-schema
+compatibility tests; use `check.Schema` to verify that every declaration is
+backed by an unconditional physical unique constraint
 
 With `--schema`, source analysis also derives physical table and column names
 from the same `tidbgo` metadata and default naming rule as the runtime model

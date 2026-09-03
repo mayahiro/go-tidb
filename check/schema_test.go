@@ -37,6 +37,20 @@ type schemaCheckSoftDelete struct {
 	DeletedAt  time.Time `tidbgo:"deleted_at,soft_delete"`
 }
 
+type schemaCheckCandidateParent struct {
+	model.Meta `tidbgo:"table=schema_check_candidate_parents"`
+	ID         int64                      `tidbgo:",pk"`
+	Edges      []schemaCheckCandidateEdge `tidbgo:"has_many,join=ID:ParentID"`
+}
+
+type schemaCheckCandidateEdge struct {
+	model.Meta `tidbgo:"table=schema_check_candidate_edges"`
+	ID         int64 `tidbgo:",pk"`
+	ParentID   int64 `tidbgo:",unique=parent_genre"`
+	GenreID    int64 `tidbgo:",unique=parent_genre"`
+	Priority   int64
+}
+
 type schemaCheckRelationParent struct {
 	model.Meta `tidbgo:"table=schema_check_relation_parents"`
 	TenantID   int64                       `tidbgo:"tenant_id,pk"`
@@ -103,6 +117,21 @@ CREATE TABLE schema_check_relation_links (
   role_id BIGINT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY schema_check_relation_links_pair (parent_tenant_id, parent_id, role_tenant_id, role_id)
+);`
+
+const compatibleCandidateSchemaSQL = `
+CREATE TABLE schema_check_candidate_parents (
+  id BIGINT NOT NULL,
+  PRIMARY KEY (id)
+);
+CREATE TABLE schema_check_candidate_edges (
+  id BIGINT NOT NULL,
+  parent_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY schema_check_candidate_edges_pair (genre_id, parent_id),
+  KEY schema_check_candidate_edges_parent (parent_id)
 );`
 
 func TestSchemaReturnsNoDiagnosticsForCompatibleDirectionalMapping(t *testing.T) {
@@ -200,6 +229,71 @@ func TestSchemaReportsPrimaryKeyAndAutoRandomMismatch(t *testing.T) {
 	diagnostics = Schema[schemaCheckPlain](parseSchemaCheckCatalog(t, plainSQL))
 	if got, want := diagnosticCodes(diagnostics), []string{codePrimaryKeyMismatch}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("primary-key codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestSchemaValidatesCandidateUniqueKeysWithoutRequiringAnIndexNameOrOrder(t *testing.T) {
+	t.Parallel()
+
+	catalog := parseSchemaCheckCatalog(t, compatibleCandidateSchemaSQL)
+	for name, diagnostics := range map[string][]Diagnostic{
+		"edge":   Schema[schemaCheckCandidateEdge](catalog),
+		"parent": Schema[schemaCheckCandidateParent](catalog),
+	} {
+		if diagnostics == nil || len(diagnostics) != 0 {
+			t.Fatalf("%s diagnostics = %#v, want non-nil empty", name, diagnostics)
+		}
+	}
+}
+
+func TestSchemaRejectsCandidateKeyWithoutUnconditionalPhysicalUniqueness(t *testing.T) {
+	t.Parallel()
+
+	for name, uniqueDefinition := range map[string]string{
+		"ordinary": "KEY schema_check_candidate_edges_pair (genre_id, parent_id)",
+		"superset": "UNIQUE KEY schema_check_candidate_edges_pair (genre_id, parent_id, priority)",
+		"partial":  "UNIQUE KEY schema_check_candidate_edges_pair (genre_id, parent_id) WHERE priority > 0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sqlText := strings.Replace(
+				compatibleCandidateSchemaSQL,
+				"UNIQUE KEY schema_check_candidate_edges_pair (genre_id, parent_id)",
+				uniqueDefinition,
+				1,
+			)
+			diagnostics := Schema[schemaCheckCandidateParent](parseSchemaCheckCatalog(t, sqlText))
+			if got, want := diagnosticCodes(diagnostics), []string{codeCandidateKeyMismatch}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("codes = %#v, want %#v", got, want)
+			}
+			diagnostic := diagnostics[0]
+			if diagnostic.Severity != SeverityError || diagnostic.Suppressible || diagnostic.Reference != uniqueConstraintReference ||
+				!strings.Contains(diagnostic.Message, `candidate unique key "parent_genre"`) {
+				t.Fatalf("diagnostic = %#v", diagnostic)
+			}
+		})
+	}
+}
+
+func TestSchemaAcceptsInvisibleOrNarrowerCandidateKeyProof(t *testing.T) {
+	t.Parallel()
+
+	for name, uniqueDefinition := range map[string]string{
+		"invisible": "UNIQUE KEY schema_check_candidate_edges_pair (parent_id, genre_id) /*!80000 INVISIBLE */",
+		"subset":    "UNIQUE KEY schema_check_candidate_edges_pair (parent_id)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sqlText := strings.Replace(
+				compatibleCandidateSchemaSQL,
+				"UNIQUE KEY schema_check_candidate_edges_pair (genre_id, parent_id)",
+				uniqueDefinition,
+				1,
+			)
+			if diagnostics := Schema[schemaCheckCandidateParent](parseSchemaCheckCatalog(t, sqlText)); len(diagnostics) != 0 {
+				t.Fatalf("diagnostics = %#v, want none", diagnostics)
+			}
+		})
 	}
 }
 

@@ -89,11 +89,14 @@ type Clip struct {
 	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
 }
 
-// ClipGenre is an application-owned association model with one row per pair.
+// ClipGenre is a payload-bearing edge model with a surrogate primary key and
+// a candidate unique key over the relation pair.
 type ClipGenre struct {
 	model.Meta `tidbgo:"table=clip_genres"`
-	ClipID     int64 `tidbgo:",pk"`
-	GenreID    int64 `tidbgo:",pk"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	ClipID     int64 `tidbgo:",unique=clip_genre"`
+	GenreID    int64 `tidbgo:",unique=clip_genre"`
+	Priority   int64
 }
 
 // JobLease is an application-owned conditional-update model.

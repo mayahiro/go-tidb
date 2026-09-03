@@ -15,6 +15,8 @@ It demonstrates the current struct-first foundation:
   `tidbgo` tag position
 - Explicit physical table names through the zero-size `model.Meta` marker
 - Ordered single-column and composite primary keys through `tidbgo:",pk"`
+- Candidate unique keys independent from the primary key by repeating
+  `tidbgo:",unique=<group>"` on their fields
 - TiDB `AUTO_RANDOM` primary keys through `tidbgo:",pk,auto_random"`
 - Aggregate result fields through `tidbgo:"column,computed"`
 - Value-form soft deletion through `tidbgo:",soft_delete"` without a separate
@@ -78,7 +80,9 @@ and uncertainty counts even when no diagnostic is emitted
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows.
+compiler uses the `ClipGenre` candidate key to prove one matching edge per
+clip, then filters and limits `clip_genres` before loading root rows. The edge
+keeps its surrogate primary key and required `Priority` payload.
 `BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
 many-to-many shape: fixing the complete Role primary key lets the compiler
 filter the junction directly and limit `(role_id, user_id)` access before

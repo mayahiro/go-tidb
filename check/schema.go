@@ -24,8 +24,10 @@ const (
 	codeJunctionPairNotUnique   = "CMP012"
 	codeRequiredJunctionColumn  = "CMP013"
 	codeMissingRelationIndex    = "CMP014"
+	codeCandidateKeyMismatch    = "CMP015"
 
-	relationIndexReference = "https://docs.pingcap.com/developer/dev-guide-index-best-practice/"
+	relationIndexReference    = "https://docs.pingcap.com/developer/dev-guide-index-best-practice/"
+	uniqueConstraintReference = "https://docs.pingcap.com/tidb/stable/constraints/"
 )
 
 // Schema checks the physical schema catalog against the application-model and
@@ -71,8 +73,29 @@ func SchemaType(catalog *physicalschema.Catalog, modelType reflect.Type) []Diagn
 
 	diagnostics = appendColumnCompatibilityDiagnostics(diagnostics, descriptor, table)
 	diagnostics = appendPrimaryKeyCompatibilityDiagnostic(diagnostics, descriptor, table)
+	diagnostics = appendCandidateKeyCompatibilityDiagnostics(diagnostics, descriptor, table)
 	diagnostics = appendRequiredColumnDiagnostics(diagnostics, descriptor, table)
 	return appendRelationSchemaDiagnostics(diagnostics, catalog, descriptor)
+}
+
+func appendCandidateKeyCompatibilityDiagnostics(diagnostics []Diagnostic, descriptor *model.Descriptor, table physicalschema.Table) []Diagnostic {
+	for _, key := range descriptor.UniqueKeys() {
+		columns := fieldColumnNames(key.Fields())
+		if tableHasUniqueKey(table, columns) {
+			continue
+		}
+		diagnostics = append(diagnostics, Diagnostic{
+			Code:         codeCandidateKeyMismatch,
+			Severity:     SeverityError,
+			Title:        "Candidate unique key is not physically constrained",
+			Message:      fmt.Sprintf("model %s declares candidate unique key %q over (%s), but table %s has no unconditional primary or unique key proving that combination", descriptor.Name(), key.Name(), strings.Join(columns, ", "), table.Name()),
+			Suggestion:   "Add a matching primary or unique key to the SQL schema, or correct the model unique group",
+			Location:     schemaLocation(table.Position()),
+			Suppressible: false,
+			Reference:    uniqueConstraintReference,
+		})
+	}
+	return diagnostics
 }
 
 func appendColumnCompatibilityDiagnostics(diagnostics []Diagnostic, descriptor *model.Descriptor, table physicalschema.Table) []Diagnostic {
@@ -209,6 +232,7 @@ func appendRequiredColumnDiagnostics(diagnostics []Diagnostic, descriptor *model
 }
 
 func appendRelationSchemaDiagnostics(diagnostics []Diagnostic, catalog *physicalschema.Catalog, descriptor *model.Descriptor) []Diagnostic {
+	checkedCandidateKeys := map[reflect.Type]struct{}{descriptor.Type(): {}}
 	for _, relation := range descriptor.Relations() {
 		targetDescriptor, err := model.DescribeType(relation.TargetType())
 		if err != nil {
@@ -227,6 +251,10 @@ func appendRelationSchemaDiagnostics(diagnostics []Diagnostic, catalog *physical
 				Suppressible: false,
 			})
 		} else {
+			if _, checked := checkedCandidateKeys[targetDescriptor.Type()]; !checked {
+				diagnostics = appendCandidateKeyCompatibilityDiagnostics(diagnostics, targetDescriptor, targetTable)
+				checkedCandidateKeys[targetDescriptor.Type()] = struct{}{}
+			}
 			var targetColumnsPresent bool
 			diagnostics, targetColumnsPresent = appendRelationColumnDiagnostics(
 				diagnostics,

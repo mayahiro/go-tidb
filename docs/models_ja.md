@@ -77,6 +77,27 @@ primary key fieldにはcolumn位置より後へ `pk` optionを指定し、例は
 
 field名からprimary keyを暗黙推定せず、primary keyを宣言しないmodelもmetadata解析では有効です
 
+primary keyとは独立したcandidate unique keyは、対象scalar fieldへ同じ論理group名を繰り返して宣言します
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+group名は64 byte以内のsimple identifierであり、物理SQL index名ではありません
+
+key内のfield順はstruct宣言順です
+
+1 fieldを複数keyへ含める場合は、異なるgroup名の `unique=<group>` を繰り返します
+
+この宣言はprimary keyを置き換えず、完全なgroupのnon-NULL equality valueが最大1 rowを識別することをquery compilerへ伝えます
+
+`check.Schema` はこのcorrectness contractをunconditionalな物理primary keyまたはunique keyと照合し、SQL snapshotから証明できない場合は `CMP015` を報告します
+
 TiDBの `AUTO_RANDOM` primary keyには `auto_random` を追加します
 
 対象は `pk` も指定したnon-pointerのsignedまたはunsigned integerで、1 modelにつき1 fieldだけです
@@ -87,7 +108,7 @@ bulk insertもfieldを省略しますが、個別のgenerated IDは反映しま�
 
 `COUNT(*) AS order_count` のようなalias付きraw query resultだけでpopulateするfieldには `computed` を使います
 
-computed fieldはbase-table SELECT、INSERT、UPDATEから除外し、primary key、predicate、order、Relation keyには使用できません
+computed fieldはbase-table SELECT、INSERT、UPDATEから除外し、primary key、candidate unique key、predicate、order、Relation keyには使用できません
 
 nullableな削除時刻でlogical deleteを制御する場合は、1個までの `time.Time` または `*time.Time` fieldへ `soft_delete` を指定します
 
@@ -188,6 +209,7 @@ for _, field := range metadata.Fields() {
 
 fmt.Println(metadata.TableName())
 primaryKey := metadata.PrimaryKeyFields()
+uniqueKeys := metadata.UniqueKeys()
 softDeleteField, hasSoftDelete := metadata.SoftDeleteField()
 
 for _, relation := range metadata.Relations() {

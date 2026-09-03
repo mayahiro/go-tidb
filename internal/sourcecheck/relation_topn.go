@@ -65,7 +65,7 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 	}
 
 	target, exists := analyzer.models[analysis.relation.target]
-	if !exists || target.ambiguous || len(target.primaryFields) == 0 {
+	if !exists || target.ambiguous || !sourceModelHasUniqueKey(target) {
 		return analysis
 	}
 	relationFields := analysis.relation.targetFields
@@ -76,7 +76,7 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 		sameSourceFieldNames(analysis.relation.sourceFields, model.primaryFields),
 		sourceOrderMatchesFields(pattern.orderTerms, analysis.relation.sourceFields),
 		sourceRelationUniquePerRoot(
-			target.primaryFields,
+			target,
 			relationFields,
 			analysis.predicate.equalityFields,
 		),
@@ -84,6 +84,10 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 	analysis.exact = true
 	analysis.decision = relationtopn.Decision(outcome, analysis.relation.name)
 	return analysis
+}
+
+func sourceModelHasUniqueKey(model *sourceModel) bool {
+	return len(model.primaryFields) != 0 || len(model.uniqueKeys) != 0
 }
 
 func sameSourceFieldNames(left, right []string) bool {
@@ -116,14 +120,26 @@ func sourceOrderMatchesFields(order sourceOrderTerms, fields []string) bool {
 	return true
 }
 
-func sourceRelationUniquePerRoot(primaryFields, relationFields, equalityFields []string) bool {
-	for _, field := range primaryFields {
+func sourceRelationUniquePerRoot(model *sourceModel, relationFields, equalityFields []string) bool {
+	if sourceRelationKeyCovered(model.primaryFields, relationFields, equalityFields) {
+		return true
+	}
+	for _, key := range model.uniqueKeys {
+		if sourceRelationKeyCovered(key.fields, relationFields, equalityFields) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceRelationKeyCovered(keyFields, relationFields, equalityFields []string) bool {
+	for _, field := range keyFields {
 		if sourceStringExists(relationFields, field) || sourceStringExists(equalityFields, field) {
 			continue
 		}
 		return false
 	}
-	return len(primaryFields) != 0
+	return len(keyFields) != 0
 }
 
 func sourceStringExists(values []string, target string) bool {

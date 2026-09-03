@@ -12,7 +12,7 @@ const (
 	ReasonRootSoftDelete      = "the root default soft-delete scope must be evaluated before LIMIT"
 	ReasonSourceKey           = "the relation source key is not the complete root primary key"
 	ReasonOrder               = "ORDER BY does not exactly match the relation source key"
-	ReasonTargetUniqueness    = "the relation target primary key does not prove at most one matching row per root"
+	ReasonTargetUniqueness    = "no declared target primary or candidate unique key proves at most one matching row per root"
 )
 
 // Facts contains facts extracted from either runtime query values or Go

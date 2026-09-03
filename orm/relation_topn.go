@@ -38,7 +38,7 @@ type relationTopNMetadata struct {
 	sourceColumns          []string
 	targetKeyGoNames       []string
 	targetColumns          []string
-	targetPrimaryGoNames   []string
+	targetUniqueGoNames    [][]string
 	sourceIsRootPrimaryKey bool
 	junction               *relationTopNJunctionMetadata
 }
@@ -313,7 +313,7 @@ func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relati
 		sourceColumns:          relationFieldColumns(sourceKey),
 		targetKeyGoNames:       relationFieldGoNames(targetKey),
 		targetColumns:          relationFieldColumns(targetKey),
-		targetPrimaryGoNames:   relationFieldGoNames(target.PrimaryKeyFields()),
+		targetUniqueGoNames:    relationTopNUniqueGoNames(target),
 		sourceIsRootPrimaryKey: sameRelationFields(sourceKey, source.PrimaryKeyFields()),
 	}
 	if relation.Kind() == model.RelationManyToMany {
@@ -335,6 +335,23 @@ func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relati
 	return metadata, nil
 }
 
+func relationTopNUniqueGoNames(descriptor *model.Descriptor) [][]string {
+	primary := relationFieldGoNames(descriptor.PrimaryKeyFields())
+	uniqueKeys := descriptor.UniqueKeys()
+	capacity := len(uniqueKeys)
+	if len(primary) != 0 {
+		capacity++
+	}
+	result := make([][]string, 0, capacity)
+	if len(primary) != 0 {
+		result = append(result, primary)
+	}
+	for _, key := range uniqueKeys {
+		result = append(result, relationFieldGoNames(key.Fields()))
+	}
+	return result
+}
+
 func relationFieldGoNames(fields []model.Field) []string {
 	result := make([]string, len(fields))
 	for index := range fields {
@@ -344,23 +361,27 @@ func relationFieldGoNames(fields []model.Field) []string {
 }
 
 func relationTopNUniquePerRoot(metadata *relationTopNMetadata, predicates []predicate) bool {
-	if len(metadata.targetPrimaryGoNames) == 0 {
-		return false
-	}
 	fixedByRelation := metadata.targetKeyGoNames
 	if metadata.junction != nil {
-		// A many-to-many target key varies by root. The complete target primary
+		// A many-to-many target key varies by root. One complete target unique
 		// key must therefore be fixed by Equal predicates; the pure-junction
 		// contract then makes the source-target pair unique.
 		fixedByRelation = nil
 	}
-	for _, field := range metadata.targetPrimaryGoNames {
-		if relationTopNFieldNameExists(fixedByRelation, field) || conjunctiveEqualFieldExists(predicates, field) {
-			continue
+	for _, key := range metadata.targetUniqueGoNames {
+		covered := true
+		for _, field := range key {
+			if relationTopNFieldNameExists(fixedByRelation, field) || conjunctiveEqualFieldExists(predicates, field) {
+				continue
+			}
+			covered = false
+			break
 		}
-		return false
+		if covered && len(key) != 0 {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 func relationTopNCanFilterJunction(metadata *relationTopNMetadata, predicates []predicate) bool {
@@ -370,10 +391,10 @@ func relationTopNCanFilterJunction(metadata *relationTopNMetadata, predicates []
 	if _, softDelete := metadata.target.SoftDeleteField(); softDelete {
 		return false
 	}
-	if len(metadata.targetKeyGoNames) != len(metadata.targetPrimaryGoNames) {
+	if !relationTopNMatchesUniqueKey(metadata.targetKeyGoNames, metadata.targetUniqueGoNames) {
 		return false
 	}
-	for _, field := range metadata.targetPrimaryGoNames {
+	for _, field := range metadata.targetKeyGoNames {
 		if _, exists := relationTopNJunctionTargetColumn(metadata, field); !exists {
 			return false
 		}
@@ -384,6 +405,25 @@ func relationTopNCanFilterJunction(metadata *relationTopNMetadata, predicates []
 		}
 	}
 	return true
+}
+
+func relationTopNMatchesUniqueKey(fields []string, keys [][]string) bool {
+	for _, key := range keys {
+		if len(fields) != len(key) {
+			continue
+		}
+		matches := true
+		for _, field := range fields {
+			if !relationTopNFieldNameExists(key, field) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
 }
 
 func relationTopNJunctionPredicateOnly(metadata *relationTopNMetadata, current predicate) bool {

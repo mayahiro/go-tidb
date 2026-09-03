@@ -61,7 +61,12 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 	if !exists || clipGenres.Kind() != model.RelationHasMany || !reflect.DeepEqual(columnsFromFields(clipGenres.TargetKey()), []string{"clip_id"}) {
 		t.Fatalf("Clip.ClipGenres metadata = %#v, exists = %t", clipGenres, exists)
 	}
-	requireDescription[ClipGenre](t, "clip_genres", []string{"clip_id", "genre_id"})
+	clipGenre := requireDescription[ClipGenre](t, "clip_genres", []string{"id"})
+	uniqueKeys := clipGenre.UniqueKeys()
+	if len(uniqueKeys) != 1 || uniqueKeys[0].Name() != "clip_genre" ||
+		!reflect.DeepEqual(columnsFromFields(uniqueKeys[0].Fields()), []string{"clip_id", "genre_id"}) {
+		t.Fatalf("ClipGenre unique keys = %#v", uniqueKeys)
+	}
 	video := requireDescription[Video](t, "videos", []string{"id"})
 	deletedAt, exists := video.SoftDeleteField()
 	if !exists || deletedAt.GoName() != "DeletedAt" || !deletedAt.IsSoftDelete() {

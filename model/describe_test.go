@@ -90,6 +90,14 @@ type Membership struct {
 	Role           string
 }
 
+type ExternalMembership struct {
+	Meta           `tidbgo:"table=external_memberships"`
+	ID             int64  `tidbgo:",pk"`
+	OrganizationID uint64 `tidbgo:",unique=organization_user,unique=organization_handle"`
+	UserID         uint64 `tidbgo:",unique=organization_user"`
+	Handle         string `tidbgo:",unique=organization_handle"`
+}
+
 func TestDescribeMapsDefaultTableAndOrderedPrimaryKeys(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +135,28 @@ func TestDescribeMapsDefaultTableAndOrderedPrimaryKeys(t *testing.T) {
 	role, exists := descriptor.FieldByColumn("role")
 	if !exists || role.IsPrimaryKey() {
 		t.Fatalf("role metadata = %#v, exists = %t", role, exists)
+	}
+}
+
+func TestDescribeMapsOrderedCandidateUniqueKeys(t *testing.T) {
+	t.Parallel()
+
+	descriptor, err := Describe[ExternalMembership]()
+	if err != nil {
+		t.Fatalf("Describe[ExternalMembership]() error = %v", err)
+	}
+	keys := descriptor.UniqueKeys()
+	if len(keys) != 2 {
+		t.Fatalf("UniqueKeys() = %#v, want two keys", keys)
+	}
+	if keys[0].Name() != "organization_user" || !reflect.DeepEqual(columnNames(keys[0].Fields()), []string{"organization_id", "user_id"}) {
+		t.Fatalf("first unique key = %q %#v", keys[0].Name(), columnNames(keys[0].Fields()))
+	}
+	if keys[1].Name() != "organization_handle" || !reflect.DeepEqual(columnNames(keys[1].Fields()), []string{"organization_id", "handle"}) {
+		t.Fatalf("second unique key = %q %#v", keys[1].Name(), columnNames(keys[1].Fields()))
+	}
+	if got, want := columnNames(descriptor.PrimaryKeyFields()), []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("primary key = %#v, want %#v", got, want)
 	}
 }
 
@@ -309,6 +339,16 @@ func TestDescriptorAccessorsDoNotExposeCachedSlices(t *testing.T) {
 	if againPrimaryKey := descriptor.PrimaryKeyFields(); len(againPrimaryKey) != 1 || againPrimaryKey[0].Index()[0] != 1 {
 		t.Fatalf("cached primary key was mutated = %#v", againPrimaryKey)
 	}
+
+	uniqueDescriptor := mustDescribe[ExternalMembership](t)
+	uniqueKeys := uniqueDescriptor.UniqueKeys()
+	uniqueKeys[0].fields[0].index[0] = 99
+	uniqueKeys[0].fields[0] = Field{}
+	uniqueKeys[0] = UniqueKey{}
+	againUniqueKeys := uniqueDescriptor.UniqueKeys()
+	if len(againUniqueKeys) != 2 || againUniqueKeys[0].Name() != "organization_user" || againUniqueKeys[0].Fields()[0].Index()[0] != 2 {
+		t.Fatalf("cached unique keys were mutated = %#v", againUniqueKeys)
+	}
 }
 
 type DuplicateColumns struct {
@@ -384,6 +424,18 @@ type MultipleAutoRandomFields struct {
 
 type ComputedPrimaryKey struct {
 	ID int64 `tidbgo:",pk,computed"`
+}
+
+type ComputedUniqueKey struct {
+	Value int64 `tidbgo:",computed,unique=lookup"`
+}
+
+type EmbeddedCandidateFields struct {
+	Value int64
+}
+
+type EmbeddedUniqueKey struct {
+	EmbeddedCandidateFields `tidbgo:",unique=lookup"`
 }
 
 type RepeatedAutoRandomOption struct {
@@ -485,6 +537,8 @@ func TestDescribeRejectsInvalidMappings(t *testing.T) {
 		{name: "AUTO_RANDOM pointer", describe: describeError[AutoRandomPointer], contains: "non-pointer signed or unsigned integer"},
 		{name: "multiple AUTO_RANDOM fields", describe: describeError[MultipleAutoRandomFields], contains: "already declared"},
 		{name: "computed primary key", describe: describeError[ComputedPrimaryKey], contains: "cannot be primary-key"},
+		{name: "computed unique key", describe: describeError[ComputedUniqueKey], contains: "cannot be candidate unique-key"},
+		{name: "embedded unique key", describe: describeError[EmbeddedUniqueKey], contains: "must be declared on a mapped scalar field"},
 		{name: "repeated AUTO_RANDOM option", describe: describeError[RepeatedAutoRandomOption], contains: "must not be repeated"},
 		{name: "repeated computed option", describe: describeError[RepeatedComputedOption], contains: "must not be repeated"},
 		{name: "soft delete string", describe: describeError[SoftDeleteString], contains: "time.Time or *time.Time"},

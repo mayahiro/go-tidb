@@ -137,6 +137,12 @@ Single-row `Insert` assigns the generated ID; upserts and bulk operations do
 not. Use `computed` for aliased raw-query results that must not participate in
 base-table reads or writes.
 
+Declare a candidate unique key independently from the primary key by repeating
+`tidbgo:",unique=<group>"` on its scalar fields. The logical group name is not
+a physical index name. `model.Descriptor.UniqueKeys()` exposes the declaration,
+and `check.Schema` requires the SQL snapshot to prove it with an unconditional
+primary or unique key before applications rely on the contract.
+
 Use `soft_delete` on one `time.Time` or `*time.Time` deletion field. A value
 field maps zero time to SQL `NULL`; a pointer field uses nil as `NULL`.
 Ordinary nullable columns continue to use pointers or `sql.Scanner` types.
@@ -174,7 +180,7 @@ native Go and SQL type families, nullability, writable generated columns, and
 physical Relation targets. Collection checks validate many-to-many junction
 keys and required columns, target identity, and the index prefixes used by
 deterministic `has_many` and `many_to_many` lookups through stable `CMP001`
-through `CMP014` codes. A model with relations therefore requires those target
+through `CMP015` codes. A model with relations therefore requires those target
 and junction tables in the supplied snapshot.
 
 `schema.Parse` accepts ordinary TiDB `CREATE TABLE` SQL and `SHOW CREATE TABLE`
@@ -245,8 +251,9 @@ admins, err := orm.Query[User]().
 predicates in a positive conjunctive context. For a narrow, metadata-proven
 `has_many` or pure `many_to_many` + root-primary-key order + positive-limit
 shape, it instead applies the relation filter and Limit before loading root
-rows. A pure many-to-many rewrite additionally requires conjunctive `Equal`
-predicates that fix the complete target primary key. Runtime analysis emits
+rows. The one-row proof can use either the target primary key or an explicitly
+declared candidate unique key whose complete field set is fixed by the relation
+and conjunctive `Equal` predicates. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a

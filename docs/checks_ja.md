@@ -39,7 +39,7 @@ func TestUserMapping(t *testing.T) {
 
 `check.Model` は `MOD001` から `MOD007` でmodel intentとtagを検証します
 
-`check.Schema` は `CMP001` から `CMP014` で方向付きcompatibility ruleを適用します
+`check.Schema` はquery rewriteが使うcandidate unique-key宣言を含め、`CMP001` から `CMP015` で方向付きcompatibility ruleを適用します
 
 ## 実行済みqueryのdiagnostic
 
@@ -106,6 +106,10 @@ orderedかつpositive Limitのroot `Has` では、runtime compilerと同じcolle
 `relation_topn_patterns`、`analyzed_relation_topn_patterns`、`uncertain_relation_topn_patterns` がこのruleのcoverageを表します
 
 解決済みfallbackは `QRY005` を出力し、解決できないRelation名、model、key、order、builder flowは推測せずuncertainとします
+
+source decisionはruntime model metadataと同じ規則で `unique=<group>` candidate keyを認識します
+
+source lintはmodel-to-schema compatibility testを置き換えないため、各宣言がunconditionalな物理unique constraintに裏付けられることは `check.Schema` で検証します
 
 `--schema` を指定するとsource解析はruntime model descriptorと同じ `tidbgo` metadataとdefault naming ruleから物理table名とcolumn名も導出します
 

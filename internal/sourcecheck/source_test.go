@@ -695,8 +695,10 @@ type Video struct {
 
 type VideoLink struct {
 	model.Meta `+"`tidbgo:\"table=video_links\"`"+`
-	VideoID int64 `+"`tidbgo:\",pk\"`"+`
-	GenreID int64 `+"`tidbgo:\",pk\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	VideoID int64 `+"`tidbgo:\",unique=video_genre\"`"+`
+	GenreID int64 `+"`tidbgo:\",unique=video_genre\"`"+`
+	Priority int64
 }
 
 type UnprovenVideo struct {
@@ -809,8 +811,10 @@ type Video struct {
 }
 type VideoLink struct {
 	model.Meta ` + "`tidbgo:\"table=video_links\"`" + `
-	VideoID int64 ` + "`tidbgo:\",pk\"`" + `
-	GenreID int64 ` + "`tidbgo:\",pk\"`" + `
+	ID int64 ` + "`tidbgo:\",pk\"`" + `
+	VideoID int64 ` + "`tidbgo:\",unique=video_genre\"`" + `
+	GenreID int64 ` + "`tidbgo:\",unique=video_genre\"`" + `
+	Priority int64
 }
 func query() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
 `
@@ -818,9 +822,12 @@ func query() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equal("Ge
   id BIGINT PRIMARY KEY
 );
 CREATE TABLE video_links (
+  id BIGINT NOT NULL,
   video_id BIGINT NOT NULL,
   genre_id BIGINT NOT NULL,
-  PRIMARY KEY (video_id, genre_id),
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY video_genre (video_id, genre_id),
   KEY genre_video (genre_id, video_id)
 );`)))
 	if got, want := matching.Statistics.AnalyzedIndexPatterns, 1; got != want || len(matching.Diagnostics) != 0 {
@@ -831,9 +838,12 @@ CREATE TABLE video_links (
   id BIGINT PRIMARY KEY
 );
 CREATE TABLE video_links (
+  id BIGINT NOT NULL,
   video_id BIGINT NOT NULL,
   genre_id BIGINT NOT NULL,
-  PRIMARY KEY (video_id, genre_id)
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY video_genre (video_id, genre_id)
 );`)))
 	if got, want := sourceDiagnosticCodes(missing), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
@@ -1022,8 +1032,10 @@ type Video struct {
 }
 type VideoLink struct {
 	model.Meta `+"`tidbgo:\"table=video_links\"`"+`
-	VideoID int64 `+"`tidbgo:\",pk\"`"+`
-	GenreID int64 `+"`tidbgo:\",pk\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	VideoID int64 `+"`tidbgo:\",unique=video_genre\"`"+`
+	GenreID int64 `+"`tidbgo:\",unique=video_genre\"`"+`
+	Priority int64
 }
 `)
 	writeSourceTestFile(t, filepath.Join(directory, "repository", "query.go"), `package repository
@@ -1035,9 +1047,12 @@ func query() { _, _, _ = orm.Query[domain.Video]().Where(orm.Has("Links", orm.Eq
 `)
 	catalog := parseSourceSchema(t, `CREATE TABLE videos (id BIGINT PRIMARY KEY);
 CREATE TABLE video_links (
+  id BIGINT NOT NULL,
   video_id BIGINT NOT NULL,
   genre_id BIGINT NOT NULL,
-  PRIMARY KEY (video_id, genre_id),
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY video_genre (video_id, genre_id),
   KEY genre_video (genre_id, video_id)
 );`)
 	analysis, err := AnalyzePath(directory, WithSchema(catalog))

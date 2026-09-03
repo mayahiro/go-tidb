@@ -60,6 +60,7 @@ modelのread、write、Relation cardinalityへ影響し得る次の事実を診�
 - nullableな物理columnをnon-nullableなnative Go fieldで表す場合はwarning
 - pointer、byte slice、value-form soft-delete fieldを `NOT NULL` へmappingする場合はSQL `NULL` を生成できるためwarning
 - modelがprimary keyを宣言する場合はordered columnが物理primary keyと一致すること
+- 宣言した各candidate unique keyを、対象column全体またはそのsubsetに対するunconditionalな物理primary keyまたはunique keyから証明できること
 - mappingしたcolumnの両側で `AUTO_RANDOM` の有無が一致すること
 - 物理generated columnを通常のwritable model fieldへmappingしないこと
 - 宣言した全Relation targetとmany-to-many junctionのtableおよびkey columnが存在し、既知のRelation keyとSQL type familyに互換性があること
@@ -98,6 +99,7 @@ primary-key mutation capabilityを使用できないことは `check.Model` が 
 | `CMP012` | error | many-to-many junctionにsource-target pair全体だけのunique constraintがない |
 | `CMP013` | error | many-to-many junctionへのinsertにmappingしたkey以外の値が必要 |
 | `CMP014` | warning | collection Relationにsource key全体から始まるindexがない |
+| `CMP015` | error | 宣言したcandidate unique keyをunconditionalな物理primary keyまたはunique keyから証明できない |
 
 value-formの `time.Time` soft-delete fieldはruntimeがSQL `NULL` をzero timeへscanし、zero timeをSQL `NULL` としてwriteするためnullableとして扱います
 
@@ -123,6 +125,14 @@ partial indexはunconditional lookupまたはunique性を証明しません
 
 invisible unique indexはunique性を証明しますがdefault optimizerのlookupを証明せず、FULLTEXTとSPATIAL indexはいずれも証明しません
 
+candidate-key group名は論理metadataでありSQL index名とは比較しません
+
+column順はunique性の証明へ影響せず、subsetに対する物理unique keyはより強いconstraintなので同じ証明に使用できます
+
+TiDBのunique constraintはnon-NULL valueへ適用されるため、compilerはRelation correlationとnon-nilな `Equal` predicateが宣言field全体をcoverする場合だけcandidate keyを使用します
+
+unique constraintはcardinalityを証明し、効率的なrelation-first TopN accessには別順序のindexが必要な場合があります
+
 ## Type checkの境界
 
 現在のtype checkは意図的に広いrepresentation familyを使用します
@@ -143,4 +153,4 @@ foreign keyは要求も検査も行いません
 
 referential-integrity policy、一般的なperformance index、Migration history、live database driftはoffline comparisonの対象外です
 
-現在のTiDB仕様は[`CREATE TABLE` grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)、[`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/)、[case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)、[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
+現在のTiDB仕様は[`CREATE TABLE` grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)、[`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/)、[unique constraint semantics](https://docs.pingcap.com/tidb/stable/constraints/)、[case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)、[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください

@@ -111,7 +111,7 @@ projection、predicate structure、order、preload、compiler rewriteが変わ�
 
 `QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
 
-例として1 rootあたり1 rowの証明不足、target primary key全体を固定しないpure many-to-many filter、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter` があります
+例として1 rootあたり1 rowの証明不足、target primary keyまたはcandidate unique keyのいずれも全体を固定しないpure many-to-many filter、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter` があります
 
 target predicate valueは含めません
 
@@ -207,15 +207,15 @@ compilerは次の条件をmetadataから証明できるTopN shapeをさらに変
 - builderにtop-level direct collectionの `Has` が1個だけあり、他のroot predicateがない
 - positive `Limit` と `OrderBy` が明示され、orderがroot primary key全体と完全に一致する
 - Relation source keyがroot primary key全体である
-- direct `has_many` ではRelation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
-- pure `many_to_many` ではconjunctiveな `Equal` predicateがtarget primary key全体を固定し、pure-junction contractによってsource-target pairが一意になる
+- direct `has_many` ではtarget keyとconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全てcoverし、1 rootあたり最大1 target rowと証明できる
+- pure `many_to_many` ではconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全て固定し、pure-junction contractによってsource-target pairが一意になる
 - `SeekAfter` とroot default soft-delete scopeがactiveではない
 
 このshapeではrelation-firstなderived query内で `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
 
 direct `has_many` はtarget tableをfilterしてorderします
 
-pure `many_to_many` はtarget primary keyがRelation key全体で他のtarget条件が不要ならjunction target columnを直接filterし、それ以外は固定したtargetをjoinしてからjunction source keyをorderします
+pure `many_to_many` はRelation target key自体が完全なprimary keyまたはcandidate unique keyで他のtarget条件が不要ならjunction target columnを直接filterし、それ以外は固定したtargetをjoinしてからjunction source keyをorderします
 
 TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
 
@@ -237,6 +237,21 @@ duplicateなpure-junction pairがある場合はroot resultが重複する可能
 
 workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
 
+payloadを持つedge modelはsurrogate primary keyを維持したままRelation cardinalityを別に宣言できます
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+`Has("VideoGenres", Equal("GenreID", ...))` ではRelation correlationが `VideoID`、predicateが `GenreID` を固定するため、candidate key全体からVideoごとに最大1 edgeと証明できます
+
+offline SQL compileはこの宣言をtrustするため、modelを使用する前に `check.Schema` でSQL snapshotと照合してください
+
 compilerは物理indexをofflineでinspectできません
 
 効率的なdirect `has_many` relation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
@@ -246,6 +261,10 @@ compilerは物理indexをofflineでinspectできません
 pure `many_to_many` のjunctionには通常target columnの後にsource columnを置くindexが必要で、例えば `(role_id, user_id)` が該当します
 
 empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
+
+unique constraintとordered access indexの役割は別です
+
+このedge例では `UNIQUE(video_id, genre_id)` がcardinalityを証明し、`INDEX(genre_id, video_id)` がfilter済みordered Limitを支えます
 
 target modelがsoft-delete fieldを持つ場合、`Has` はactive target rowだけを対象にします
 

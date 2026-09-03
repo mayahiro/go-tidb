@@ -13,6 +13,7 @@ type FieldTag struct {
 	AutoRandom     bool
 	Computed       bool
 	SoftDelete     bool
+	UniqueGroups   []string
 	ExplicitColumn bool
 }
 
@@ -73,6 +74,19 @@ func ParseField(goName, value string, present bool) (FieldTag, error) {
 		case "":
 			return FieldTag{}, errors.New("empty tidbgo tag option is not supported after the column position")
 		default:
+			key, group, found := strings.Cut(option, "=")
+			if found && key == "unique" {
+				if !ValidSQLIdentifier(group) {
+					return FieldTag{}, fmt.Errorf("candidate unique-key group %q must be a simple identifier of at most 64 bytes", group)
+				}
+				for _, existing := range result.UniqueGroups {
+					if existing == group {
+						return FieldTag{}, fmt.Errorf("candidate unique-key group %q must not be repeated on one field", group)
+					}
+				}
+				result.UniqueGroups = append(result.UniqueGroups, group)
+				continue
+			}
 			return FieldTag{}, fmt.Errorf("tidbgo tag option %q is not supported after the column position", option)
 		}
 	}

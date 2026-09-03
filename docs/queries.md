@@ -111,8 +111,8 @@ because they use the same SQL placeholder shape.
 
 `QRY005` reports the metadata-only reason that relation-first TopN could not be
 applied, such as an unproven one-row-per-root condition, a pure many-to-many
-filter that does not fix the complete target primary key, a different root
-order, a root predicate or active root soft-delete scope, a logical group,
+filter that does not fix a complete target primary or candidate unique key, a
+different root order, a root predicate or active root soft-delete scope, a logical group,
 multiple collection predicates, or `SeekAfter`. It never includes target
 predicate values. The fallback remains a valid relation existence query; use
 `Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
@@ -206,20 +206,20 @@ The compiler goes further for this metadata-proven TopN shape:
 - A positive `Limit` and `OrderBy` are explicit, with the order exactly equal
   to the complete root primary key
 - The relation source key is the complete root primary key
-- For direct `has_many`, the relation target primary key is fully covered by
-  the target key plus conjunctive `Equal` predicates, proving at most one
-  matching target row per root
-- For pure `many_to_many`, conjunctive `Equal` predicates fix the complete
-  target primary key, and the pure-junction contract makes that source-target
-  pair unique
+- For direct `has_many`, one complete target primary or declared candidate
+  unique key is covered by the target key plus conjunctive `Equal` predicates,
+  proving at most one matching target row per root
+- For pure `many_to_many`, conjunctive `Equal` predicates fix one complete
+  target primary or declared candidate unique key, and the pure-junction
+  contract makes that source-target pair unique
 - `SeekAfter` and the root default soft-delete scope are not active
 
 For that shape, the compiler builds a derived relation-first query, applies
 `LIMIT` there, then joins only those keys to the root table and inline to-one
 preloads. Direct `has_many` filters and orders the target table. Pure
 `many_to_many` filters the junction target columns directly when the target
-primary key is the complete relation key and no other target condition is
-needed; otherwise it joins the fixed target before ordering the junction
+relation key is itself a complete primary or candidate unique key and no other
+target condition is needed; otherwise it joins the fixed target before ordering the junction
 source key. This is designed to let TiDB push Limit to an ordered association
 index before root lookups. TiDB's [TopN and Limit pushdown
 guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/) explains why
@@ -237,6 +237,24 @@ existence a false positive. Duplicate pure-junction pairs can duplicate a root
 result. Enforce the invariant with schema constraints or application writes as
 appropriate for the workload.
 
+A payload-bearing edge model can keep its surrogate primary key while
+declaring relation cardinality separately:
+
+```go
+type VideoGenre struct {
+    ID       int64 `tidbgo:",pk"`
+    VideoID  int64 `tidbgo:",unique=video_genre"`
+    GenreID  int64 `tidbgo:",unique=video_genre"`
+    Priority int64
+}
+```
+
+For `Has("VideoGenres", Equal("GenreID", ...))`, relation correlation fixes
+`VideoID` and the predicate fixes `GenreID`, so the complete candidate key
+proves one matching edge per Video. Offline SQL compilation trusts this
+declaration; verify it against the SQL snapshot with `check.Schema` before
+using the model.
+
 The compiler cannot inspect physical indexes offline. For efficient direct
 `has_many` relation-first TopN, an index normally needs equality-filter columns
 followed by the relation target key in root-order sequence, such as
@@ -245,6 +263,9 @@ followed by the relation target key in root-order sequence, such as
 its target columns followed by its source columns, such as
 `(role_id, user_id)`. Confirm the actual ordered range scan, pushed Limit, and
 RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
+The uniqueness constraint and ordered access index have separate roles: for
+the edge example, `UNIQUE(video_id, genre_id)` proves cardinality while
+`INDEX(genre_id, video_id)` supports the filtered ordered Limit.
 
 When the target model has a soft-delete field, `Has` considers active target
 rows only. Use `Raw[T]` when an existence condition must explicitly inspect

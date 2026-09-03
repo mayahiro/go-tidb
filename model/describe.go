@@ -99,6 +99,8 @@ type descriptorParser struct {
 	columns      map[string]string
 	fieldNames   map[string]int
 	members      map[string]string
+	uniqueKeys   []uniqueKeyDeclaration
+	uniqueByName map[string]int
 	tableName    string
 	metaSeen     bool
 	autoRandom   string
@@ -106,6 +108,11 @@ type descriptorParser struct {
 	declarations []relationDeclaration
 	relations    []Relation
 	issues       []Issue
+}
+
+type uniqueKeyDeclaration struct {
+	name   string
+	fields []int
 }
 
 func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
@@ -120,6 +127,7 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 	byColumn := make(map[string]int, len(parser.fields))
 	byGoName := make(map[string]int, len(parser.fields))
 	primaryKey := make([]int, 0)
+	uniqueKeys := make([]UniqueKey, len(parser.uniqueKeys))
 	softDelete := -1
 	for index, field := range parser.fields {
 		byColumn[field.columnName] = index
@@ -130,6 +138,13 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 		if field.softDelete {
 			softDelete = index
 		}
+	}
+	for index, declaration := range parser.uniqueKeys {
+		fields := make([]Field, len(declaration.fields))
+		for fieldIndex, descriptorIndex := range declaration.fields {
+			fields[fieldIndex] = parser.fields[descriptorIndex]
+		}
+		uniqueKeys[index] = UniqueKey{name: declaration.name, fields: fields}
 	}
 	byRelation := make(map[string]int, len(parser.relations))
 	for index, relation := range parser.relations {
@@ -142,6 +157,7 @@ func parseDescriptor(modelType reflect.Type) (*Descriptor, error) {
 		byColumn:   byColumn,
 		byGoName:   byGoName,
 		primaryKey: primaryKey,
+		uniqueKeys: uniqueKeys,
 		softDelete: softDelete,
 		relations:  parser.relations,
 		byRelation: byRelation,
@@ -214,6 +230,10 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 				p.add(fieldPath, "soft-delete metadata must be declared on a mapped scalar field")
 				continue
 			}
+			if len(options.uniqueGroups) != 0 {
+				p.add(fieldPath, "candidate unique-key metadata must be declared on a mapped scalar field")
+				continue
+			}
 			if stack[embeddedType] {
 				p.add(fieldPath, "embedded struct cycle is not supported")
 				continue
@@ -234,6 +254,10 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 		}
 		if options.computed && options.primaryKey {
 			p.add(fieldPath, "computed fields cannot be primary-key fields")
+			continue
+		}
+		if options.computed && len(options.uniqueGroups) != 0 {
+			p.add(fieldPath, "computed fields cannot be candidate unique-key fields")
 			continue
 		}
 		if options.softDelete {
@@ -290,6 +314,7 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 		if options.softDelete {
 			p.softDelete = fieldPath
 		}
+		descriptorIndex := len(p.fields)
 		p.fields = append(p.fields, Field{
 			goName:       structField.Name,
 			columnName:   column,
@@ -306,6 +331,22 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 			computed:     options.computed,
 			softDelete:   options.softDelete,
 		})
+		p.appendUniqueKeyFields(options.uniqueGroups, descriptorIndex)
+	}
+}
+
+func (p *descriptorParser) appendUniqueKeyFields(groups []string, fieldIndex int) {
+	for _, group := range groups {
+		if p.uniqueByName == nil {
+			p.uniqueByName = make(map[string]int)
+		}
+		index, exists := p.uniqueByName[group]
+		if !exists {
+			index = len(p.uniqueKeys)
+			p.uniqueByName[group] = index
+			p.uniqueKeys = append(p.uniqueKeys, uniqueKeyDeclaration{name: group})
+		}
+		p.uniqueKeys[index].fields = append(p.uniqueKeys[index].fields, fieldIndex)
 	}
 }
 
@@ -367,6 +408,7 @@ type modelFieldOptions struct {
 	autoRandom     bool
 	computed       bool
 	softDelete     bool
+	uniqueGroups   []string
 	explicitColumn bool
 }
 
@@ -381,6 +423,7 @@ func taggedModelField(field reflect.StructField) (string, modelFieldOptions, err
 		autoRandom:     parsed.AutoRandom,
 		computed:       parsed.Computed,
 		softDelete:     parsed.SoftDelete,
+		uniqueGroups:   parsed.UniqueGroups,
 		explicitColumn: parsed.ExplicitColumn,
 	}, nil
 }

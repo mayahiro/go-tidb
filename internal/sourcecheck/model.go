@@ -21,9 +21,16 @@ type sourceModel struct {
 	fields        []string
 	fieldSet      map[string]struct{}
 	primaryFields []string
+	uniqueKeys    []sourceUniqueKey
+	uniqueByName  map[string]int
 	softDelete    bool
 	physical      *sourcePhysicalModel
 	ambiguous     bool
+}
+
+type sourceUniqueKey struct {
+	name   string
+	fields []string
 }
 
 type sourcePhysicalModel struct {
@@ -152,6 +159,12 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 				}
 			}
 			if options.Computed {
+				if len(options.UniqueGroups) != 0 {
+					result.ambiguous = true
+					if physical {
+						result.physical.ambiguous = true
+					}
+				}
 				continue
 			}
 			if _, exists := result.fieldSet[name.Name]; exists {
@@ -167,6 +180,7 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 				if options.PrimaryKey {
 					result.primaryFields = append(result.primaryFields, name.Name)
 				}
+				result.appendUniqueKeyFields(options.UniqueGroups, name.Name)
 				if options.SoftDelete {
 					if result.softDelete {
 						result.ambiguous = true
@@ -192,6 +206,7 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 			if options.PrimaryKey {
 				result.primaryFields = append(result.primaryFields, name.Name)
 			}
+			result.appendUniqueKeyFields(options.UniqueGroups, name.Name)
 			if options.SoftDelete {
 				if result.softDelete {
 					result.ambiguous = true
@@ -217,6 +232,21 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 		result.physical.ambiguous = true
 	}
 	return result
+}
+
+func (model *sourceModel) appendUniqueKeyFields(groups []string, field string) {
+	for _, group := range groups {
+		if model.uniqueByName == nil {
+			model.uniqueByName = make(map[string]int)
+		}
+		index, exists := model.uniqueByName[group]
+		if !exists {
+			index = len(model.uniqueKeys)
+			model.uniqueByName[group] = index
+			model.uniqueKeys = append(model.uniqueKeys, sourceUniqueKey{name: group})
+		}
+		model.uniqueKeys[index].fields = append(model.uniqueKeys[index].fields, field)
+	}
 }
 
 func sourceModelMetaField(file *sourceFile, field *ast.Field) (bool, bool) {

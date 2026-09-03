@@ -171,8 +171,10 @@ type starterTopNVideo struct {
 
 type starterTopNVideoGenre struct {
 	model.Meta `tidbgo:"table=tidbgo_it_topn_video_genres"`
-	VideoID    int64 `tidbgo:",pk"`
-	GenreID    int64 `tidbgo:",pk"`
+	ID         int64 `tidbgo:",pk"`
+	VideoID    int64 `tidbgo:",unique=video_genre"`
+	GenreID    int64 `tidbgo:",unique=video_genre"`
+	Priority   int64
 }
 
 type starterDecimal struct {
@@ -408,9 +410,12 @@ var fixtureTables = []fixtureTable{
 	{
 		name: "tidbgo_it_topn_video_genres",
 		create: `CREATE TABLE tidbgo_it_topn_video_genres (
+  id BIGINT NOT NULL,
   video_id BIGINT NOT NULL,
   genre_id BIGINT NOT NULL,
-  PRIMARY KEY (video_id, genre_id),
+  priority BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY tidbgo_it_topn_video_genres_video_genre (video_id, genre_id),
   KEY tidbgo_it_topn_video_genres_genre_video (genre_id, video_id)
 )`,
 		drop: "DROP TABLE tidbgo_it_topn_video_genres",
@@ -1316,10 +1321,10 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 
 	links := make([]starterTopNVideoGenre, 0, 55)
 	for id := int64(2); id <= 100; id += 2 {
-		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 7})
+		links = append(links, starterTopNVideoGenre{ID: int64(len(links) + 1), VideoID: id, GenreID: 7, Priority: id})
 	}
 	for id := int64(1); id <= 10; id += 2 {
-		links = append(links, starterTopNVideoGenre{VideoID: id, GenreID: 8})
+		links = append(links, starterTopNVideoGenre{ID: int64(len(links) + 1), VideoID: id, GenreID: 8, Priority: id})
 	}
 	if affected, err := orm.InsertMany(links).Exec(ctx, database); err != nil {
 		fatalDatabaseError(t, dsn, "insert relation TopN links", err)

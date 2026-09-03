@@ -1,6 +1,7 @@
 package modelmeta
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,11 +44,12 @@ func TestValidSQLIdentifier(t *testing.T) {
 func TestParseModelTags(t *testing.T) {
 	t.Parallel()
 
-	field, err := ParseField("UserID", ",pk,auto_random", true)
+	field, err := ParseField("UserID", ",pk,auto_random,unique=tenant_user,unique=external_user", true)
 	if err != nil {
 		t.Fatalf("ParseField() error = %v", err)
 	}
-	if field.Column != "user_id" || !field.PrimaryKey || !field.AutoRandom || field.ExplicitColumn {
+	if field.Column != "user_id" || !field.PrimaryKey || !field.AutoRandom || field.ExplicitColumn ||
+		!reflect.DeepEqual(field.UniqueGroups, []string{"tenant_user", "external_user"}) {
 		t.Fatalf("ParseField() = %#v", field)
 	}
 	explicit, err := ParseField("UserID", "user_id,soft_delete", true)
@@ -56,6 +58,16 @@ func TestParseModelTags(t *testing.T) {
 	}
 	if _, err := ParseField("ID", ",pk,pk", true); err == nil || !strings.Contains(err.Error(), "must not be repeated") {
 		t.Fatalf("ParseField(repeated) error = %v", err)
+	}
+	for name, value := range map[string]string{
+		"missing group":  ",unique=",
+		"invalid group":  ",unique=tenant-user",
+		"repeated group": ",unique=tenant_user,unique=tenant_user",
+		"missing equals": ",unique",
+	} {
+		if _, err := ParseField("ID", value, true); err == nil {
+			t.Fatalf("ParseField(%s) error = nil", name)
+		}
 	}
 	if ignored, err := ParseIgnore("-", true); err != nil || !ignored {
 		t.Fatalf("ParseIgnore() = %t, %v", ignored, err)

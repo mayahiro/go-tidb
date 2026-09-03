@@ -17,8 +17,10 @@ type relationTopNVideo struct {
 
 type relationTopNVideoGenre struct {
 	model.Meta `tidbgo:"table=relation_topn_video_genres"`
-	VideoID    int64 `tidbgo:",pk"`
-	GenreID    int64 `tidbgo:",pk"`
+	ID         int64 `tidbgo:",pk"`
+	VideoID    int64 `tidbgo:",unique=video_genre"`
+	GenreID    int64 `tidbgo:",unique=video_genre"`
+	Priority   int64
 }
 
 type relationTopNMaker struct {
