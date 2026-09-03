@@ -216,14 +216,24 @@ The compiler goes further for this metadata-proven TopN shape:
 
 For that shape, the compiler builds a derived relation-first query, applies
 `LIMIT` there, then joins only those keys to the root table and inline to-one
-preloads. Direct `has_many` filters and orders the target table. Pure
-`many_to_many` filters the junction target columns directly when the target
-relation key is itself a complete primary or candidate unique key and no other
-target condition is needed; otherwise it joins the fixed target before ordering the junction
-source key. This is designed to let TiDB push Limit to an ordered association
-index before root lookups. TiDB's [TopN and Limit pushdown
+preloads. The outer query includes `LEADING(tidbgo_k0, tidbgo_t0)`, naming only
+the swappable derived-key and root inner-join pair. This keeps the limited key
+set as the driving input before root lookups without constraining later inline
+`LEFT JOIN` preloads. The compiler deliberately does not add `INL_JOIN`:
+`LEADING` controls join order, while TiDB remains responsible for selecting an
+applicable join algorithm. Direct `has_many` filters and orders the target
+table. Pure `many_to_many` filters the junction target columns directly when
+the target relation key is itself a complete primary or candidate unique key
+and no other target condition is needed; otherwise it joins the fixed target
+before ordering the junction source key. This is designed to let TiDB push
+Limit to an ordered association index before root lookups. TiDB's [TopN and Limit pushdown
 guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/) explains why
 placing these operators close to the data source reduces work.
+TiDB's [`LEADING` documentation](https://docs.pingcap.com/tidb/stable/optimizer-hints/#leadingt1_name--tl_name-)
+describes its join-order semantics and the cases that produce an inapplicable
+hint warning. Verify generated statements with `SHOW WARNINGS` immediately
+after the statement on the same connection, and use `ExplainAnalyze` on
+representative data.
 
 Relation mappings are a data-integrity contract even when the physical schema
 does not declare a foreign key. Every target key represented by a direct

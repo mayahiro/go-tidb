@@ -14,6 +14,7 @@ const (
 	relationTopNAssociationAlias = "tidbgo_a0"
 	relationTopNManyTargetAlias  = "tidbgo_m0"
 	relationTopNKeyAlias         = "tidbgo_k0"
+	relationTopNLeadingHint      = "/*+ LEADING(" + relationTopNKeyAlias + ", " + inlinePreloadRootAlias + ") */ "
 	relationTopNManySQLCapacity  = 128
 )
 
@@ -97,7 +98,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	if selection.pagination.offsetSet {
 		argumentCount++
 	}
-	sqlCapacity += len(base.sql) + inlinePreloadSQLCapacity(inline) + 256
+	sqlCapacity += len(base.sql) + len(relationTopNLeadingHint) + inlinePreloadSQLCapacity(inline) + 256
 	associationTable := metadata.target.TableName()
 	associationColumns := metadata.targetColumns
 	predicateAlias := relationTopNAssociationAlias
@@ -113,6 +114,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	var query strings.Builder
 	query.Grow(sqlCapacity)
 	query.WriteString("SELECT ")
+	query.WriteString(relationTopNLeadingHint)
 	writeRelationTopNColumns(&query, inlinePreloadRootAlias, base.scanPlan.columns)
 	writeInlinePreloadColumns(&query, inline)
 	query.WriteString(" FROM (SELECT ")

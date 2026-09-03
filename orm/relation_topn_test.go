@@ -60,7 +60,7 @@ func TestSelectQueryBuildsRelationFirstTopN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title`, `tidbgo_t1`.`id`, `tidbgo_t1`.`name` FROM (SELECT `tidbgo_a0`.`video_id` FROM `relation_topn_video_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`video_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `relation_topn_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) LEFT JOIN `relation_topn_makers` AS `tidbgo_t1` ON (`tidbgo_t0`.`maker_id` = `tidbgo_t1`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`title`, `tidbgo_t1`.`id`, `tidbgo_t1`.`name` FROM (SELECT `tidbgo_a0`.`video_id` FROM `relation_topn_video_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`video_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `relation_topn_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) LEFT JOIN `relation_topn_makers` AS `tidbgo_t1` ON (`tidbgo_t0`.`maker_id` = `tidbgo_t1`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -107,7 +107,7 @@ func TestSelectQueryBuildsManyToManyRelationFirstTopN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`email` FROM (SELECT `tidbgo_a0`.`user_id` FROM `preload_user_roles` AS `tidbgo_a0` WHERE `tidbgo_a0`.`role_id` = ? ORDER BY `tidbgo_a0`.`user_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `preload_users` AS `tidbgo_t0` ON (`tidbgo_k0`.`user_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`email` FROM (SELECT `tidbgo_a0`.`user_id` FROM `preload_user_roles` AS `tidbgo_a0` WHERE `tidbgo_a0`.`role_id` = ? ORDER BY `tidbgo_a0`.`user_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `preload_users` AS `tidbgo_t0` ON (`tidbgo_k0`.`user_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}
@@ -244,7 +244,7 @@ func TestRelationFirstTopNPreservesOffsetAndCompositeKeyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	wantSQL := "SELECT `tidbgo_t0`.`tenant_id`, `tidbgo_t0`.`id` FROM (SELECT `tidbgo_a0`.`tenant_id`, `tidbgo_a0`.`video_id` FROM `relation_topn_tenant_video_links` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`video_id` DESC LIMIT ? OFFSET ?) AS `tidbgo_k0` JOIN `relation_topn_tenant_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`tenant_id` = `tidbgo_t0`.`tenant_id` AND `tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`tenant_id` DESC, `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`tenant_id`, `tidbgo_t0`.`id` FROM (SELECT `tidbgo_a0`.`tenant_id`, `tidbgo_a0`.`video_id` FROM `relation_topn_tenant_video_links` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`tenant_id` DESC, `tidbgo_a0`.`video_id` DESC LIMIT ? OFFSET ?) AS `tidbgo_k0` JOIN `relation_topn_tenant_videos` AS `tidbgo_t0` ON (`tidbgo_k0`.`tenant_id` = `tidbgo_t0`.`tenant_id` AND `tidbgo_k0`.`video_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`tenant_id` DESC, `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}

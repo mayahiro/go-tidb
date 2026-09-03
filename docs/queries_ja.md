@@ -213,6 +213,12 @@ compilerは次の条件をmetadataから証明できるTopN shapeをさらに変
 
 このshapeではrelation-firstなderived query内で `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
 
+outer queryでは交換可能なderived keyとrootのinner join pairだけを `LEADING(tidbgo_k0, tidbgo_t0)` へ指定します
+
+これによりLimit済みkey setをroot lookupのdriving sideとし、後続するinline `LEFT JOIN` preloadの順序は拘束しません
+
+`LEADING` はjoin順を制御し、TiDBが適用可能なjoin algorithmを選択できるようにするため、compilerは `INL_JOIN` を自動付与しません
+
 direct `has_many` はtarget tableをfilterしてorderします
 
 pure `many_to_many` はRelation target key自体が完全なprimary keyまたはcandidate unique keyで他のtarget条件が不要ならjunction target columnを直接filterし、それ以外は固定したtargetをjoinしてからjunction source keyをorderします
@@ -220,6 +226,10 @@ pure `many_to_many` はRelation target key自体が完全なprimary keyまたは
 TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
 
 data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pushdown guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
+
+join順のsemanticsとhintが適用不能になる条件はTiDBの[`LEADING` documentation](https://docs.pingcap.com/tidb/stable/optimizer-hints/#leadingt1_name--tl_name-)を参照してください
+
+代表dataでは対象statementと同じconnection上で直後に `SHOW WARNINGS` を実行し、`ExplainAnalyze` も確認します
 
 物理schemaにforeign keyがなくてもRelation mappingはdata integrity contractです
 

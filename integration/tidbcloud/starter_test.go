@@ -1341,16 +1341,28 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	if err != nil {
 		t.Fatalf("build relation TopN query: %v", err)
 	}
-	if !strings.Contains(sqlText, "FROM (SELECT `tidbgo_a0`.`video_id`") ||
+	if !strings.Contains(sqlText, "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */") ||
+		!strings.Contains(sqlText, "FROM (SELECT `tidbgo_a0`.`video_id`") ||
 		!strings.Contains(sqlText, "LIMIT ?) AS `tidbgo_k0` JOIN `tidbgo_it_topn_videos` AS `tidbgo_t0`") ||
 		strings.Contains(sqlText, "EXISTS") {
 		t.Fatalf("relation TopN SQL = %q, want relation-first derived SELECT", sqlText)
 	}
 
-	selected, err := query.All(ctx, database)
+	relationTopNConnection, err := database.Conn(ctx)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "reserve relation-first TopN connection", err)
+	}
+	defer func() {
+		if closeErr := relationTopNConnection.Close(); closeErr != nil {
+			t.Errorf("close relation-first TopN connection: %s", redact.Error(closeErr, dsn))
+		}
+	}()
+
+	selected, err := query.All(ctx, relationTopNConnection)
 	if err != nil {
 		fatalDatabaseError(t, dsn, "execute relation-first TopN query", err)
 	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "relation-first TopN SELECT")
 	if len(selected) != 20 {
 		t.Fatalf("relation TopN result count = %d, want 20", len(selected))
 	}
@@ -1361,55 +1373,26 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 		}
 	}
 
-	func() {
-		connection, connectionErr := database.Conn(ctx)
-		if connectionErr != nil {
-			fatalDatabaseError(t, dsn, "reserve relation-filter count connection", connectionErr)
-		}
-		defer func() {
-			if closeErr := connection.Close(); closeErr != nil {
-				t.Errorf("close relation-filter count connection: %s", redact.Error(closeErr, dsn))
-			}
-		}()
-		count, countErr := orm.Query[starterTopNVideo]().
-			Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
-			Count(ctx, connection)
-		if countErr != nil {
-			fatalDatabaseError(t, dsn, "count relation-filtered videos through the semi-join rewrite", countErr)
-		}
-		if count != 50 {
-			t.Fatalf("relation-filtered video count = %d, want 50", count)
-		}
-		warningRows, warningErr := connection.QueryContext(ctx, "SHOW WARNINGS")
-		if warningErr != nil {
-			fatalDatabaseError(t, dsn, "read relation-filter count hint warnings", warningErr)
-		}
-		defer func() {
-			if closeErr := warningRows.Close(); closeErr != nil {
-				t.Errorf("close relation-filter count hint warnings: %s", redact.Error(closeErr, dsn))
-			}
-		}()
-		if warningRows.Next() {
-			var level string
-			var code int
-			var message string
-			if scanErr := warningRows.Scan(&level, &code, &message); scanErr != nil {
-				fatalDatabaseError(t, dsn, "scan relation-filter count hint warning", scanErr)
-			}
-			t.Fatalf("relation-filter count produced optimizer warning level=%s code=%d message=%q", level, code, message)
-		}
-		if rowsErr := warningRows.Err(); rowsErr != nil {
-			fatalDatabaseError(t, dsn, "iterate relation-filter count hint warnings", rowsErr)
-		}
-	}()
+	count, err := orm.Query[starterTopNVideo]().
+		Where(orm.Has("VideoGenres", orm.Equal("GenreID", int64(7)))).
+		Count(ctx, relationTopNConnection)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "count relation-filtered videos through the semi-join rewrite", err)
+	}
+	if count != 50 {
+		t.Fatalf("relation-filtered video count = %d, want 50", count)
+	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "relation-filter count")
 
-	plan, err := query.ExplainAnalyze(ctx, database)
+	plan, err := query.ExplainAnalyze(ctx, relationTopNConnection)
 	if err != nil {
 		fatalDatabaseError(t, dsn, "explain analyze relation-first TopN query", err)
 	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "relation-first TopN EXPLAIN ANALYZE")
 	foundAssociation := false
 	foundIndex := false
 	foundPushedLimit := false
+	foundRootLookup := false
 	foundRU := false
 	for _, row := range plan {
 		if strings.Contains(row.AccessObject, "table:tidbgo_a0") {
@@ -1427,12 +1410,18 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 		if strings.Contains(row.ID, "Limit") && row.Task == "cop[tikv]" && row.ActRows == 20 {
 			foundPushedLimit = true
 		}
+		if row.PhysicalTable == "tidbgo_it_topn_videos" {
+			foundRootLookup = true
+			if strings.Contains(row.ID, "FullScan") || row.ActRows > 20 {
+				t.Fatalf("relation TopN root access did not remain a bounded lookup: %#v", row)
+			}
+		}
 		if strings.Contains(row.ExecutionInfo, "RU:") {
 			foundRU = true
 		}
 	}
-	if !foundAssociation || !foundIndex || !foundPushedLimit || !foundRU {
-		t.Fatalf("relation TopN plan lacks association table, structural index, pushed Limit, or RU data: %#v", plan)
+	if !foundAssociation || !foundIndex || !foundPushedLimit || !foundRootLookup || !foundRU {
+		t.Fatalf("relation TopN plan lacks association table, structural index, pushed Limit, bounded root lookup, or RU data: %#v", plan)
 	}
 
 	manyToManyQuery := orm.Query[starterUser]().
@@ -1444,23 +1433,26 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	if err != nil {
 		t.Fatalf("build many-to-many relation TopN query: %v", err)
 	}
-	if !strings.Contains(manyToManySQL, "FROM (SELECT `tidbgo_a0`.`user_id` FROM `tidbgo_it_user_roles` AS `tidbgo_a0`") ||
+	if !strings.Contains(manyToManySQL, "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */") ||
+		!strings.Contains(manyToManySQL, "FROM (SELECT `tidbgo_a0`.`user_id` FROM `tidbgo_it_user_roles` AS `tidbgo_a0`") ||
 		!strings.Contains(manyToManySQL, "WHERE `tidbgo_a0`.`role_id` = ?") ||
 		!strings.Contains(manyToManySQL, "LIMIT ?) AS `tidbgo_k0` JOIN `tidbgo_it_users` AS `tidbgo_t0`") ||
 		strings.Contains(manyToManySQL, "EXISTS") || strings.Contains(manyToManySQL, "JOIN `tidbgo_it_roles`") {
 		t.Fatalf("many-to-many relation TopN SQL = %q, want junction-first derived SELECT", manyToManySQL)
 	}
-	manyToManySelected, err := manyToManyQuery.All(ctx, database)
+	manyToManySelected, err := manyToManyQuery.All(ctx, relationTopNConnection)
 	if err != nil {
 		fatalDatabaseError(t, dsn, "execute many-to-many relation-first TopN query", err)
 	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "many-to-many relation-first TopN SELECT")
 	if len(manyToManySelected) != 1 || manyToManySelected[0].ID != 2 {
 		t.Fatalf("many-to-many relation TopN users = %#v, want user 2", manyToManySelected)
 	}
-	manyToManyPlan, err := manyToManyQuery.ExplainAnalyze(ctx, database)
+	manyToManyPlan, err := manyToManyQuery.ExplainAnalyze(ctx, relationTopNConnection)
 	if err != nil {
 		fatalDatabaseError(t, dsn, "explain analyze many-to-many relation-first TopN query", err)
 	}
+	requireNoTiDBWarnings(t, ctx, relationTopNConnection, dsn, "many-to-many relation-first TopN EXPLAIN ANALYZE")
 	foundManyToManyJunction := false
 	foundManyToManyRU := false
 	for _, row := range manyToManyPlan {
@@ -1473,6 +1465,32 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	}
 	if !foundManyToManyJunction || !foundManyToManyRU {
 		t.Fatalf("many-to-many relation TopN plan lacks resolved junction or RU data: %#v", manyToManyPlan)
+	}
+}
+
+func requireNoTiDBWarnings(t *testing.T, ctx context.Context, connection *sql.Conn, dsn, operation string) {
+	t.Helper()
+
+	warningRows, err := connection.QueryContext(ctx, "SHOW WARNINGS")
+	if err != nil {
+		fatalDatabaseError(t, dsn, "read "+operation+" hint warnings", err)
+	}
+	defer func() {
+		if closeErr := warningRows.Close(); closeErr != nil {
+			t.Errorf("close %s hint warnings: %s", operation, redact.Error(closeErr, dsn))
+		}
+	}()
+	if warningRows.Next() {
+		var level string
+		var code int
+		var message string
+		if scanErr := warningRows.Scan(&level, &code, &message); scanErr != nil {
+			fatalDatabaseError(t, dsn, "scan "+operation+" hint warning", scanErr)
+		}
+		t.Fatalf("%s produced optimizer warning level=%s code=%d message=%q", operation, level, code, message)
+	}
+	if rowsErr := warningRows.Err(); rowsErr != nil {
+		fatalDatabaseError(t, dsn, "iterate "+operation+" hint warnings", rowsErr)
 	}
 }
 

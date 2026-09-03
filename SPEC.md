@@ -136,7 +136,8 @@ The currently implemented surface provides:
   `EXISTS`, with TiDB semi-join hints for filtered positive collections and a
   metadata-proven relation-first TopN rewrite for eligible direct `HasMany`
   and pure `ManyToMany` pages, using a complete target primary or declared
-  candidate unique key without implicit preloading
+  candidate unique key and an outer derived-key-first `LEADING` hint without
+  implicit preloading or a forced join algorithm
 - TiDB-default NULL ordering and primary-key-backed deterministic keyset
   validation
 - Typed slice `IN` and `NOT IN` predicates

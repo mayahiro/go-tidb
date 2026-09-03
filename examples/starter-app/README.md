@@ -81,8 +81,10 @@ and uncertainty counts even when no diagnostic is emitted
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
 compiler uses the `ClipGenre` candidate key to prove one matching edge per
-clip, then filters and limits `clip_genres` before loading root rows. The edge
-keeps its surrogate primary key and required `Priority` payload.
+clip, then filters and limits `clip_genres` before loading root rows. Its outer
+`LEADING(tidbgo_k0, tidbgo_t0)` hint keeps that limited key set as the root
+lookup's driving input. The edge keeps its surrogate primary key and required
+`Priority` payload.
 `BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
 many-to-many shape: fixing the complete Role primary key lets the compiler
 filter the junction directly and limit `(role_id, user_id)` access before

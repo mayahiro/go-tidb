@@ -253,7 +253,9 @@ predicates in a positive conjunctive context. For a narrow, metadata-proven
 shape, it instead applies the relation filter and Limit before loading root
 rows. The one-row proof can use either the target primary key or an explicitly
 declared candidate unique key whose complete field set is fixed by the relation
-and conjunctive `Equal` predicates. Runtime analysis emits
+and conjunctive `Equal` predicates. The generated outer query uses
+`LEADING(tidbgo_k0, tidbgo_t0)` so the limited derived keys drive root-row
+lookups; it does not force a join algorithm. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a

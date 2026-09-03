@@ -259,6 +259,8 @@ metadataから証明できる限定的な `has_many` またはpure `many_to_many
 
 1 rowの証明にはtarget primary key、またはRelationとconjunctiveな `Equal` predicateがfield全体を固定する明示的なcandidate unique keyを使用できます
 
+生成するouter queryは `LEADING(tidbgo_k0, tidbgo_t0)` でLimit済みderived keyをroot row lookupのdriving sideとし、join algorithm自体は固定しません
+
 orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
 
 schema-awareなruntime解析とsource解析はassociation index prefixの不足を `QRY007` で出力します
