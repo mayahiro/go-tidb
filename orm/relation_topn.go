@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 	"github.com/mayahiro/go-tidb/model"
 )
 
@@ -174,55 +175,52 @@ func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (
 	if search.count == 0 {
 		return relationTopNAnalysis{}, nil
 	}
-	analysis := relationTopNAnalysis{candidate: true, relationName: search.first.relation.GoName()}
-	if search.count != 1 {
-		analysis.reason = "the query contains more than one collection Has predicate"
-		return analysis, nil
-	}
 	candidate := search.first
-	if !candidate.direct {
-		analysis.reason = "the collection Has predicate is nested in a logical group"
-		return analysis, nil
-	}
-	if candidate.relation.Kind() != model.RelationHasMany {
-		analysis.reason = "the relation uses a many-to-many junction whose pair uniqueness is not available to the offline query compiler"
-		return analysis, nil
-	}
-	if selection.seekAfter != nil {
-		analysis.reason = "the query uses SeekAfter, which is not yet supported by the relation-first TopN compiler"
-		return analysis, nil
-	}
-	if len(selection.predicates) != 1 {
-		analysis.reason = "the query contains a root predicate that must be evaluated before LIMIT"
-		return analysis, nil
-	}
+	relationName := candidate.relation.GoName()
+	rootSoftDelete := false
 	if _, filterSoftDeleted := activeSoftDeleteField(descriptor, selection.withDeleted); filterSoftDeleted {
-		analysis.reason = "the root default soft-delete scope must be evaluated before LIMIT"
-		return analysis, nil
+		rootSoftDelete = true
+	}
+	outcome := relationtopn.DecideStructural(
+		search.count,
+		candidate.direct,
+		candidate.relation.Kind() == model.RelationHasMany,
+		selection.seekAfter != nil,
+		len(selection.predicates),
+		rootSoftDelete,
+	)
+	if outcome != relationtopn.OutcomeNeedsMetadata {
+		decision := relationtopn.Decision(outcome, relationName)
+		return relationTopNAnalysis{
+			candidate:    outcome != relationtopn.OutcomeNone,
+			relationName: decision.Relation,
+			reason:       decision.Reason,
+		}, nil
 	}
 
 	metadata, err := relationTopNMetadataFor(descriptor, candidate.relation)
 	if err != nil {
 		return relationTopNAnalysis{}, err
 	}
-	if !metadata.sourceIsRootPrimaryKey {
-		analysis.reason = "the relation source key is not the complete root primary key"
-		return analysis, nil
+	outcome = relationtopn.DecideMetadata(
+		metadata.sourceIsRootPrimaryKey,
+		relationTopNOrderMatches(metadata.sourceGoNames, selection.orderBy),
+		relationTopNUniquePerRoot(metadata, candidate.predicate.children),
+	)
+	analysis := relationTopNAnalysis{
+		optimized:    outcome == relationtopn.OutcomeOptimized,
+		candidate:    true,
+		relationName: relationName,
 	}
-	if !relationTopNOrderMatches(metadata.sourceGoNames, selection.orderBy) {
-		analysis.reason = "ORDER BY does not exactly match the relation source key"
-		return analysis, nil
+	if !analysis.optimized {
+		analysis.reason = relationtopn.Decision(outcome, relationName).Reason
 	}
-	if !relationTopNUniquePerRoot(metadata, candidate.predicate.children) {
-		analysis.reason = "the relation target primary key does not prove at most one matching row per root"
-		return analysis, nil
+	if analysis.optimized {
+		analysis.plan = relationTopNPlan{
+			predicate: candidate.predicate,
+			metadata:  metadata,
+		}
 	}
-
-	analysis.plan = relationTopNPlan{
-		predicate: candidate.predicate,
-		metadata:  metadata,
-	}
-	analysis.optimized = true
 	return analysis, nil
 }
 

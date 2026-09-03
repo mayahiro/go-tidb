@@ -59,15 +59,16 @@ without including bind or pagination values.
 | `QRY006` | error | The supplied snapshot cannot provide a table or column needed by an analyzable ordered access |
 | `QRY007` | warning | An ordered positive-LIMIT access has no matching default-usable direct-column index prefix in the supplied snapshot |
 
-`tidbgo lint` also applies `QRY002` through `QRY004` to source query terminals
+`tidbgo lint` also applies `QRY002` through `QRY005` to source query terminals
 whose relevant builder flow can be resolved without package loading
 `tidbgo lint --schema schema.sql` additionally applies `QRY006` and `QRY007`
 to resolved root ordered positive-limit accesses using only conjunctive
-`Equal` filters and one uniform ordering direction
+`Equal` filters and one uniform ordering direction, and to association
+accesses produced by a resolved relation-first TopN compiler decision
 This covers code that was not exercised during RuntimeCapture
-Dynamic values, relation predicates, non-equality filters, mixed ordering, and
-separately mutated builders remain visible in source coverage statistics
-instead of being guessed
+Dynamic relation names, unresolved relation metadata, non-equality association
+filters, mixed ordering, and separately mutated builders remain visible in
+source coverage statistics instead of being guessed
 
 `QRY006` is not suppressible because the requested schema-aware check cannot
 be completed. The other diagnostics describe valid query shapes and set
@@ -84,7 +85,7 @@ matching behavior is defined by TiDB's
 The schema-aware rule applies only when one index candidate is structurally
 clear: a positive `Limit`, a uniform-direction `OrderBy`, and only
 conjunctive `Equal` filters for a root access, or the association access
-produced by captured relation-first TopN. An active default soft-delete scope
+produced by a runtime or source relation-first TopN decision. An active default soft-delete scope
 contributes its generated `IS NULL` column to the equality prefix. Equality columns can
 occupy the leading prefix in any order and must be followed by the ordered
 columns. An expression or prefix-length index does not prove this coverage. A

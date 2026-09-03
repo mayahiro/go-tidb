@@ -97,7 +97,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-Source analysis applies `QRY002` through `QRY004` to resolved `Build`, `All`,
+Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`,
 `First`, `Only`, `Explain`, and `ExplainAnalyze` query terminals
 It resolves fluent chains, a single local builder definition, local query
 helpers, integer and string literals, and simple same-file constants
@@ -108,30 +108,36 @@ Dynamic `Limit` or `Offset` values, variadic ordering, unresolved predicate
 helpers, separately mutated builders, and captured builders are counted as
 `uncertain_patterns` and are not guessed
 
+For an ordered positive-limit root `Has`, source analysis resolves the same
+direct relation metadata and applies the same normalized relation-first TopN
+decision as the runtime compiler. `relation_topn_patterns`,
+`analyzed_relation_topn_patterns`, and
+`uncertain_relation_topn_patterns` expose that rule's coverage. A resolved
+fallback emits `QRY005`; an unresolved relation name, model, key, order, or
+builder flow remains uncertain instead of being guessed
+
 With `--schema`, source analysis also derives physical table and column names
 from the same `tidbgo` metadata and default naming rule as the runtime model
 descriptor. It sends only resolved root shapes with a positive explicit
 `Limit`, uniform-direction `OrderBy`, and conjunctive `Equal` filters to the
-same neutral index-prefix checker used by runtime analysis. The default active
-soft-delete column participates in the equality prefix unless `WithDeleted`
-is resolved on the query
+same neutral index-prefix checker used by runtime analysis. A resolved
+relation-first TopN decision sends its association access to that checker as
+well. The default active soft-delete column participates in the equality
+prefix unless `WithDeleted` is resolved on the root query; the relation target
+soft-delete column participates in the association equality prefix
 
 `index_patterns` counts ordered positive-limit candidates while
 `analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that
-could and could not be checked. Relation predicates, non-equality filters,
-mixed directions, unknown fields, embedded model shapes, and separately
-mutated builders remain uncertain rather than receiving a speculative index
-diagnostic
+could and could not be checked. Relation fallbacks, non-equality association
+filters, mixed directions, unknown fields, embedded model shapes, and
+separately mutated builders remain uncertain rather than receiving a
+speculative index diagnostic
 
 `SRC001` proposes a narrower projection only when one function proves the
 complete result use
 Repository returns, aliases, model methods, and unresolved result flows remain
 explicitly uncertain in the separate `analyzed` and `uncertain` projection
 counters
-
-`QRY005` and relation-first index analysis require the compiler's normalized
-relation decision and therefore remain runtime-capture rules. Source
-`QRY006` and `QRY007` cover only the high-confidence root access above
 
 ## Runtime plan diagnostics
 
@@ -178,12 +184,12 @@ Invalid input returns status `2`, and I/O or internal failures return status
 
 - RuntimeCapture sees only statements executed through go-tidb with the
   derived context
-- Source lint applies `QRY002` through `QRY004` only to statically resolved
-  builder flows
+- Source lint applies `QRY002` through `QRY005` only to statically resolved
+  builder flows and relation metadata
 - Source lint with `--schema` applies `QRY006` and `QRY007` only to resolved
-  root ordered-limit accesses
-- `QRY005` and relation-first index analysis require captured compiler
-  decisions
+  root or relation-first ordered-limit accesses
+- Dynamic relation names and relation shapes that cannot be proven from local
+  source metadata remain visible in relation uncertainty counters
 - `EXPLAIN ANALYZE` executes the SELECT and consumes RU
 - ServerRU collection adds one same-session diagnostic round trip per
   recognized DML statement

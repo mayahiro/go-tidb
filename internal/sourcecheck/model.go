@@ -15,11 +15,15 @@ type sourceTypeKey struct {
 }
 
 type sourceModel struct {
-	name      string
-	fields    []string
-	fieldSet  map[string]struct{}
-	physical  *sourcePhysicalModel
-	ambiguous bool
+	name          string
+	file          *sourceFile
+	structure     *ast.StructType
+	fields        []string
+	fieldSet      map[string]struct{}
+	primaryFields []string
+	softDelete    bool
+	physical      *sourcePhysicalModel
+	ambiguous     bool
 }
 
 type sourcePhysicalModel struct {
@@ -56,9 +60,11 @@ func indexSourceModels(files []*sourceFile, physical bool) map[sourceTypeKey]*so
 
 func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.StructType, physical bool) *sourceModel {
 	result := &sourceModel{
-		name:     key.name,
-		fields:   make([]string, 0, len(structure.Fields.List)),
-		fieldSet: make(map[string]struct{}, len(structure.Fields.List)),
+		name:      key.name,
+		file:      file,
+		structure: structure,
+		fields:    make([]string, 0, len(structure.Fields.List)),
+		fieldSet:  make(map[string]struct{}, len(structure.Fields.List)),
 	}
 	var columnSet map[string]struct{}
 	if physical {
@@ -158,6 +164,16 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 			if !physical {
 				result.fieldSet[name.Name] = struct{}{}
 				result.fields = append(result.fields, name.Name)
+				if options.PrimaryKey {
+					result.primaryFields = append(result.primaryFields, name.Name)
+				}
+				if options.SoftDelete {
+					if result.softDelete {
+						result.ambiguous = true
+						continue
+					}
+					result.softDelete = true
+				}
 				continue
 			}
 			column := options.Column
@@ -173,6 +189,17 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 			}
 			result.fieldSet[name.Name] = struct{}{}
 			result.fields = append(result.fields, name.Name)
+			if options.PrimaryKey {
+				result.primaryFields = append(result.primaryFields, name.Name)
+			}
+			if options.SoftDelete {
+				if result.softDelete {
+					result.ambiguous = true
+					result.physical.ambiguous = true
+					continue
+				}
+				result.softDelete = true
+			}
 			result.physical.columns[name.Name] = column
 			columnSet[column] = struct{}{}
 			if options.SoftDelete {
@@ -227,12 +254,8 @@ func sourceModelTag(field *ast.Field) (string, bool, bool) {
 }
 
 func sourceRelationKind(value string) bool {
-	switch value {
-	case "belongs_to", "has_one", "has_many", "many_to_many":
-		return true
-	default:
-		return false
-	}
+	_, ok := modelmeta.ParseRelationKind(value)
+	return ok
 }
 
 func sourceScalarShape(expression ast.Expr) bool {

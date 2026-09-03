@@ -205,11 +205,12 @@ identifiers come only from validated model metadata.
 Runtime capture applies `QRY002` through `QRY005` automatically to executed
 typed query shapes. Passing an offline schema snapshot to `tidbgo analyze`
 adds `QRY006` and `QRY007` index checks. `tidbgo lint` applies `QRY002` through
-`QRY004` to statically resolved source query terminals, including `Build`,
-without compiling or executing the application. Its optional `--schema`
-applies the same `QRY006` and `QRY007` index rules to high-confidence root
-ordered-limit shapes. Dynamic and separately mutated builder flows remain
-explicitly uncertain.
+`QRY005` to statically resolved source query terminals, including `Build`,
+without compiling or executing the application. For relation-filtered TopN it
+uses the same normalized compiler decision as runtime query compilation. Its
+optional `--schema` applies the same `QRY006` and `QRY007` index rules to
+high-confidence root and relation-first ordered-limit shapes. Dynamic and
+separately mutated builder flows remain explicitly uncertain.
 Index presence does not predict the optimizer's selected plan, so verify it
 with `Explain` or `ExplainAnalyze`.
 
@@ -244,9 +245,10 @@ admins, err := orm.Query[User]().
 predicates in a positive conjunctive context. For a narrow, metadata-proven
 `has_many` + root-primary-key order + positive-limit shape, it instead applies
 the target filter and Limit before loading root rows. Runtime analysis emits
-`QRY005` when an executed ordered, limited collection filter falls back to
-`EXISTS`, while schema-aware runtime analysis emits `QRY007` for a missing
-association index prefix. Pass target
+`QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
+This applies both to executed runtime shapes and statically resolved source
+terminals. Schema-aware runtime and source analysis emit `QRY007` for a
+missing association index prefix. Pass target
 predicates to require a matching related row, or omit them for existence only.
 Relation and target field names are exported Go field names. `Build` validates
 and compiles them entirely offline. See the [scalar query
@@ -568,16 +570,19 @@ tidbgo lint ./internal/repository --schema schema.sql
 
 The optional path defaults to the current directory. The command does not
 execute application code, load packages, connect to a database, or modify
-source. `QRY002` through `QRY004` cover resolved `Offset`, `Limit` plus
-ordering, and leading-wildcard predicates. `SRC001` is emitted only when every
+source. `QRY002` through `QRY005` cover resolved `Offset`, `Limit` plus
+ordering, leading-wildcard predicates, and relation-first TopN compiler
+fallbacks. `SRC001` is emitted only when every
 use of an `All`, `First`, or `Only` result is understood within the same
 function. With `--schema`, resolved root queries using a positive explicit
 `Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
-checked for a matching physical index prefix. That index check leaves dynamic
-values, relation predicates, range filters, mixed ordering, and separately
-mutated builders uncertain. Projection analysis also leaves returned or passed
-results, aliases, and preloads uncertain. Every report includes coverage
-statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
+checked for a matching physical index prefix. Eligible direct `has_many`
+relation-first TopN queries check the association access in the same way.
+Dynamic relation names, unresolved relation metadata, range filters, mixed
+ordering, and separately mutated builders remain uncertain. Projection
+analysis also leaves returned or passed results, aliases, and preloads
+uncertain. Every report includes general, relation compiler, and index
+coverage statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
 
 Print version information with:
 
@@ -619,10 +624,11 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - Typed mutations expose only bound value assignment and same-column addition,
   not arbitrary SQL expressions, unconditional UPDATE, or unconditional
   DELETE. `RawExec` is the explicit escape hatch.
-- Source lint applies `QRY002` through `QRY004` only when the relevant builder
-  flow is statically resolved. `--schema` adds `QRY006` and `QRY007` for
-  high-confidence root ordered-limit shapes. Source `QRY005` and
-  relation-first index analysis still require a captured compiler decision.
+- Source lint applies `QRY002` through `QRY005` only when the relevant builder
+  flow and relation metadata are statically resolved. `--schema` adds
+  `QRY006` and `QRY007` for high-confidence root and relation-first
+  ordered-limit shapes. Dynamic relations remain explicit in uncertainty
+  counters instead of being guessed.
 - No database connection constructor, bundled protocol driver, migration
   application API, or live-schema introspection API is available yet.
 

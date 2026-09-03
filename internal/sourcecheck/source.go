@@ -45,6 +45,15 @@ type Statistics struct {
 	Uncertain           int `json:"uncertain"`
 	AnalyzedPatterns    int `json:"analyzed_patterns"`
 	UncertainPatterns   int `json:"uncertain_patterns"`
+	// RelationTopNPatterns counts ordered positive-limit query patterns that
+	// contain a root Has predicate.
+	RelationTopNPatterns int `json:"relation_topn_patterns"`
+	// AnalyzedRelationTopNPatterns counts patterns with a deterministic
+	// relation-first compiler decision.
+	AnalyzedRelationTopNPatterns int `json:"analyzed_relation_topn_patterns"`
+	// UncertainRelationTopNPatterns counts patterns whose compiler decision
+	// cannot be derived without guessing.
+	UncertainRelationTopNPatterns int `json:"uncertain_relation_topn_patterns"`
 	// IndexPatterns counts ordered positive-limit candidates only when
 	// WithSchema enables schema-aware analysis.
 	IndexPatterns int `json:"index_patterns"`
@@ -319,7 +328,7 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
@@ -329,6 +338,9 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.Uncertain,
 		statistics.AnalyzedPatterns,
 		statistics.UncertainPatterns,
+		statistics.RelationTopNPatterns,
+		statistics.AnalyzedRelationTopNPatterns,
+		statistics.UncertainRelationTopNPatterns,
 		statistics.IndexPatterns,
 		statistics.AnalyzedIndexPatterns,
 		statistics.UncertainIndexPatterns,

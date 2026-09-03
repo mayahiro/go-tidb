@@ -52,7 +52,7 @@ func Diagnostics(shape queryshape.Query) []check.Diagnostic {
 		diagnostics = append(diagnostics, UnorderedPaginationDiagnostic(shape.Model))
 	}
 	if returnsRows && shape.Compiler.Rewrite == queryshape.CompilerRewriteRelationTopNFallback {
-		diagnostics = append(diagnostics, relationTopNFallbackDiagnostic(
+		diagnostics = append(diagnostics, RelationTopNFallbackDiagnostic(
 			shape.Model,
 			shape.Compiler.Relation,
 			shape.Compiler.Reason,
@@ -91,7 +91,9 @@ func UnorderedPaginationDiagnostic(model string) check.Diagnostic {
 	}
 }
 
-func relationTopNFallbackDiagnostic(model, relation, reason string) check.Diagnostic {
+// RelationTopNFallbackDiagnostic describes one deterministic compiler
+// fallback without requiring a complete runtime query shape.
+func RelationTopNFallbackDiagnostic(model, relation, reason string) check.Diagnostic {
 	message := "SELECT for " + model + " combines a collection relation with ORDER BY and LIMIT, but the compiler could not safely move TopN to the relation source"
 	if relation != "" {
 		message = "SELECT for " + model + " combines collection relation " + relation + " with ORDER BY and LIMIT, but the compiler could not safely move TopN to the relation source"

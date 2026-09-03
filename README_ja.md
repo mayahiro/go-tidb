@@ -205,9 +205,11 @@ runtime captureは実行されたtyped query shapeへ `QRY002` から `QRY005` �
 
 offline schema snapshotを `tidbgo analyze` へ渡すと `QRY006` と `QRY007` のindex checkを追加します
 
-`tidbgo lint` はapplicationをcompileまたは実行せず、`Build` を含むsource上の解決済みquery terminalへ `QRY002` から `QRY004` を適用します
+`tidbgo lint` はapplicationをcompileまたは実行せず、`Build` を含むsource上の解決済みquery terminalへ `QRY002` から `QRY005` を適用します
 
-optionalな `--schema` は高確度なroot ordered-limit shapeへ同じ `QRY006` と `QRY007` のindex ruleを適用します
+Relation filter付きTopNにはruntime query compilerと共通の正規化済みdecisionを使います
+
+optionalな `--schema` は高確度なrootとrelation-first ordered-limit shapeへ同じ `QRY006` と `QRY007` のindex ruleを適用します
 
 dynamicな値と別statementで変更されたbuilder flowは明示的にuncertainとします
 
@@ -249,9 +251,9 @@ admins, err := orm.Query[User]().
 
 metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
 
-実行されたorderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合はruntime解析が `QRY005` を出力します
+orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
 
-schema-aware runtime解析はassociation index prefixの不足を `QRY007` で出力します
+schema-awareなruntime解析とsource解析はassociation index prefixの不足を `QRY007` で出力します
 
 target predicateを渡せば一致するrelated rowを条件とし、省略すれば存在だけを条件とします
 
@@ -595,15 +597,17 @@ pathを省略するとcurrent directoryを使用します
 
 application codeの実行、package load、DB接続、source変更は行いません
 
-`QRY002` から `QRY004` は解決できた `Offset`、`Limit` とorder、leading wildcard predicateを対象にします
+`QRY002` から `QRY005` は解決できた `Offset`、`Limit` とorder、leading wildcard predicate、relation-first TopN compiler fallbackを対象にします
 
 `All`、`First`、`Only` resultの全利用を同じfunction内で理解できる場合だけ `SRC001` を出力します
 
 `--schema` を指定した場合、明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterだけを使う解決済みroot queryを物理index prefixと照合します
 
-index解析ではdynamic value、Relation predicate、range filter、mixed order、別statementで変更されたbuilderをuncertainとします
+条件を満たすdirect `has_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
 
-projection解析ではreturn、別functionへの引き渡し、alias、preloadをuncertainとし、全reportへcoverage statisticsを含めます
+dynamicなRelation名、未解決のRelation metadata、range filter、mixed order、別statementで変更されたbuilderはuncertainとします
+
+projection解析ではreturn、別functionへの引き渡し、alias、preloadをuncertainとし、全reportへgeneral、Relation compiler、indexのcoverage statisticsを含めます
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
@@ -637,8 +641,8 @@ command helpは `tidbgo --help` で表示できます
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
-- source lintは関連するbuilder flowを静的に解決できる場合だけ `QRY002` から `QRY004` を適用し、`--schema` を指定した高確度なroot ordered-limit shapeへ `QRY006` と `QRY007` を適用する
-- source上の `QRY005` とrelation-first index解析にはcaptured compiler decisionが引き続き必要
+- source lintは関連するbuilder flowとRelation metadataを静的に解決できる場合だけ `QRY002` から `QRY005` を適用し、`--schema` を指定した高確度なrootとrelation-first ordered-limit shapeへ `QRY006` と `QRY007` を適用する
+- dynamicなRelationは推測せずuncertainty counterへ反映する
 - database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
 
 ## License

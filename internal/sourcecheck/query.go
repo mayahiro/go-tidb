@@ -52,6 +52,7 @@ type sourceAnalyzer struct {
 	models                 map[sourceTypeKey]*sourceModel
 	queryFunctions         map[sourceFunctionKey]*sourceQueryFunction
 	functionCache          map[sourceFunctionKey]sourceQuerySummary
+	relationCache          map[sourceRelationKey]sourceRelationResult
 	seenModels             map[sourceTypeKey]struct{}
 	seenPatternDiagnostics map[sourceDiagnosticKey]struct{}
 	analysis               Analysis
@@ -608,14 +609,16 @@ func newSourceQuerySummary(model sourceTypeKey, schemaEnabled bool) sourceQueryS
 			limit:           sourceBound{state: sourceBoundUnset},
 			offset:          sourceBound{state: sourceBoundUnset},
 			order:           sourceOrderAbsent,
+			orderTermsKnown: true,
 			predicatesKnown: true,
+			rootCountKnown:  true,
+			seekAfter:       sourceToggleAbsent,
+			withDeleted:     sourceToggleAbsent,
 		},
 	}
 	if schemaEnabled {
 		result.pattern.index = &sourceIndexPattern{
-			orderTermsKnown:      true,
 			indexPredicatesKnown: true,
-			withDeleted:          sourceToggleAbsent,
 		}
 	}
 	return result
@@ -645,15 +648,19 @@ func (analyzer *sourceAnalyzer) applySourceQueryMethod(
 	case "Offset":
 		summary.pattern.offset = sourceBoundFromCall(call, selector.Sel.Pos())
 	case "OrderBy":
-		if analyzer.configuration.schemaEnabled {
-			summary.pattern = analyzer.applySourceOrderCall(context, summary.pattern, call, before)
-		} else {
-			summary.pattern.order = applySourceOrderPresence(summary.pattern.order, call)
-		}
+		summary.pattern = analyzer.applySourceOrderCall(context, summary.pattern, call, before)
+	case "SeekAfter":
+		summary.pattern.seekAfter = sourceTogglePresent
 	case "Where":
 		predicates := analyzer.sourceWherePredicates(context, call, before)
 		summary.pattern.wildcards = appendSourceWildcards(summary.pattern.wildcards, predicates.wildcards)
 		summary.pattern.predicatesKnown = summary.pattern.predicatesKnown && predicates.known
+		summary.pattern.rootPredicateCount += predicates.rootPredicateCount
+		summary.pattern.rootCountKnown = summary.pattern.rootCountKnown && predicates.rootCountKnown
+		summary.pattern.hasPredicates = append(summary.pattern.hasPredicates, predicates.hasPredicates...)
+		if len(predicates.hasPredicates) != 0 && summary.pattern.deferredOrderCalls.count != 0 {
+			summary.pattern = analyzer.resolveDeferredSourceOrderCalls(summary.pattern)
+		}
 		if summary.pattern.index != nil {
 			index := summary.pattern.index
 			index.equalityFields = append(index.equalityFields, predicates.equalityFields...)
@@ -661,14 +668,10 @@ func (analyzer *sourceAnalyzer) applySourceQueryMethod(
 			summary.pattern.index = index
 		}
 	case "WithDeleted":
-		if summary.pattern.index != nil {
-			index := summary.pattern.index
-			if len(call.Args) == 0 && !call.Ellipsis.IsValid() {
-				index.withDeleted = sourceTogglePresent
-			} else {
-				index.withDeleted = sourceToggleUnknown
-			}
-			summary.pattern.index = index
+		if len(call.Args) == 0 && !call.Ellipsis.IsValid() {
+			summary.pattern.withDeleted = sourceTogglePresent
+		} else {
+			summary.pattern.withDeleted = sourceToggleUnknown
 		}
 	}
 	return summary
@@ -731,8 +734,21 @@ func (analyzer *sourceAnalyzer) summarizeQueryFunction(key sourceFunctionKey, st
 }
 
 func cloneSourceQuerySummaryIndex(summary sourceQuerySummary) sourceQuerySummary {
+	summary.pattern.orderTerms = summary.pattern.orderTerms.clone()
+	summary.pattern.deferredOrderCalls = summary.pattern.deferredOrderCalls.clone()
+	summary.pattern.hasPredicates = cloneSourceHasPredicates(summary.pattern.hasPredicates)
+	summary.pattern.wildcards = append([]sourceWildcardPredicate(nil), summary.pattern.wildcards...)
 	summary.pattern.index = cloneSourceIndexPattern(summary.pattern.index)
 	return summary
+}
+
+func cloneSourceHasPredicates(values []sourceHasPredicate) []sourceHasPredicate {
+	result := make([]sourceHasPredicate, len(values))
+	for index := range values {
+		result[index] = values[index]
+		result[index].equalityFields = append([]string(nil), values[index].equalityFields...)
+	}
+	return result
 }
 
 func mergeSourceQuerySummaries(left, right sourceQuerySummary, model sourceTypeKey) sourceQuerySummary {
@@ -814,20 +830,22 @@ func (analyzer *sourceAnalyzer) summarizeBuilderObject(
 		if result.pattern.order != sourceOrderPresent {
 			result.pattern.order = sourceOrderUnknown
 		}
+		result.pattern.orderTermsKnown = false
 	}
 	if calls.whereCall {
 		result.pattern.predicatesKnown = false
+		result.pattern.rootCountKnown = false
+	}
+	if calls.seekAfterCall {
+		result.pattern.seekAfter = sourceToggleUnknown
+	}
+	if calls.withDeletedCall {
+		result.pattern.withDeleted = sourceToggleUnknown
 	}
 	if result.pattern.index != nil && (calls.orderCall || calls.whereCall || calls.withDeletedCall) {
 		index := result.pattern.index
-		if calls.orderCall {
-			index.orderTermsKnown = false
-		}
 		if calls.whereCall {
 			index.indexPredicatesKnown = false
-		}
-		if calls.withDeletedCall {
-			index.withDeleted = sourceToggleUnknown
 		}
 		result.pattern.index = index
 	}
@@ -909,6 +927,7 @@ type sourceBuilderCallSet struct {
 	offsetCall      bool
 	orderCall       bool
 	whereCall       bool
+	seekAfterCall   bool
 	withDeletedCall bool
 	safe            bool
 }
@@ -957,6 +976,8 @@ func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, befor
 				result.orderCall = true
 			case "Where":
 				result.whereCall = true
+			case "SeekAfter":
+				result.seekAfterCall = true
 			case "WithDeleted":
 				result.withDeletedCall = true
 			}

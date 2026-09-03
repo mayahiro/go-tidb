@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mayahiro/go-tidb/internal/querycheck"
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
@@ -676,6 +677,217 @@ func queries(order orm.OrderTerm) {
 	}
 }
 
+func TestAnalyzeInputsAppliesRelationTopNCompilerDecisionWithoutSchema(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import (
+	"github.com/mayahiro/go-tidb/model"
+	"github.com/mayahiro/go-tidb/orm"
+)
+
+type Video struct {
+	model.Meta `+"`tidbgo:\"table=videos\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	Links []VideoLink `+"`tidbgo:\"has_many,join=ID:VideoID\"`"+`
+}
+
+type VideoLink struct {
+	model.Meta `+"`tidbgo:\"table=video_links\"`"+`
+	VideoID int64 `+"`tidbgo:\",pk\"`"+`
+	GenreID int64 `+"`tidbgo:\",pk\"`"+`
+}
+
+type UnprovenVideo struct {
+	model.Meta `+"`tidbgo:\"table=unproven_videos\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	Links []UnprovenLink `+"`tidbgo:\"has_many,join=ID:VideoID\"`"+`
+}
+
+type UnprovenLink struct {
+	model.Meta `+"`tidbgo:\"table=unproven_links\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	VideoID int64
+	GenreID int64
+}
+
+func queries() {
+	_, _, _ = orm.Query[Video]().OrderBy(orm.Desc("ID")).Where(orm.Has("Links", orm.Equal("GenreID", 7))).Limit(20).Build()
+	_, _, _ = orm.Query[UnprovenVideo]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build()
+}
+`)
+	if got, want := analysis.Statistics.RelationTopNPatterns, 2; got != want {
+		t.Fatalf("RelationTopNPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedRelationTopNPatterns, 2; got != want {
+		t.Fatalf("AnalyzedRelationTopNPatterns = %d, want %d", got, want)
+	}
+	if got := analysis.Statistics.UncertainRelationTopNPatterns; got != 0 {
+		t.Fatalf("UncertainRelationTopNPatterns = %d, want 0", got)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeRelationTopNFallback}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	diagnostic := analysis.Diagnostics[0]
+	if diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, "UnprovenVideo") || !strings.Contains(diagnostic.Message, "relation Links") ||
+		len(diagnostic.Evidence) != 1 || !strings.Contains(diagnostic.Evidence[0].Message, relationtopn.ReasonTargetUniqueness) {
+		t.Fatalf("Diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestAnalyzeInputsReportsStructuralRelationTopNFallbacksFromSource(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+
+import (
+	"time"
+	"github.com/mayahiro/go-tidb/model"
+	"github.com/mayahiro/go-tidb/orm"
+)
+
+type Video struct {
+	model.Meta `+"`tidbgo:\"table=videos\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	DeletedAt time.Time `+"`tidbgo:\",soft_delete\"`"+`
+	Links []VideoLink `+"`tidbgo:\"has_many,join=ID:VideoID\"`"+`
+	Tags []Tag `+"`tidbgo:\"many_to_many,through=videos_tags,source=ID:video_id,target=tag_id:ID\"`"+`
+}
+type VideoLink struct {
+	model.Meta `+"`tidbgo:\"table=video_links\"`"+`
+	VideoID int64 `+"`tidbgo:\",pk\"`"+`
+	GenreID int64 `+"`tidbgo:\",pk\"`"+`
+}
+type Tag struct { ID int64 `+"`tidbgo:\",pk\"`"+` }
+
+func nested() { _, _, _ = orm.Query[Video]().Where(orm.And(orm.Has("Links", orm.Equal("GenreID", 7)), orm.Equal("ID", 1))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+func seek() { _, _, _ = orm.Query[Video]().WithDeleted().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).SeekAfter(100).Limit(20).Build() }
+func softDelete() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+	func manyToMany() { _, _, _ = orm.Query[Video]().WithDeleted().Where(orm.Has("Tags", orm.Equal("ID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`)
+	if got, want := analysis.Statistics.RelationTopNPatterns, 4; got != want {
+		t.Fatalf("RelationTopNPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.AnalyzedRelationTopNPatterns, 4; got != want {
+		t.Fatalf("AnalyzedRelationTopNPatterns = %d, want %d", got, want)
+	}
+	if got, want := sourceDiagnosticCodes(analysis), []string{
+		querycheck.CodeRelationTopNFallback,
+		querycheck.CodeRelationTopNFallback,
+		querycheck.CodeRelationTopNFallback,
+		querycheck.CodeRelationTopNFallback,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	joined := ""
+	for _, diagnostic := range analysis.Diagnostics {
+		for _, evidence := range diagnostic.Evidence {
+			joined += evidence.Message + "\n"
+		}
+	}
+	for _, reason := range []string{relationtopn.ReasonNestedCollection, relationtopn.ReasonSeekAfter, relationtopn.ReasonRootSoftDelete, relationtopn.ReasonManyToMany} {
+		if !strings.Contains(joined, reason) {
+			t.Fatalf("evidence = %q, want reason %q", joined, reason)
+		}
+	}
+}
+
+func TestAnalyzeInputsChecksRelationTopNAssociationIndexFromSource(t *testing.T) {
+	t.Parallel()
+
+	source := `package repository
+
+import (
+	"github.com/mayahiro/go-tidb/model"
+	"github.com/mayahiro/go-tidb/orm"
+)
+type Video struct {
+	model.Meta ` + "`tidbgo:\"table=videos\"`" + `
+	ID int64 ` + "`tidbgo:\",pk\"`" + `
+	Links []VideoLink ` + "`tidbgo:\"has_many,join=ID:VideoID\"`" + `
+}
+type VideoLink struct {
+	model.Meta ` + "`tidbgo:\"table=video_links\"`" + `
+	VideoID int64 ` + "`tidbgo:\",pk\"`" + `
+	GenreID int64 ` + "`tidbgo:\",pk\"`" + `
+}
+func query() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`
+	matching := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE videos (
+  id BIGINT PRIMARY KEY
+);
+CREATE TABLE video_links (
+  video_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (video_id, genre_id),
+  KEY genre_video (genre_id, video_id)
+);`)))
+	if got, want := matching.Statistics.AnalyzedIndexPatterns, 1; got != want || len(matching.Diagnostics) != 0 {
+		t.Fatalf("matching analysis = %#v", matching)
+	}
+
+	missing := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE videos (
+  id BIGINT PRIMARY KEY
+);
+CREATE TABLE video_links (
+  video_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (video_id, genre_id)
+);`)))
+	if got, want := sourceDiagnosticCodes(missing), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	if diagnostic := missing.Diagnostics[0]; diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, "Video.Links") {
+		t.Fatalf("Diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestAnalyzeInputsCountsUncertainRelationTopNWithoutGuessing(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+import "github.com/mayahiro/go-tidb/orm"
+type Video struct { ID int64; Links []VideoLink `+"`tidbgo:\"has_many,join=ID:VideoID\"`"+` }
+type VideoLink struct { VideoID int64; GenreID int64 }
+type InvalidVideo struct {
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	Tags []Tag `+"`tidbgo:\"many_to_many,through=videos_tags,source=ID:shared_id,target=shared_id:ID\"`"+`
+}
+type Tag struct { ID int64 `+"`tidbgo:\",pk\"`"+` }
+func query(relation string) { _, _, _ = orm.Query[Video]().Where(orm.Has(relation, orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+func invalidRelation() { _, _, _ = orm.Query[InvalidVideo]().Where(orm.Has("Tags", orm.Equal("ID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`)
+	if got, want := analysis.Statistics.RelationTopNPatterns, 2; got != want {
+		t.Fatalf("RelationTopNPatterns = %d, want %d", got, want)
+	}
+	if got, want := analysis.Statistics.UncertainRelationTopNPatterns, 2; got != want {
+		t.Fatalf("UncertainRelationTopNPatterns = %d, want %d", got, want)
+	}
+	if len(analysis.Diagnostics) != 0 {
+		t.Fatalf("Diagnostics = %#v, want none", analysis.Diagnostics)
+	}
+}
+
+func TestAnalyzeInputsDoesNotTreatToOneHasAsRelationTopN(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeSource(t, `package repository
+import "github.com/mayahiro/go-tidb/orm"
+type Video struct {
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	MakerID int64
+	Maker *Maker `+"`tidbgo:\"belongs_to\"`"+`
+}
+type Maker struct { ID int64 `+"`tidbgo:\",pk\"`"+` }
+func query() { _, _, _ = orm.Query[Video]().Where(orm.Has("Maker", orm.Equal("ID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`)
+	if analysis.Statistics.RelationTopNPatterns != 0 || analysis.Statistics.AnalyzedRelationTopNPatterns != 0 ||
+		analysis.Statistics.UncertainRelationTopNPatterns != 0 || len(analysis.Diagnostics) != 0 {
+		t.Fatalf("Analysis = %#v", analysis)
+	}
+}
+
 func TestAnalyzePathResolvesModuleLocalModelAndSkipsNonProductionFiles(t *testing.T) {
 	t.Parallel()
 
@@ -756,6 +968,47 @@ func build() {
 	}
 	if got, want := analysis.Diagnostics[0].Location.Path, "repository/query.go"; got != want {
 		t.Fatalf("Location.Path = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzePathResolvesModuleLocalRelationTopNAndAssociationIndex(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	writeSourceTestFile(t, filepath.Join(directory, "go.mod"), "module example.test/application\n\ngo 1.26\n")
+	writeSourceTestFile(t, filepath.Join(directory, "domain", "models.go"), `package domain
+import "github.com/mayahiro/go-tidb/model"
+type Video struct {
+	model.Meta `+"`tidbgo:\"table=videos\"`"+`
+	ID int64 `+"`tidbgo:\",pk\"`"+`
+	Links []VideoLink `+"`tidbgo:\"has_many\"`"+`
+}
+type VideoLink struct {
+	model.Meta `+"`tidbgo:\"table=video_links\"`"+`
+	VideoID int64 `+"`tidbgo:\",pk\"`"+`
+	GenreID int64 `+"`tidbgo:\",pk\"`"+`
+}
+`)
+	writeSourceTestFile(t, filepath.Join(directory, "repository", "query.go"), `package repository
+import (
+	"example.test/application/domain"
+	"github.com/mayahiro/go-tidb/orm"
+)
+func query() { _, _, _ = orm.Query[domain.Video]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`)
+	catalog := parseSourceSchema(t, `CREATE TABLE videos (id BIGINT PRIMARY KEY);
+CREATE TABLE video_links (
+  video_id BIGINT NOT NULL,
+  genre_id BIGINT NOT NULL,
+  PRIMARY KEY (video_id, genre_id),
+  KEY genre_video (genre_id, video_id)
+);`)
+	analysis, err := AnalyzePath(directory, WithSchema(catalog))
+	if err != nil {
+		t.Fatalf("AnalyzePath() error = %v", err)
+	}
+	if analysis.Statistics.AnalyzedRelationTopNPatterns != 1 || analysis.Statistics.AnalyzedIndexPatterns != 1 || len(analysis.Diagnostics) != 0 {
+		t.Fatalf("Analysis = %#v", analysis)
 	}
 }
 
@@ -841,7 +1094,7 @@ func TestFormatStatistics(t *testing.T) {
 	t.Parallel()
 
 	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, QueryPatterns: 6, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2, AnalyzedPatterns: 4, UncertainPatterns: 2}
-	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0"
+	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 relation_topn_patterns=0 analyzed_relation_topn_patterns=0 uncertain_relation_topn_patterns=0 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0"
 	if got := FormatStatistics(statistics); got != want {
 		t.Fatalf("FormatStatistics() = %q, want %q", got, want)
 	}

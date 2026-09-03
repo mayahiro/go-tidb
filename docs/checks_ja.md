@@ -93,7 +93,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-source解析は解決済みの `Build`、`All`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY004` を適用します
+source解析は解決済みの `Build`、`All`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
 
 fluent chain、1個のlocal builder定義、local query helper、integerとstring literal、同じfile内の単純なconstantを解決します
 
@@ -101,23 +101,27 @@ fluent chain、1個のlocal builder定義、local query helper、integerとstrin
 
 dynamicな `Limit` または `Offset`、variadic order、未解決predicate helper、別statementで変更されたbuilder、captureされたbuilderは推測せず `uncertain_patterns` へ数えます
 
+orderedかつpositive Limitのroot `Has` では、runtime compilerと同じdirect Relation metadataを解決し、共通の正規化済みrelation-first TopN decisionを適用します
+
+`relation_topn_patterns`、`analyzed_relation_topn_patterns`、`uncertain_relation_topn_patterns` がこのruleのcoverageを表します
+
+解決済みfallbackは `QRY005` を出力し、解決できないRelation名、model、key、order、builder flowは推測せずuncertainとします
+
 `--schema` を指定するとsource解析はruntime model descriptorと同じ `tidbgo` metadataとdefault naming ruleから物理table名とcolumn名も導出します
 
 明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを解決できたroot shapeだけをruntime解析と共通のneutral index-prefix checkerへ渡します
 
-default active soft-delete columnはquery上で `WithDeleted` を解決できない限りequality prefixへ含めます
+解決済みのrelation-first TopN decisionがある場合はassociation accessも同じcheckerへ渡します
+
+default active soft-delete columnはroot query上で `WithDeleted` を解決できない限りequality prefixへ含め、Relation targetのsoft-delete columnはassociation equality prefixへ含めます
 
 `index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
 
-Relation predicate、non-equality filter、mixed direction、unknown field、embedded model shape、別statementで変更されたbuilderには推測したindex diagnosticを出さずuncertainとします
+Relation fallback、associationのnon-equality filter、mixed direction、unknown field、embedded model shape、別statementで変更されたbuilderには推測したindex diagnosticを出さずuncertainとします
 
 `SRC001` は1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
 
 repository return、alias、model method、解決できないresult flowは別の `analyzed` と `uncertain` projection counterへ反映します
-
-`QRY005` とrelation-first index解析にはcompilerが正規化したRelation decisionが必要なためruntime capture ruleとして残します
-
-source上の `QRY006` と `QRY007` は上記の高確度なroot accessだけを対象にします
 
 ## Runtime plan diagnostic
 
@@ -159,9 +163,9 @@ invalid inputはstatus `2`、I/Oまたはinternal failureはstatus `5` です
 ## 現在のcoverage境界
 
 - RuntimeCaptureはderived contextを使ってgo-tidbから実行されたstatementだけを対象にする
-- source lintは静的に解決できたbuilder flowだけへ `QRY002` から `QRY004` を適用する
-- source lintへ `--schema` を指定した場合は解決済みroot ordered-limit accessだけへ `QRY006` と `QRY007` を適用する
-- `QRY005` とrelation-first index解析にはcaptured compiler decisionが必要
+- source lintは静的に解決できたbuilder flowとRelation metadataだけへ `QRY002` から `QRY005` を適用する
+- source lintへ `--schema` を指定した場合は解決済みrootまたはrelation-first ordered-limit accessだけへ `QRY006` と `QRY007` を適用する
+- source metadataから証明できないdynamicなRelation名とRelation shapeはRelation uncertainty counterへ反映する
 - `EXPLAIN ANALYZE` はSELECTを実行してRUを消費する
 - ServerRU収集はrecognized DML statementごとにsame-session diagnostic round tripを1回追加する
 - query planとRUは現在のstatistics、data distribution、workloadに依存する

@@ -71,16 +71,17 @@ go run ./cmd/tidbgo lint ./examples/starter-app --schema ./examples/starter-app/
 ```
 
 The second command also compares statically resolved ordered positive-LIMIT
-root accesses with the example's TiDB schema snapshot. Both reports include
-recognized query and uncertainty counts even when no diagnostic is emitted
+root and relation-first association accesses with the example's TiDB schema
+snapshot. Both reports include recognized query, relation compiler, index,
+and uncertainty counts even when no diagnostic is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows. When the
-connected form is captured, `tidbgo analyze --schema` reports an `EXISTS`
-fallback or a missing association index prefix without another application
-wrapper.
+compiler filters and limits `clip_genres` before loading root rows. Both
+`tidbgo lint --schema` and captured `tidbgo analyze --schema` can report an
+`EXISTS` fallback or a missing association index prefix without another
+application wrapper.
 `FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, and `CountOrdersForUser` demonstrate connected `First`,
 `Only`, `Exists`, and `Count` terminals. `ListUsersWithOrders` demonstrates

@@ -61,13 +61,13 @@ schema-aware形式はbind valueとpagination valueを含まないversion付きqu
 | `QRY006` | error | 渡したsnapshotに解析対象ordered accessが必要とするtableまたはcolumnがない |
 | `QRY007` | warning | orderedかつpositive Limitのaccessに一致するdefaultで利用可能なdirect-column index prefixがsnapshotにない |
 
-`tidbgo lint` もpackage loadなしで関連builder flowを解決できるsource query terminalへ `QRY002` から `QRY004` を適用します
+`tidbgo lint` もpackage loadなしで関連builder flowを解決できるsource query terminalへ `QRY002` から `QRY005` を適用します
 
-`tidbgo lint --schema schema.sql` はconjunctiveな `Equal` filterと同じ方向のorderだけを持つ解決済みroot ordered positive-limit accessへ `QRY006` と `QRY007` も適用します
+`tidbgo lint --schema schema.sql` はconjunctiveな `Equal` filterと同じ方向のorderだけを持つ解決済みroot ordered positive-limit access、および解決済みrelation-first TopN compiler decisionが生成するassociation accessへ `QRY006` と `QRY007` も適用します
 
 RuntimeCaptureで実行されなかったcodeも対象になります
 
-dynamic value、Relation predicate、non-equality filter、mixed order、別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
+dynamicなRelation名、未解決のRelation metadata、associationのnon-equality filter、mixed order、別statementで変更されたbuilderは推測せずsource coverage statisticsへ反映します
 
 要求されたschema-aware checkを完了できないため `QRY006` はsuppressibleではありません
 
@@ -83,7 +83,7 @@ applicationでstable cursorを保持できる場合は `SeekAfter` を優先し�
 
 schema-aware ruleは1個のindex候補を構造的に決定できる場合だけ適用します
 
-root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではcaptureされたcompiler decisionが生成したassociation accessを対象にします
+root accessではpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterを必要とし、relation-first TopNではruntimeまたはsourceのcompiler decisionが生成したassociation accessを対象にします
 
 activeなdefault soft-delete scopeがある場合は、生成される `IS NULL` のcolumnもequality prefixへ含めます
 

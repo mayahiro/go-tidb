@@ -311,7 +311,7 @@ func (p *descriptorParser) parseFields(modelType reflect.Type, path string, inde
 
 func startsWithRelationKind(value string) bool {
 	first, _, _ := strings.Cut(value, ",")
-	_, ok := relationKind(first)
+	_, ok := modelmeta.ParseRelationKind(first)
 	return ok
 }
 

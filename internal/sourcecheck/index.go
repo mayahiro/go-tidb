@@ -9,14 +9,26 @@ import (
 	"github.com/mayahiro/go-tidb/internal/queryshape"
 )
 
-func (analyzer *sourceAnalyzer) recordSchemaIndexPattern(call *ast.CallExpr, summary sourceQuerySummary) {
+func (analyzer *sourceAnalyzer) recordSchemaIndexPattern(
+	call *ast.CallExpr,
+	summary sourceQuerySummary,
+	relationTopN sourceRelationTopNAnalysis,
+) {
 	pattern := summary.pattern
 	if pattern.limit.state != sourceBoundPositive || pattern.order == sourceOrderAbsent {
 		return
 	}
 	analyzer.analysis.Statistics.IndexPatterns++
 
-	access, ok := analyzer.sourceRootIndexAccess(summary)
+	var access queryshape.IndexAccess
+	var ok bool
+	if relationTopN.candidate {
+		if relationTopN.exact && relationTopN.decision.Rewrite == queryshape.CompilerRewriteRelationTopN {
+			access, ok = analyzer.sourceRelationTopNIndexAccess(summary, relationTopN)
+		}
+	} else {
+		access, ok = analyzer.sourceRootIndexAccess(summary)
+	}
 	if !ok {
 		analyzer.analysis.Statistics.UncertainIndexPatterns++
 		return
@@ -40,13 +52,52 @@ func (analyzer *sourceAnalyzer) recordSchemaIndexPattern(call *ast.CallExpr, sum
 	}
 }
 
+func (analyzer *sourceAnalyzer) sourceRelationTopNIndexAccess(
+	summary sourceQuerySummary,
+	analysis sourceRelationTopNAnalysis,
+) (queryshape.IndexAccess, bool) {
+	pattern := summary.pattern
+	target, exists := analyzer.models[analysis.relation.target]
+	if !exists || target.physical == nil || target.physical.ambiguous || !analysis.predicate.indexExact ||
+		pattern.orderTerms.count == 0 || !sourceOrderTermsUniform(pattern.orderTerms) {
+		return queryshape.IndexAccess{}, false
+	}
+
+	equalityColumns := make([]string, 0, len(analysis.predicate.equalityFields)+1)
+	for _, field := range analysis.predicate.equalityFields {
+		column, exists := target.physical.columns[field]
+		if !exists {
+			return queryshape.IndexAccess{}, false
+		}
+		equalityColumns = appendSourceColumn(equalityColumns, column)
+	}
+	if target.physical.softDeleteColumn != "" {
+		equalityColumns = appendSourceColumn(equalityColumns, target.physical.softDeleteColumn)
+	}
+	orderColumns := make([]string, 0, len(analysis.relation.targetFields))
+	for _, field := range analysis.relation.targetFields {
+		column, exists := target.physical.columns[field]
+		if !exists {
+			return queryshape.IndexAccess{}, false
+		}
+		orderColumns = append(orderColumns, column)
+	}
+	return queryshape.IndexAccess{
+		Kind:            queryshape.IndexAccessRelationTopN,
+		Table:           target.physical.table,
+		Relation:        analysis.relation.name,
+		EqualityColumns: equalityColumns,
+		OrderColumns:    orderColumns,
+	}, true
+}
+
 func (analyzer *sourceAnalyzer) sourceRootIndexAccess(summary sourceQuerySummary) (queryshape.IndexAccess, bool) {
 	model, exists := analyzer.models[summary.model]
 	pattern := summary.pattern
 	index := pattern.index
 	if !exists || model.physical == nil || model.physical.ambiguous || index == nil || !index.indexPredicatesKnown ||
-		!index.orderTermsKnown || index.withDeleted == sourceToggleUnknown ||
-		len(index.orderTerms) == 0 || !sourceOrderTermsUniform(index.orderTerms) {
+		!pattern.orderTermsKnown || pattern.withDeleted == sourceToggleUnknown ||
+		pattern.orderTerms.count == 0 || !sourceOrderTermsUniform(pattern.orderTerms) {
 		return queryshape.IndexAccess{}, false
 	}
 
@@ -58,12 +109,13 @@ func (analyzer *sourceAnalyzer) sourceRootIndexAccess(summary sourceQuerySummary
 		}
 		equalityColumns = appendSourceColumn(equalityColumns, column)
 	}
-	if model.physical.softDeleteColumn != "" && index.withDeleted != sourceTogglePresent {
+	if model.physical.softDeleteColumn != "" && pattern.withDeleted != sourceTogglePresent {
 		equalityColumns = appendSourceColumn(equalityColumns, model.physical.softDeleteColumn)
 	}
 
-	orderColumns := make([]string, 0, len(index.orderTerms))
-	for _, term := range index.orderTerms {
+	orderColumns := make([]string, 0, pattern.orderTerms.count)
+	for index := 0; index < pattern.orderTerms.count; index++ {
+		term := pattern.orderTerms.at(index)
 		column, exists := model.physical.columns[term.field]
 		if !exists {
 			return queryshape.IndexAccess{}, false
@@ -78,10 +130,10 @@ func (analyzer *sourceAnalyzer) sourceRootIndexAccess(summary sourceQuerySummary
 	}, true
 }
 
-func sourceOrderTermsUniform(terms []sourceOrderTerm) bool {
-	direction := terms[0].direction
-	for _, term := range terms[1:] {
-		if term.direction != direction {
+func sourceOrderTermsUniform(terms sourceOrderTerms) bool {
+	direction := terms.first.direction
+	for index := 1; index < terms.count; index++ {
+		if terms.at(index).direction != direction {
 			return false
 		}
 	}

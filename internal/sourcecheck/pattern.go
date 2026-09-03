@@ -47,6 +47,67 @@ type sourceOrderTerm struct {
 	direction queryshape.OrderDirection
 }
 
+type sourceOrderTerms struct {
+	first      sourceOrderTerm
+	additional []sourceOrderTerm
+	count      int
+}
+
+type sourceDeferredOrderCall struct {
+	file   *sourceFile
+	body   *ast.BlockStmt
+	call   *ast.CallExpr
+	before token.Pos
+}
+
+type sourceDeferredOrderCalls struct {
+	first      sourceDeferredOrderCall
+	additional []sourceDeferredOrderCall
+	count      int
+}
+
+func (calls *sourceDeferredOrderCalls) append(call sourceDeferredOrderCall) {
+	if calls.count == 0 {
+		calls.first = call
+	} else {
+		calls.additional = append(calls.additional, call)
+	}
+	calls.count++
+}
+
+func (calls sourceDeferredOrderCalls) at(index int) sourceDeferredOrderCall {
+	if index == 0 {
+		return calls.first
+	}
+	return calls.additional[index-1]
+}
+
+func (calls sourceDeferredOrderCalls) clone() sourceDeferredOrderCalls {
+	calls.additional = append([]sourceDeferredOrderCall(nil), calls.additional...)
+	return calls
+}
+
+func (terms *sourceOrderTerms) append(term sourceOrderTerm) {
+	if terms.count == 0 {
+		terms.first = term
+	} else {
+		terms.additional = append(terms.additional, term)
+	}
+	terms.count++
+}
+
+func (terms sourceOrderTerms) at(index int) sourceOrderTerm {
+	if index == 0 {
+		return terms.first
+	}
+	return terms.additional[index-1]
+}
+
+func (terms sourceOrderTerms) clone() sourceOrderTerms {
+	terms.additional = append([]sourceOrderTerm(nil), terms.additional...)
+	return terms
+}
+
 type sourceToggleState uint8
 
 const (
@@ -56,27 +117,44 @@ const (
 )
 
 type sourcePredicatePattern struct {
-	wildcards      []sourceWildcardPredicate
+	wildcards          []sourceWildcardPredicate
+	equalityFields     []string
+	hasPredicates      []sourceHasPredicate
+	rootPredicateCount int
+	rootCountKnown     bool
+	known              bool
+	indexExact         bool
+}
+
+type sourceHasPredicate struct {
+	relation       string
+	relationKnown  bool
+	direct         bool
 	equalityFields []string
-	known          bool
 	indexExact     bool
+	position       token.Pos
 }
 
 type sourceIndexPattern struct {
-	orderTerms           []sourceOrderTerm
-	orderTermsKnown      bool
 	equalityFields       []string
 	indexPredicatesKnown bool
-	withDeleted          sourceToggleState
 }
 
 type sourceQueryPattern struct {
-	limit           sourceBound
-	offset          sourceBound
-	order           sourceOrderState
-	wildcards       []sourceWildcardPredicate
-	predicatesKnown bool
-	index           *sourceIndexPattern
+	limit              sourceBound
+	offset             sourceBound
+	order              sourceOrderState
+	orderTerms         sourceOrderTerms
+	orderTermsKnown    bool
+	deferredOrderCalls sourceDeferredOrderCalls
+	wildcards          []sourceWildcardPredicate
+	predicatesKnown    bool
+	rootPredicateCount int
+	rootCountKnown     bool
+	hasPredicates      []sourceHasPredicate
+	seekAfter          sourceToggleState
+	withDeleted        sourceToggleState
+	index              *sourceIndexPattern
 }
 
 type sourceDiagnosticKey struct {
@@ -92,6 +170,9 @@ func (analyzer *sourceAnalyzer) recordQueryPattern(call *ast.CallExpr, summary s
 		analyzer.seenModels[summary.model] = struct{}{}
 	}
 
+	if len(summary.pattern.hasPredicates) != 0 && summary.pattern.deferredOrderCalls.count != 0 {
+		summary.pattern = analyzer.resolveDeferredSourceOrderCalls(summary.pattern)
+	}
 	pattern := summary.pattern
 	if sourcePatternIsCertain(pattern) {
 		analyzer.analysis.Statistics.AnalyzedPatterns++
@@ -123,8 +204,26 @@ func (analyzer *sourceAnalyzer) recordQueryPattern(call *ast.CallExpr, summary s
 		diagnostic.Location = analyzer.sourcePatternLocation(wildcard.position, call.Pos())
 		analyzer.appendPatternDiagnostic(diagnostic)
 	}
+	relationTopN := analyzer.analyzeSourceRelationTopN(summary)
+	if relationTopN.candidate {
+		analyzer.analysis.Statistics.RelationTopNPatterns++
+		if relationTopN.exact {
+			analyzer.analysis.Statistics.AnalyzedRelationTopNPatterns++
+		} else {
+			analyzer.analysis.Statistics.UncertainRelationTopNPatterns++
+		}
+		if relationTopN.exact && relationTopN.decision.Rewrite == queryshape.CompilerRewriteRelationTopNFallback {
+			diagnostic := querycheck.RelationTopNFallbackDiagnostic(
+				modelName,
+				relationTopN.decision.Relation,
+				relationTopN.decision.Reason,
+			)
+			diagnostic.Location = analyzer.sourcePatternLocation(relationTopN.predicate.position, call.Pos())
+			analyzer.appendPatternDiagnostic(diagnostic)
+		}
+	}
 	if analyzer.configuration.schemaEnabled {
-		analyzer.recordSchemaIndexPattern(call, summary)
+		analyzer.recordSchemaIndexPattern(call, summary, relationTopN)
 	}
 }
 
@@ -268,25 +367,48 @@ func (analyzer *sourceAnalyzer) applySourceOrderCall(
 	if len(call.Args) == 0 {
 		return pattern
 	}
-	index := pattern.index
-	if index == nil {
-		pattern.order = applySourceOrderPresence(pattern.order, call)
-		return pattern
-	}
 	if call.Ellipsis.IsValid() {
 		pattern.order = applySourceOrderPresence(pattern.order, call)
-		index.orderTermsKnown = false
+		pattern.orderTermsKnown = false
 		return pattern
 	}
 	pattern.order = sourceOrderPresent
+	if !analyzer.configuration.schemaEnabled && len(pattern.hasPredicates) == 0 {
+		pattern.deferredOrderCalls.append(sourceDeferredOrderCall{
+			file:   context.file,
+			body:   context.body,
+			call:   call,
+			before: before,
+		})
+		return pattern
+	}
+	return analyzer.applyResolvedSourceOrderCall(pattern, context, call, before)
+}
+
+func (analyzer *sourceAnalyzer) applyResolvedSourceOrderCall(
+	pattern sourceQueryPattern,
+	context sourceFunctionContext,
+	call *ast.CallExpr,
+	before token.Pos,
+) sourceQueryPattern {
 	for _, argument := range call.Args {
 		term, ok := analyzer.sourceOrderExpression(context, argument, before, nil)
 		if !ok {
-			index.orderTermsKnown = false
+			pattern.orderTermsKnown = false
 			continue
 		}
-		index.orderTerms = append(index.orderTerms, term)
+		pattern.orderTerms.append(term)
 	}
+	return pattern
+}
+
+func (analyzer *sourceAnalyzer) resolveDeferredSourceOrderCalls(pattern sourceQueryPattern) sourceQueryPattern {
+	for index := 0; index < pattern.deferredOrderCalls.count; index++ {
+		deferred := pattern.deferredOrderCalls.at(index)
+		context := sourceFunctionContext{file: deferred.file, body: deferred.body}
+		pattern = analyzer.applyResolvedSourceOrderCall(pattern, context, deferred.call, deferred.before)
+	}
+	pattern.deferredOrderCalls = sourceDeferredOrderCalls{}
 	return pattern
 }
 
@@ -356,16 +478,19 @@ func (analyzer *sourceAnalyzer) sourceWherePredicates(
 	call *ast.CallExpr,
 	before token.Pos,
 ) sourcePredicatePattern {
-	result := sourcePredicatePattern{known: true, indexExact: true}
+	result := sourcePredicatePattern{known: true, indexExact: true, rootCountKnown: true}
 	for index, argument := range call.Args {
 		if call.Ellipsis.IsValid() && index == len(call.Args)-1 {
 			result.known = false
 			result.indexExact = false
+			result.rootCountKnown = false
 			continue
 		}
-		current, resolved := analyzer.sourcePredicateExpression(context, argument, before, nil, nil)
+		result.rootPredicateCount++
+		current, resolved := analyzer.sourcePredicateExpression(context, argument, before, nil, true, nil)
 		result.wildcards = appendSourceWildcards(result.wildcards, current.wildcards)
 		result.equalityFields = append(result.equalityFields, current.equalityFields...)
+		result.hasPredicates = append(result.hasPredicates, current.hasPredicates...)
 		result.known = result.known && resolved && current.known
 		result.indexExact = result.indexExact && current.indexExact
 	}
@@ -377,11 +502,12 @@ func (analyzer *sourceAnalyzer) sourcePredicateExpression(
 	expression ast.Expr,
 	before token.Pos,
 	relations []string,
+	direct bool,
 	visiting map[*ast.Object]bool,
 ) (sourcePredicatePattern, bool) {
 	switch current := expression.(type) {
 	case *ast.ParenExpr:
-		return analyzer.sourcePredicateExpression(context, current.X, before, relations, visiting)
+		return analyzer.sourcePredicateExpression(context, current.X, before, relations, direct, visiting)
 	case *ast.Ident:
 		if current.Obj == nil || visiting[current.Obj] {
 			return sourcePredicatePattern{}, false
@@ -394,7 +520,7 @@ func (analyzer *sourceAnalyzer) sourcePredicateExpression(
 			visiting = make(map[*ast.Object]bool)
 		}
 		visiting[current.Obj] = true
-		result, known := analyzer.sourcePredicateExpression(context, definitions[0].expr, definitions[0].position, relations, visiting)
+		result, known := analyzer.sourcePredicateExpression(context, definitions[0].expr, definitions[0].position, relations, direct, visiting)
 		delete(visiting, current.Obj)
 		return result, known
 	case *ast.CallExpr:
@@ -406,7 +532,7 @@ func (analyzer *sourceAnalyzer) sourcePredicateExpression(
 		if !ok || identifier.Obj != nil || context.file.ormAlias == "" || identifier.Name != context.file.ormAlias {
 			return sourcePredicatePattern{}, false
 		}
-		return analyzer.sourcePredicateCall(context, current, selector.Sel.Name, before, relations, visiting)
+		return analyzer.sourcePredicateCall(context, current, selector.Sel.Name, before, relations, direct, visiting)
 	default:
 		return sourcePredicatePattern{}, false
 	}
@@ -418,6 +544,7 @@ func (analyzer *sourceAnalyzer) sourcePredicateCall(
 	constructor string,
 	before token.Pos,
 	relations []string,
+	direct bool,
 	visiting map[*ast.Object]bool,
 ) (sourcePredicatePattern, bool) {
 	switch constructor {
@@ -442,11 +569,8 @@ func (analyzer *sourceAnalyzer) sourcePredicateCall(
 		if len(call.Args) != 2 || call.Ellipsis.IsValid() {
 			return sourcePredicatePattern{}, false
 		}
-		if !analyzer.configuration.schemaEnabled {
-			return sourcePredicatePattern{known: true}, true
-		}
 		field, ok := sourceStringConstant(call.Args[0], nil)
-		if !ok || len(relations) != 0 {
+		if !ok {
 			return sourcePredicatePattern{known: true}, true
 		}
 		return sourcePredicatePattern{equalityFields: []string{field}, known: true, indexExact: true}, true
@@ -456,9 +580,10 @@ func (analyzer *sourceAnalyzer) sourcePredicateCall(
 		if len(call.Args) < 2 || call.Ellipsis.IsValid() {
 			return sourcePredicatePattern{}, false
 		}
-		return analyzer.sourcePredicateArguments(context, call, before, relations, visiting, 0)
+		return analyzer.sourcePredicateArguments(context, call, before, relations, false, visiting, 0)
 	case "Or", "Not":
-		result, ok := analyzer.sourcePredicateArguments(context, call, before, relations, visiting, 0)
+		result, ok := analyzer.sourcePredicateArguments(context, call, before, relations, false, visiting, 0)
+		result.equalityFields = nil
 		result.indexExact = false
 		return result, ok
 	case "Has":
@@ -466,10 +591,26 @@ func (analyzer *sourceAnalyzer) sourcePredicateCall(
 			return sourcePredicatePattern{}, false
 		}
 		relation := "<dynamic>"
+		relationKnown := false
 		if resolved, ok := sourceStringConstant(call.Args[0], nil); ok {
 			relation = resolved
+			relationKnown = true
 		}
-		result, ok := analyzer.sourcePredicateArguments(context, call, before, append(relations, relation), visiting, 1)
+		rootRelation := len(relations) == 0
+		result, ok := analyzer.sourcePredicateArguments(context, call, before, append(relations, relation), false, visiting, 1)
+		if rootRelation {
+			result.hasPredicates = []sourceHasPredicate{{
+				relation:       relation,
+				relationKnown:  relationKnown,
+				direct:         direct,
+				equalityFields: append([]string(nil), result.equalityFields...),
+				indexExact:     result.indexExact && result.known,
+				position:       call.Pos(),
+			}}
+		} else {
+			result.hasPredicates = nil
+		}
+		result.equalityFields = nil
 		result.indexExact = false
 		return result, ok
 	default:
@@ -482,6 +623,7 @@ func (analyzer *sourceAnalyzer) sourcePredicateArguments(
 	call *ast.CallExpr,
 	before token.Pos,
 	relations []string,
+	direct bool,
 	visiting map[*ast.Object]bool,
 	first int,
 ) (sourcePredicatePattern, bool) {
@@ -492,9 +634,10 @@ func (analyzer *sourceAnalyzer) sourcePredicateArguments(
 			result.indexExact = false
 			continue
 		}
-		current, resolved := analyzer.sourcePredicateExpression(context, call.Args[index], before, relations, visiting)
+		current, resolved := analyzer.sourcePredicateExpression(context, call.Args[index], before, relations, direct, visiting)
 		result.wildcards = appendSourceWildcards(result.wildcards, current.wildcards)
 		result.equalityFields = append(result.equalityFields, current.equalityFields...)
+		result.hasPredicates = append(result.hasPredicates, current.hasPredicates...)
 		result.known = result.known && resolved && current.known
 		result.indexExact = result.indexExact && current.indexExact
 	}
@@ -549,13 +692,25 @@ func appendSourceWildcards(target, values []sourceWildcardPredicate) []sourceWil
 
 func mergeSourceQueryPatterns(left, right sourceQueryPattern) sourceQueryPattern {
 	wildcards, sameWildcards := commonSourceWildcards(left.wildcards, right.wildcards)
+	orderTerms, sameOrderTerms := commonSourceOrderTerms(left.orderTerms, right.orderTerms)
+	deferredOrderCalls, sameDeferredOrderCalls := commonSourceDeferredOrderCalls(left.deferredOrderCalls, right.deferredOrderCalls)
+	hasPredicates, sameHasPredicates := commonSourceHasPredicates(left.hasPredicates, right.hasPredicates)
+	rootPredicateCount, sameRootPredicateCount := commonSourceInt(left.rootPredicateCount, right.rootPredicateCount)
 	return sourceQueryPattern{
-		limit:           mergeSourceBounds(left.limit, right.limit),
-		offset:          mergeSourceBounds(left.offset, right.offset),
-		order:           mergeSourceOrder(left.order, right.order),
-		wildcards:       wildcards,
-		predicatesKnown: left.predicatesKnown && right.predicatesKnown && sameWildcards,
-		index:           mergeSourceIndexPatterns(left.index, right.index),
+		limit:              mergeSourceBounds(left.limit, right.limit),
+		offset:             mergeSourceBounds(left.offset, right.offset),
+		order:              mergeSourceOrder(left.order, right.order),
+		orderTerms:         orderTerms,
+		orderTermsKnown:    left.orderTermsKnown && right.orderTermsKnown && sameOrderTerms && sameDeferredOrderCalls,
+		deferredOrderCalls: deferredOrderCalls,
+		wildcards:          wildcards,
+		predicatesKnown:    left.predicatesKnown && right.predicatesKnown && sameWildcards && sameHasPredicates,
+		rootPredicateCount: rootPredicateCount,
+		rootCountKnown:     left.rootCountKnown && right.rootCountKnown && sameRootPredicateCount,
+		hasPredicates:      hasPredicates,
+		seekAfter:          mergeSourceToggle(left.seekAfter, right.seekAfter),
+		withDeleted:        mergeSourceToggle(left.withDeleted, right.withDeleted),
+		index:              mergeSourceIndexPatterns(left.index, right.index),
 	}
 }
 
@@ -564,7 +719,6 @@ func cloneSourceIndexPattern(current *sourceIndexPattern) *sourceIndexPattern {
 		return nil
 	}
 	result := *current
-	result.orderTerms = append([]sourceOrderTerm(nil), current.orderTerms...)
 	result.equalityFields = append([]string(nil), current.equalityFields...)
 	return &result
 }
@@ -574,14 +728,40 @@ func mergeSourceIndexPatterns(left, right *sourceIndexPattern) *sourceIndexPatte
 		return nil
 	}
 	equalityFields, sameEqualities := commonSourceStrings(left.equalityFields, right.equalityFields)
-	orderTerms, sameOrderTerms := commonSourceOrderTerms(left.orderTerms, right.orderTerms)
 	return &sourceIndexPattern{
-		orderTerms:           orderTerms,
-		orderTermsKnown:      left.orderTermsKnown && right.orderTermsKnown && sameOrderTerms,
 		equalityFields:       equalityFields,
 		indexPredicatesKnown: left.indexPredicatesKnown && right.indexPredicatesKnown && sameEqualities,
-		withDeleted:          mergeSourceToggle(left.withDeleted, right.withDeleted),
 	}
+}
+
+func commonSourceHasPredicates(left, right []sourceHasPredicate) ([]sourceHasPredicate, bool) {
+	if len(left) != len(right) {
+		return nil, false
+	}
+	result := make([]sourceHasPredicate, len(left))
+	for index := range left {
+		if left[index].relation != right[index].relation || left[index].relationKnown != right[index].relationKnown ||
+			left[index].direct != right[index].direct || left[index].indexExact != right[index].indexExact {
+			return nil, false
+		}
+		equalities, same := commonSourceStrings(left[index].equalityFields, right[index].equalityFields)
+		if !same {
+			return nil, false
+		}
+		result[index] = left[index]
+		result[index].equalityFields = equalities
+		if left[index].position != right[index].position {
+			result[index].position = token.NoPos
+		}
+	}
+	return result, true
+}
+
+func commonSourceInt(left, right int) (int, bool) {
+	if left != right {
+		return 0, false
+	}
+	return left, true
 }
 
 func commonSourceStrings(left, right []string) ([]string, bool) {
@@ -596,16 +776,30 @@ func commonSourceStrings(left, right []string) ([]string, bool) {
 	return append([]string(nil), left...), true
 }
 
-func commonSourceOrderTerms(left, right []sourceOrderTerm) ([]sourceOrderTerm, bool) {
-	if len(left) != len(right) {
-		return nil, false
+func commonSourceOrderTerms(left, right sourceOrderTerms) (sourceOrderTerms, bool) {
+	if left.count != right.count {
+		return sourceOrderTerms{}, false
 	}
-	for index := range left {
-		if left[index] != right[index] {
-			return nil, false
+	for index := 0; index < left.count; index++ {
+		if left.at(index) != right.at(index) {
+			return sourceOrderTerms{}, false
 		}
 	}
-	return append([]sourceOrderTerm(nil), left...), true
+	return left.clone(), true
+}
+
+func commonSourceDeferredOrderCalls(left, right sourceDeferredOrderCalls) (sourceDeferredOrderCalls, bool) {
+	if left.count != right.count {
+		return sourceDeferredOrderCalls{}, false
+	}
+	for index := 0; index < left.count; index++ {
+		leftCall := left.at(index)
+		rightCall := right.at(index)
+		if leftCall.file != rightCall.file || leftCall.body != rightCall.body || leftCall.call != rightCall.call || leftCall.before != rightCall.before {
+			return sourceDeferredOrderCalls{}, false
+		}
+	}
+	return left.clone(), true
 }
 
 func commonSourceWildcards(left, right []sourceWildcardPredicate) ([]sourceWildcardPredicate, bool) {
