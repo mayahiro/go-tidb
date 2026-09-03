@@ -143,6 +143,12 @@ func BuildRecentClipsInGenreQuery(genreID int64) (string, []any, error) {
 	return recentClipsInGenreQuery(genreID).Build()
 }
 
+// BuildRecentUsersWithRoleQuery compiles a pure many-to-many relation-filtered
+// TopN query without opening a database connection.
+func BuildRecentUsersWithRoleQuery(roleID int64) (string, []any, error) {
+	return recentUsersWithRoleQuery(roleID).Build()
+}
+
 func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
 		Select("ID", "Title").
@@ -413,4 +419,12 @@ func usersInRoleQuery(roleName string) *orm.SelectQuery[User] {
 		Select("ID", "Email").
 		Where(orm.Has("Roles", orm.Equal("Name", roleName))).
 		OrderBy(orm.Asc("ID"))
+}
+
+func recentUsersWithRoleQuery(roleID int64) *orm.SelectQuery[User] {
+	return orm.Query[User]().
+		Select("ID", "Email").
+		Where(orm.Has("Roles", orm.Equal("ID", roleID))).
+		OrderBy(orm.Desc("ID")).
+		Limit(20)
 }

@@ -443,6 +443,22 @@ func TestApplicationBuildsRelationPredicateOffline(t *testing.T) {
 	}
 }
 
+func TestApplicationBuildsManyToManyRelationFirstTopNOffline(t *testing.T) {
+	t.Parallel()
+
+	sqlText, arguments, err := BuildRecentUsersWithRoleQuery(11)
+	if err != nil {
+		t.Fatalf("BuildRecentUsersWithRoleQuery() error = %v", err)
+	}
+	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`email` FROM (SELECT `tidbgo_a0`.`user_id` FROM `user_roles` AS `tidbgo_a0` WHERE `tidbgo_a0`.`role_id` = ? ORDER BY `tidbgo_a0`.`user_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `users` AS `tidbgo_t0` ON (`tidbgo_k0`.`user_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	if sqlText != wantSQL {
+		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
+	}
+	if got, want := arguments, []any{int64(11), int64(20)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
+	}
+}
+
 func columns(descriptor *model.Descriptor) []string {
 	fields := descriptor.Fields()
 	result := make([]string, len(fields))

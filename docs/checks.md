@@ -109,8 +109,8 @@ helpers, separately mutated builders, and captured builders are counted as
 `uncertain_patterns` and are not guessed
 
 For an ordered positive-limit root `Has`, source analysis resolves the same
-direct relation metadata and applies the same normalized relation-first TopN
-decision as the runtime compiler. `relation_topn_patterns`,
+collection relation metadata and applies the same normalized relation-first
+TopN decision as the runtime compiler. `relation_topn_patterns`,
 `analyzed_relation_topn_patterns`, and
 `uncertain_relation_topn_patterns` expose that rule's coverage. A resolved
 fallback emits `QRY005`; an unresolved relation name, model, key, order, or
@@ -122,9 +122,12 @@ descriptor. It sends only resolved root shapes with a positive explicit
 `Limit`, uniform-direction `OrderBy`, and conjunctive `Equal` filters to the
 same neutral index-prefix checker used by runtime analysis. A resolved
 relation-first TopN decision sends its association access to that checker as
-well. The default active soft-delete column participates in the equality
-prefix unless `WithDeleted` is resolved on the root query; the relation target
-soft-delete column participates in the association equality prefix
+well. Direct `has_many` access checks target equality columns followed by the
+relation key. Pure `many_to_many` access checks junction target columns
+followed by junction source columns. The default active soft-delete column
+participates in the equality prefix unless `WithDeleted` is resolved on the
+root query; a direct relation target soft-delete column participates in its
+association equality prefix
 
 `index_patterns` counts ordered positive-limit candidates while
 `analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that

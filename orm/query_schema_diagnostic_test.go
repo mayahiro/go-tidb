@@ -192,6 +192,34 @@ func TestSelectQueryShapeIndexDiagnosticsCheckRelationTopNAssociationIndex(t *te
 	}
 }
 
+func TestSelectQueryShapeIndexDiagnosticsCheckManyToManyRelationTopNJunctionIndex(t *testing.T) {
+	t.Parallel()
+
+	matching := parseQueryIndexCatalog(t, `CREATE TABLE preload_user_roles (
+  user_id BIGINT UNSIGNED NOT NULL,
+  role_id BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (user_id, role_id),
+  KEY role_user_key (role_id, user_id)
+);`)
+	if diagnostics := queryIndexDiagnosticsForTest(t, relationTopNManyToManyBenchmarkQuery(), matching); len(diagnostics) != 0 {
+		t.Fatalf("matching IndexDiagnostics() = %#v, want none", diagnostics)
+	}
+
+	missing := parseQueryIndexCatalog(t, `CREATE TABLE preload_user_roles (
+  user_id BIGINT UNSIGNED NOT NULL,
+  role_id BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (user_id, role_id)
+);`)
+	diagnostics := queryIndexDiagnosticsForTest(t, relationTopNManyToManyBenchmarkQuery(), missing)
+	if len(diagnostics) != 1 || diagnostics[0].Code != querycheck.CodeMissingIndexPrefix {
+		t.Fatalf("missing IndexDiagnostics() = %#v, want QRY007", diagnostics)
+	}
+	if !strings.Contains(diagnostics[0].Message, "relation-first TopN for preloadUser.Roles") ||
+		!strings.Contains(queryDiagnosticEvidence(diagnostics[0]), "preload_user_roles(role_id, user_id)") {
+		t.Fatalf("diagnostic = %#v", diagnostics[0])
+	}
+}
+
 func TestSelectQueryShapeIndexDiagnosticsIncludeDefaultSoftDeleteFilter(t *testing.T) {
 	t.Parallel()
 

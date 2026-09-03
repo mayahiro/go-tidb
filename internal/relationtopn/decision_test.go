@@ -13,7 +13,6 @@ func TestDecideUsesStableCompilerOrder(t *testing.T) {
 		CandidateCount:        1,
 		Relation:              "Links",
 		Direct:                true,
-		HasMany:               true,
 		RootPredicateCount:    1,
 		MetadataKnown:         true,
 		SourceIsRootPrimary:   true,
@@ -29,7 +28,6 @@ func TestDecideUsesStableCompilerOrder(t *testing.T) {
 		{name: "optimized", want: queryshape.CompilerRewriteRelationTopN},
 		{name: "multiple", change: func(facts *Facts) { facts.CandidateCount = 2 }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonMultipleCollections},
 		{name: "nested", change: func(facts *Facts) { facts.Direct = false }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonNestedCollection},
-		{name: "many to many", change: func(facts *Facts) { facts.HasMany = false }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonManyToMany},
 		{name: "seek", change: func(facts *Facts) { facts.SeekAfter = true }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonSeekAfter},
 		{name: "root predicate", change: func(facts *Facts) { facts.RootPredicateCount = 2 }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonRootPredicate},
 		{name: "soft delete", change: func(facts *Facts) { facts.RootSoftDelete = true }, want: queryshape.CompilerRewriteRelationTopNFallback, reason: ReasonRootSoftDelete},
@@ -60,7 +58,6 @@ func TestDecideWaitsOnlyForMetadataFacts(t *testing.T) {
 		CandidateCount:     1,
 		Relation:           "Links",
 		Direct:             true,
-		HasMany:            true,
 		RootPredicateCount: 1,
 	})
 	if result.Complete || result.Decision != (queryshape.CompilerDecision{}) {

@@ -101,7 +101,7 @@ fluent chain、1個のlocal builder定義、local query helper、integerとstrin
 
 dynamicな `Limit` または `Offset`、variadic order、未解決predicate helper、別statementで変更されたbuilder、captureされたbuilderは推測せず `uncertain_patterns` へ数えます
 
-orderedかつpositive Limitのroot `Has` では、runtime compilerと同じdirect Relation metadataを解決し、共通の正規化済みrelation-first TopN decisionを適用します
+orderedかつpositive Limitのroot `Has` では、runtime compilerと同じcollection Relation metadataを解決し、共通の正規化済みrelation-first TopN decisionを適用します
 
 `relation_topn_patterns`、`analyzed_relation_topn_patterns`、`uncertain_relation_topn_patterns` がこのruleのcoverageを表します
 
@@ -113,7 +113,9 @@ orderedかつpositive Limitのroot `Has` では、runtime compilerと同じdirec
 
 解決済みのrelation-first TopN decisionがある場合はassociation accessも同じcheckerへ渡します
 
-default active soft-delete columnはroot query上で `WithDeleted` を解決できない限りequality prefixへ含め、Relation targetのsoft-delete columnはassociation equality prefixへ含めます
+direct `has_many` accessはtarget equality columnの後にRelation keyが続くindexを検査し、pure `many_to_many` accessはjunction target columnの後にjunction source columnが続くindexを検査します
+
+default active soft-delete columnはroot query上で `WithDeleted` を解決できない限りequality prefixへ含め、direct Relation targetのsoft-delete columnはassociation equality prefixへ含めます
 
 `index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
 

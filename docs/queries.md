@@ -110,12 +110,12 @@ retain the same fingerprint when the compiler decision remains unchanged
 because they use the same SQL placeholder shape.
 
 `QRY005` reports the metadata-only reason that relation-first TopN could not be
-applied, such as an unproven one-row-per-root condition, a different root
+applied, such as an unproven one-row-per-root condition, a pure many-to-many
+filter that does not fix the complete target primary key, a different root
 order, a root predicate or active root soft-delete scope, a logical group,
-multiple collection predicates, `SeekAfter`, or `many_to_many`. It never
-includes target predicate values. The fallback remains a valid relation
-existence query; use `Explain` or `ExplainAnalyze` to decide whether its actual
-plan is acceptable.
+multiple collection predicates, or `SeekAfter`. It never includes target
+predicate values. The fallback remains a valid relation existence query; use
+`Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
 
 ## Soft-delete scope
 
@@ -201,37 +201,50 @@ Hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite).
 
 The compiler goes further for this metadata-proven TopN shape:
 
-- The builder has one top-level direct `has_many` `Has` and no other root
+- The builder has one top-level direct collection `Has` and no other root
   predicate
 - A positive `Limit` and `OrderBy` are explicit, with the order exactly equal
   to the complete root primary key
 - The relation source key is the complete root primary key
-- The relation target primary key is fully covered by the target key plus
-  conjunctive `Equal` predicates, proving at most one matching target row per
-  root
+- For direct `has_many`, the relation target primary key is fully covered by
+  the target key plus conjunctive `Equal` predicates, proving at most one
+  matching target row per root
+- For pure `many_to_many`, conjunctive `Equal` predicates fix the complete
+  target primary key, and the pure-junction contract makes that source-target
+  pair unique
 - `SeekAfter` and the root default soft-delete scope are not active
 
-For that shape, the compiler filters and orders the relation target in a
-derived query, applies `LIMIT` there, then joins only those keys to the root
-table and inline to-one preloads. This is designed to let TiDB push Limit to an
-ordered association index before root lookups. TiDB's [TopN and Limit pushdown
+For that shape, the compiler builds a derived relation-first query, applies
+`LIMIT` there, then joins only those keys to the root table and inline to-one
+preloads. Direct `has_many` filters and orders the target table. Pure
+`many_to_many` filters the junction target columns directly when the target
+primary key is the complete relation key and no other target condition is
+needed; otherwise it joins the fixed target before ordering the junction
+source key. This is designed to let TiDB push Limit to an ordered association
+index before root lookups. TiDB's [TopN and Limit pushdown
 guide](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/) explains why
 placing these operators close to the data source reduces work.
 
 Relation mappings are a data-integrity contract even when the physical schema
-does not declare a foreign key: every target key represented by a direct
-relation must reference an existing source row. `go-tidb` does not create or
-check that constraint during a query. Relation-first TopN relies on this
-contract; orphan target rows can otherwise consume a page slot before the root
-join and underfill the result. Enforce the invariant with schema constraints
-or application writes as appropriate for the workload.
+does not declare a foreign key. Every target key represented by a direct
+relation must reference an existing source row. A pure junction must reference
+existing source and target rows and enforce exact uniqueness across the full
+source-target column pair. `go-tidb` does not create or check those constraints
+during a query. Relation-first TopN relies on this contract. An orphan source
+can consume a page slot before the root join. When the compiler filters a
+junction without joining its target, an orphan target can also make relation
+existence a false positive. Duplicate pure-junction pairs can duplicate a root
+result. Enforce the invariant with schema constraints or application writes as
+appropriate for the workload.
 
-The compiler cannot inspect physical indexes offline. For efficient
-relation-first TopN, an index normally needs equality-filter columns followed
-by the relation target key in root-order sequence, such as
+The compiler cannot inspect physical indexes offline. For efficient direct
+`has_many` relation-first TopN, an index normally needs equality-filter columns
+followed by the relation target key in root-order sequence, such as
 `(genre_id, video_id)` for `Equal("GenreID", ...)` plus
-`OrderBy(Desc("ID"))`. Confirm the actual ordered range scan, pushed Limit,
-and RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
+`OrderBy(Desc("ID"))`. For pure `many_to_many`, the junction normally needs
+its target columns followed by its source columns, such as
+`(role_id, user_id)`. Confirm the actual ordered range scan, pushed Limit, and
+RU with `ExplainAnalyze`; do not infer them from an empty diagnostic list.
 
 When the target model has a soft-delete field, `Has` considers active target
 rows only. Use `Raw[T]` when an existence condition must explicitly inspect

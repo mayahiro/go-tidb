@@ -255,7 +255,7 @@ var fixtureTables = []fixtureTable{
   user_id BIGINT NOT NULL,
   role_id BIGINT NOT NULL,
   PRIMARY KEY (user_id, role_id),
-  KEY tidbgo_it_user_roles_role_id (role_id)
+  KEY tidbgo_it_user_roles_role_user (role_id, user_id)
 )`,
 		drop: "DROP TABLE tidbgo_it_user_roles",
 	},
@@ -1428,6 +1428,46 @@ func testRelationFirstTopN(t *testing.T, ctx context.Context, database *sql.DB, 
 	}
 	if !foundAssociation || !foundIndex || !foundPushedLimit || !foundRU {
 		t.Fatalf("relation TopN plan lacks association table, structural index, pushed Limit, or RU data: %#v", plan)
+	}
+
+	manyToManyQuery := orm.Query[starterUser]().
+		Select("ID", "Email").
+		Where(orm.Has("Roles", orm.Equal("ID", int64(102)))).
+		OrderBy(orm.Desc("ID")).
+		Limit(1)
+	manyToManySQL, _, err := manyToManyQuery.Build()
+	if err != nil {
+		t.Fatalf("build many-to-many relation TopN query: %v", err)
+	}
+	if !strings.Contains(manyToManySQL, "FROM (SELECT `tidbgo_a0`.`user_id` FROM `tidbgo_it_user_roles` AS `tidbgo_a0`") ||
+		!strings.Contains(manyToManySQL, "WHERE `tidbgo_a0`.`role_id` = ?") ||
+		!strings.Contains(manyToManySQL, "LIMIT ?) AS `tidbgo_k0` JOIN `tidbgo_it_users` AS `tidbgo_t0`") ||
+		strings.Contains(manyToManySQL, "EXISTS") || strings.Contains(manyToManySQL, "JOIN `tidbgo_it_roles`") {
+		t.Fatalf("many-to-many relation TopN SQL = %q, want junction-first derived SELECT", manyToManySQL)
+	}
+	manyToManySelected, err := manyToManyQuery.All(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "execute many-to-many relation-first TopN query", err)
+	}
+	if len(manyToManySelected) != 1 || manyToManySelected[0].ID != 2 {
+		t.Fatalf("many-to-many relation TopN users = %#v, want user 2", manyToManySelected)
+	}
+	manyToManyPlan, err := manyToManyQuery.ExplainAnalyze(ctx, database)
+	if err != nil {
+		fatalDatabaseError(t, dsn, "explain analyze many-to-many relation-first TopN query", err)
+	}
+	foundManyToManyJunction := false
+	foundManyToManyRU := false
+	for _, row := range manyToManyPlan {
+		if row.PhysicalTable == "tidbgo_it_user_roles" && row.RelationPath == "Roles" {
+			foundManyToManyJunction = true
+		}
+		if strings.Contains(row.ExecutionInfo, "RU:") {
+			foundManyToManyRU = true
+		}
+	}
+	if !foundManyToManyJunction || !foundManyToManyRU {
+		t.Fatalf("many-to-many relation TopN plan lacks resolved junction or RU data: %#v", manyToManyPlan)
 	}
 }
 

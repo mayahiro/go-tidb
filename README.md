@@ -243,8 +243,10 @@ admins, err := orm.Query[User]().
 `Has` is a logical relation-existence predicate. The compiler normally emits
 `EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
 predicates in a positive conjunctive context. For a narrow, metadata-proven
-`has_many` + root-primary-key order + positive-limit shape, it instead applies
-the target filter and Limit before loading root rows. Runtime analysis emits
+`has_many` or pure `many_to_many` + root-primary-key order + positive-limit
+shape, it instead applies the relation filter and Limit before loading root
+rows. A pure many-to-many rewrite additionally requires conjunctive `Equal`
+predicates that fix the complete target primary key. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a
@@ -576,8 +578,9 @@ fallbacks. `SRC001` is emitted only when every
 use of an `All`, `First`, or `Only` result is understood within the same
 function. With `--schema`, resolved root queries using a positive explicit
 `Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
-checked for a matching physical index prefix. Eligible direct `has_many`
-relation-first TopN queries check the association access in the same way.
+checked for a matching physical index prefix. Eligible direct `has_many` and
+pure `many_to_many` relation-first TopN queries check the association access in
+the same way.
 Dynamic relation names, unresolved relation metadata, range filters, mixed
 ordering, and separately mutated builders remain uncertain. Projection
 analysis also leaves returned or passed results, aliases, and preloads
@@ -617,7 +620,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
   yet.
 - Direct and pure `many_to_many` relation predicates and preloads may be nested.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,
-  and eligible ordered direct `has_many` pages use relation-first TopN SQL.
+  and eligible ordered `has_many` and pure `many_to_many` pages use
+  relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.

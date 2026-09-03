@@ -31,8 +31,8 @@ It demonstrates the current struct-first foundation:
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
 - Logical direct and pure many-to-many relation predicates, including TiDB
-  semi-join hints and relation-first TopN for an eligible direct collection,
-  without hydrating relations
+  semi-join hints and relation-first TopN for eligible direct and pure
+  many-to-many collections, without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
@@ -78,7 +78,11 @@ and uncertainty counts even when no diagnostic is emitted
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler filters and limits `clip_genres` before loading root rows. Both
+compiler filters and limits `clip_genres` before loading root rows.
+`BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
+many-to-many shape: fixing the complete Role primary key lets the compiler
+filter the junction directly and limit `(role_id, user_id)` access before
+loading User rows. Both
 `tidbgo lint --schema` and captured `tidbgo analyze --schema` can report an
 `EXISTS` fallback or a missing association index prefix without another
 application wrapper.

@@ -17,11 +17,14 @@ type sourceRelationResult struct {
 }
 
 type sourceResolvedRelation struct {
-	name         string
-	kind         modelmeta.RelationKind
-	target       sourceTypeKey
-	sourceFields []string
-	targetFields []string
+	name                  string
+	kind                  modelmeta.RelationKind
+	target                sourceTypeKey
+	sourceFields          []string
+	targetFields          []string
+	junctionTable         string
+	junctionSourceColumns []string
+	junctionTargetColumns []string
 }
 
 func (relation sourceResolvedRelation) collection() bool {
@@ -73,10 +76,13 @@ func (analyzer *sourceAnalyzer) parseSourceRelation(modelKey sourceTypeKey, rela
 			}
 			for _, pair := range declaration.SourcePairs {
 				relation.sourceFields = append(relation.sourceFields, pair.Left)
+				relation.junctionSourceColumns = append(relation.junctionSourceColumns, pair.Right)
 			}
 			for _, pair := range declaration.TargetPairs {
 				relation.targetFields = append(relation.targetFields, pair.Right)
+				relation.junctionTargetColumns = append(relation.junctionTargetColumns, pair.Left)
 			}
+			relation.junctionTable = declaration.Through
 			return relation, true
 		}
 		joins := declaration.Joins

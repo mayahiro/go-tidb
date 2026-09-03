@@ -36,8 +36,29 @@ func relationTopNBenchmarkQuery() *SelectQuery[relationTopNVideo] {
 		Preload("Maker")
 }
 
+func relationTopNManyToManyBenchmarkQuery() *SelectQuery[preloadUser] {
+	return Query[preloadUser]().
+		Select("ID", "Email").
+		Where(Has("Roles", Equal("ID", uint64(7)))).
+		OrderBy(Desc("ID")).
+		Limit(20)
+}
+
 func BenchmarkSelectQueryBuildRelationTopN(b *testing.B) {
 	query := relationTopNBenchmarkQuery()
+	b.ReportAllocs()
+	for b.Loop() {
+		sqlText, arguments, err := query.Build()
+		if err != nil {
+			b.Fatal(err)
+		}
+		relationTopNSQLSink = sqlText
+		relationTopNArgumentsSink = arguments
+	}
+}
+
+func BenchmarkSelectQueryBuildManyToManyRelationTopN(b *testing.B) {
+	query := relationTopNManyToManyBenchmarkQuery()
 	b.ReportAllocs()
 	for b.Loop() {
 		sqlText, arguments, err := query.Build()

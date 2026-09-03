@@ -111,7 +111,7 @@ projection、predicate structure、order、preload、compiler rewriteが変わ�
 
 `QRY005` はrelation-first TopNを適用できなかったmetadataだけの理由を報告します
 
-例として1 rootあたり1 rowの証明不足、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter`、`many_to_many` があります
+例として1 rootあたり1 rowの証明不足、target primary key全体を固定しないpure many-to-many filter、異なるroot order、root predicateまたはactiveなroot soft-delete scope、logical group、複数collection predicate、`SeekAfter` があります
 
 target predicate valueは含めません
 
@@ -204,13 +204,18 @@ TiDBの公式仕様は[Optimizer Hints](https://docs.pingcap.com/tidb/stable/opt
 
 compilerは次の条件をmetadataから証明できるTopN shapeをさらに変換します
 
-- builderにtop-level direct `has_many` の `Has` が1個だけあり、他のroot predicateがない
+- builderにtop-level direct collectionの `Has` が1個だけあり、他のroot predicateがない
 - positive `Limit` と `OrderBy` が明示され、orderがroot primary key全体と完全に一致する
 - Relation source keyがroot primary key全体である
-- Relation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
+- direct `has_many` ではRelation target primary keyがtarget keyとconjunctiveな `Equal` predicateで全てcoverされ、1 rootあたり最大1 target rowと証明できる
+- pure `many_to_many` ではconjunctiveな `Equal` predicateがtarget primary key全体を固定し、pure-junction contractによってsource-target pairが一意になる
 - `SeekAfter` とroot default soft-delete scopeがactiveではない
 
-このshapeではRelation targetをderived query内でfilterしてorderし、そこで `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+このshapeではrelation-firstなderived query内で `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
+
+direct `has_many` はtarget tableをfilterしてorderします
+
+pure `many_to_many` はtarget primary keyがRelation key全体で他のtarget条件が不要ならjunction target columnを直接filterし、それ以外は固定したtargetをjoinしてからjunction source keyをorderします
 
 TiDBがroot lookupより前のordered association indexへLimitをpush downできる位置を作るための変換です
 
@@ -220,17 +225,25 @@ data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pu
 
 direct Relationが表すtarget keyは既存source rowを参照する必要があります
 
-`go-tidb` はquery実行時にこのconstraintを作成または検査しません
+pure junctionは既存sourceとtarget rowを参照し、source-target column全体のpairにexact uniqueを設定する必要があります
 
-relation-first TopNはこのcontractを前提とするため、orphan target rowがある場合はroot joinより前にpage slotを消費し、結果件数がLimit未満になる可能性があります
+`go-tidb` はquery実行時にこれらのconstraintを作成または検査しません
+
+relation-first TopNはこのcontractを前提とします
+
+orphan sourceはroot joinより前にpage slotを消費する可能性があり、compilerがtargetをjoinせずjunctionをfilterする場合のorphan targetはRelation existenceを誤ってtrueにする可能性があります
+
+duplicateなpure-junction pairがある場合はroot resultが重複する可能性があります
 
 workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
 
 compilerは物理indexをofflineでinspectできません
 
-効率的なrelation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
+効率的なdirect `has_many` relation-first TopNには通常、equality filter columnの後にroot order順のRelation target keyを置くindexが必要です
 
 例えば `Equal("GenreID", ...)` と `OrderBy(Desc("ID"))` には `(genre_id, video_id)` が該当します
+
+pure `many_to_many` のjunctionには通常target columnの後にsource columnを置くindexが必要で、例えば `(role_id, user_id)` が該当します
 
 empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
 

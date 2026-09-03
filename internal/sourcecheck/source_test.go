@@ -759,12 +759,12 @@ type VideoLink struct {
 	VideoID int64 `+"`tidbgo:\",pk\"`"+`
 	GenreID int64 `+"`tidbgo:\",pk\"`"+`
 }
-type Tag struct { ID int64 `+"`tidbgo:\",pk\"`"+` }
+type Tag struct { ID int64 `+"`tidbgo:\",pk\"`"+`; Name string }
 
 func nested() { _, _, _ = orm.Query[Video]().Where(orm.And(orm.Has("Links", orm.Equal("GenreID", 7)), orm.Equal("ID", 1))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
 func seek() { _, _, _ = orm.Query[Video]().WithDeleted().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).SeekAfter(100).Limit(20).Build() }
 func softDelete() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equal("GenreID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
-	func manyToMany() { _, _, _ = orm.Query[Video]().WithDeleted().Where(orm.Has("Tags", orm.Equal("ID", 7))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+	func manyToMany() { _, _, _ = orm.Query[Video]().WithDeleted().Where(orm.Has("Tags", orm.Equal("Name", "drama"))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
 `)
 	if got, want := analysis.Statistics.RelationTopNPatterns, 4; got != want {
 		t.Fatalf("RelationTopNPatterns = %d, want %d", got, want)
@@ -786,7 +786,7 @@ func softDelete() { _, _, _ = orm.Query[Video]().Where(orm.Has("Links", orm.Equa
 			joined += evidence.Message + "\n"
 		}
 	}
-	for _, reason := range []string{relationtopn.ReasonNestedCollection, relationtopn.ReasonSeekAfter, relationtopn.ReasonRootSoftDelete, relationtopn.ReasonManyToMany} {
+	for _, reason := range []string{relationtopn.ReasonNestedCollection, relationtopn.ReasonSeekAfter, relationtopn.ReasonRootSoftDelete, relationtopn.ReasonTargetUniqueness} {
 		if !strings.Contains(joined, reason) {
 			t.Fatalf("evidence = %q, want reason %q", joined, reason)
 		}
@@ -839,6 +839,43 @@ CREATE TABLE video_links (
 		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
 	if diagnostic := missing.Diagnostics[0]; diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, "Video.Links") {
+		t.Fatalf("Diagnostic = %#v", diagnostic)
+	}
+}
+
+func TestAnalyzeInputsChecksManyToManyRelationTopNJunctionIndexFromSource(t *testing.T) {
+	t.Parallel()
+
+	source := `package repository
+import "github.com/mayahiro/go-tidb/orm"
+type User struct {
+	ID uint64 ` + "`tidbgo:\",pk\"`" + `
+	Roles []Role ` + "`tidbgo:\"many_to_many,through=user_roles,source=ID:user_id,target=role_id:ID\"`" + `
+}
+type Role struct { ID uint64 ` + "`tidbgo:\",pk\"`" + `; Name string }
+func query() { _, _, _ = orm.Query[User]().Where(orm.Has("Roles", orm.Equal("ID", uint64(7)))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
+`
+	matching := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user_roles (
+  user_id BIGINT UNSIGNED NOT NULL,
+  role_id BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (user_id, role_id),
+  KEY role_user (role_id, user_id)
+);`)))
+	if matching.Statistics.AnalyzedRelationTopNPatterns != 1 || matching.Statistics.AnalyzedIndexPatterns != 1 || len(matching.Diagnostics) != 0 {
+		t.Fatalf("matching analysis = %#v", matching)
+	}
+
+	missing := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user_roles (
+  user_id BIGINT UNSIGNED NOT NULL,
+  role_id BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (user_id, role_id)
+);`)))
+	if got, want := sourceDiagnosticCodes(missing), []string{querycheck.CodeMissingIndexPrefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
+	}
+	diagnostic := missing.Diagnostics[0]
+	if !strings.Contains(diagnostic.Message, "User.Roles") || !strings.Contains(diagnostic.Message, "user_roles") ||
+		!strings.Contains(diagnostic.Evidence[0].Message, "(role_id, user_id)") {
 		t.Fatalf("Diagnostic = %#v", diagnostic)
 	}
 }

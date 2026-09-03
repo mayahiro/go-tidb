@@ -65,6 +65,7 @@ go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLoc
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
 ```
 
 The benchmark is offline and does not load packages, run application code,
@@ -77,6 +78,8 @@ The third adds pre-parsed schema metadata, physical model-name resolution, and
 the shared index-prefix checker for 100 ordered-limit queries
 The fourth resolves direct relation metadata, applies the shared relation-first
 TopN compiler decision, and checks 100 association index accesses
+The fifth resolves pure many-to-many relation and junction metadata, applies
+the same compiler decision, and checks 100 junction index accesses
 
 ## Schema compatibility client benchmarks
 

@@ -249,7 +249,9 @@ admins, err := orm.Query[User]().
 
 通常は `EXISTS` を生成し、positive conjunctive contextのfiltered collection predicateにはTiDBの `SEMI_JOIN_REWRITE()` hintを追加します
 
-metadataから証明できる限定的な `has_many`、root primary key order、positive Limitのshapeでは、target filterとLimitをroot rowのloadより先へ適用します
+metadataから証明できる限定的な `has_many` またはpure `many_to_many`、root primary key order、positive Limitのshapeでは、Relation filterとLimitをroot rowのloadより先へ適用します
+
+pure many-to-manyの変換では、target primary key全体を固定するconjunctiveな `Equal` predicateも必要です
 
 orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
 
@@ -603,7 +605,7 @@ application codeの実行、package load、DB接続、source変更は行いま�
 
 `--schema` を指定した場合、明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterだけを使う解決済みroot queryを物理index prefixと照合します
 
-条件を満たすdirect `has_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
+条件を満たすdirect `has_many` とpure `many_to_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
 
 dynamicなRelation名、未解決のRelation metadata、range filter、mixed order、別statementで変更されたbuilderはuncertainとします
 
@@ -638,7 +640,7 @@ command helpは `tidbgo --help` で表示できます
 
 - scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
 - directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
-- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered direct `has_many` pageはrelation-first TopN SQLを使う
+- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` とpure `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
 - source lintは関連するbuilder flowとRelation metadataを静的に解決できる場合だけ `QRY002` から `QRY005` を適用し、`--schema` を指定した高確度なrootとrelation-first ordered-limit shapeへ `QRY006` と `QRY007` を適用する

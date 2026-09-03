@@ -7,7 +7,6 @@ import "github.com/mayahiro/go-tidb/internal/queryshape"
 const (
 	ReasonMultipleCollections = "the query contains more than one collection Has predicate"
 	ReasonNestedCollection    = "the collection Has predicate is nested in a logical group"
-	ReasonManyToMany          = "the relation uses a many-to-many junction whose pair uniqueness is not available to the offline query compiler"
 	ReasonSeekAfter           = "the query uses SeekAfter, which is not yet supported by the relation-first TopN compiler"
 	ReasonRootPredicate       = "the query contains a root predicate that must be evaluated before LIMIT"
 	ReasonRootSoftDelete      = "the root default soft-delete scope must be evaluated before LIMIT"
@@ -24,7 +23,6 @@ type Facts struct {
 	CandidateCount        int
 	Relation              string
 	Direct                bool
-	HasMany               bool
 	SeekAfter             bool
 	RootPredicateCount    int
 	RootSoftDelete        bool
@@ -50,7 +48,6 @@ const (
 	OutcomeOptimized
 	OutcomeMultipleCollections
 	OutcomeNestedCollection
-	OutcomeManyToMany
 	OutcomeSeekAfter
 	OutcomeRootPredicate
 	OutcomeRootSoftDelete
@@ -62,7 +59,6 @@ const (
 var outcomeReasons = [...]string{
 	OutcomeMultipleCollections: ReasonMultipleCollections,
 	OutcomeNestedCollection:    ReasonNestedCollection,
-	OutcomeManyToMany:          ReasonManyToMany,
 	OutcomeSeekAfter:           ReasonSeekAfter,
 	OutcomeRootPredicate:       ReasonRootPredicate,
 	OutcomeRootSoftDelete:      ReasonRootSoftDelete,
@@ -76,7 +72,6 @@ func Decide(facts Facts) Result {
 	outcome := DecideStructural(
 		facts.CandidateCount,
 		facts.Direct,
-		facts.HasMany,
 		facts.SeekAfter,
 		facts.RootPredicateCount,
 		facts.RootSoftDelete,
@@ -92,7 +87,7 @@ func Decide(facts Facts) Result {
 
 // DecideStructural applies rules that do not require resolved relation-key
 // metadata.
-func DecideStructural(candidateCount int, direct, hasMany, seekAfter bool, rootPredicateCount int, rootSoftDelete bool) Outcome {
+func DecideStructural(candidateCount int, direct, seekAfter bool, rootPredicateCount int, rootSoftDelete bool) Outcome {
 	if candidateCount == 0 {
 		return OutcomeNone
 	}
@@ -101,9 +96,6 @@ func DecideStructural(candidateCount int, direct, hasMany, seekAfter bool, rootP
 	}
 	if !direct {
 		return OutcomeNestedCollection
-	}
-	if !hasMany {
-		return OutcomeManyToMany
 	}
 	if seekAfter {
 		return OutcomeSeekAfter

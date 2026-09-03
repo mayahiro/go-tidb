@@ -60,6 +60,7 @@ go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredLoc
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
 ```
 
 offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
@@ -71,6 +72,8 @@ temporary fixture作成はtimer開始前に完了します
 3番目はparse済みschema metadata、物理model名の解決、100個のordered-limit queryに対するshared index-prefix checkerを追加します
 
 4番目はdirect Relation metadataを解決し、共通のrelation-first TopN compiler decisionを適用して100個のassociation index accessを照合します
+
+5番目はpure many-to-many Relationとjunction metadataを解決し、同じcompiler decisionを適用して100個のjunction index accessを照合します
 
 ## Schema compatibility client benchmark
 

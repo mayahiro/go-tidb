@@ -54,7 +54,6 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 	outcome := relationtopn.DecideStructural(
 		collectionCount,
 		analysis.predicate.direct,
-		analysis.relation.kind == modelmeta.RelationHasMany,
 		pattern.seekAfter == sourceTogglePresent,
 		pattern.rootPredicateCount,
 		model.softDelete && pattern.withDeleted != sourceTogglePresent,
@@ -69,12 +68,16 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 	if !exists || target.ambiguous || len(target.primaryFields) == 0 {
 		return analysis
 	}
+	relationFields := analysis.relation.targetFields
+	if analysis.relation.kind == modelmeta.RelationManyToMany {
+		relationFields = nil
+	}
 	outcome = relationtopn.DecideMetadata(
 		sameSourceFieldNames(analysis.relation.sourceFields, model.primaryFields),
 		sourceOrderMatchesFields(pattern.orderTerms, analysis.relation.sourceFields),
 		sourceRelationUniquePerRoot(
 			target.primaryFields,
-			analysis.relation.targetFields,
+			relationFields,
 			analysis.predicate.equalityFields,
 		),
 	)

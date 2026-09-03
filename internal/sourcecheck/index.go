@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 	"github.com/mayahiro/go-tidb/internal/querycheck"
 	"github.com/mayahiro/go-tidb/internal/queryshape"
 )
@@ -57,6 +58,20 @@ func (analyzer *sourceAnalyzer) sourceRelationTopNIndexAccess(
 	analysis sourceRelationTopNAnalysis,
 ) (queryshape.IndexAccess, bool) {
 	pattern := summary.pattern
+	if analysis.relation.kind == modelmeta.RelationManyToMany {
+		if !analysis.predicate.indexExact || pattern.orderTerms.count == 0 || !sourceOrderTermsUniform(pattern.orderTerms) ||
+			analysis.relation.junctionTable == "" || len(analysis.relation.junctionSourceColumns) == 0 ||
+			len(analysis.relation.junctionTargetColumns) == 0 {
+			return queryshape.IndexAccess{}, false
+		}
+		return queryshape.IndexAccess{
+			Kind:            queryshape.IndexAccessRelationTopN,
+			Table:           analysis.relation.junctionTable,
+			Relation:        analysis.relation.name,
+			EqualityColumns: append([]string(nil), analysis.relation.junctionTargetColumns...),
+			OrderColumns:    append([]string(nil), analysis.relation.junctionSourceColumns...),
+		}, true
+	}
 	target, exists := analyzer.models[analysis.relation.target]
 	if !exists || target.physical == nil || target.physical.ambiguous || !analysis.predicate.indexExact ||
 		pattern.orderTerms.count == 0 || !sourceOrderTermsUniform(pattern.orderTerms) {
