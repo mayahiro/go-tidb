@@ -141,7 +141,11 @@ integer width、signed range、Decimal precisionとscale、string length、chara
 
 将来追加された未知のSQL typeと、applicationが選択した `sql.Scanner` または `driver.Valuer` 実装custom typeの意味を推測しません
 
-custom type semanticsはapplicationの責任です
+これはnamed stringへ `sql.Scanner` を実装した場合など、基底representationがnativeなtypeにも適用します
+
+`CMP004` から `CMP006` はその物理typeとnullabilityを推測しません
+
+ScannerがSQL `NULL` を受け入れるかを含むcustom type semanticsはapplicationの責任です
 
 Relation index diagnosticはORMが `has_many` と `many_to_many` に対して決定的に生成するaccess pathだけを対象とします
 

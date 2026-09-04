@@ -1,6 +1,7 @@
 package check
 
 import (
+	"database/sql/driver"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,6 +36,43 @@ type schemaCheckSoftDelete struct {
 	model.Meta `tidbgo:"table=schema_check_soft_delete"`
 	ID         int64     `tidbgo:"id,pk"`
 	DeletedAt  time.Time `tidbgo:"deleted_at,soft_delete"`
+}
+
+type schemaCheckDate string
+
+func (*schemaCheckDate) Scan(any) error {
+	panic("check.Schema must not call Scan")
+}
+
+type schemaCheckEncodedInt int64
+
+func (schemaCheckEncodedInt) Value() (driver.Value, error) {
+	panic("check.Schema must not call Value")
+}
+
+type schemaCheckPlainNamedString string
+
+type schemaCheckNativeCustomValues struct {
+	model.Meta `tidbgo:"table=schema_check_native_custom_values"`
+	Date       schemaCheckDate
+	Optional   *schemaCheckDate
+	Encoded    schemaCheckEncodedInt
+}
+
+type schemaCheckPlainNamedValue struct {
+	model.Meta `tidbgo:"table=schema_check_plain_named_values"`
+	Value      schemaCheckPlainNamedString
+}
+
+type schemaCheckCustomRelationParent struct {
+	model.Meta `tidbgo:"table=schema_check_custom_relation_parents"`
+	ID         schemaCheckDate                   `tidbgo:",pk"`
+	Targets    []schemaCheckCustomRelationTarget `tidbgo:"many_to_many,through=schema_check_custom_relation_links,source=ID:parent_id,target=target_id:ID"`
+}
+
+type schemaCheckCustomRelationTarget struct {
+	model.Meta `tidbgo:"table=schema_check_custom_relation_targets"`
+	ID         schemaCheckDate `tidbgo:",pk"`
 }
 
 type schemaCheckCandidateParent struct {
@@ -540,6 +578,54 @@ func TestSchemaDoesNotInferCompatibilityForCustomOrUnknownTypes(t *testing.T) {
 	}
 	catalog := parseSchemaCheckCatalog(t, "CREATE TABLE custom_type_schema_checks (value VECTOR(3) NOT NULL);")
 	diagnostics := Schema[customTypeSchemaCheck](catalog)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+}
+
+func TestSchemaDoesNotInferCompatibilityForNamedNativeCustomRepresentations(t *testing.T) {
+	t.Parallel()
+
+	catalog := parseSchemaCheckCatalog(t, `CREATE TABLE schema_check_native_custom_values (
+  date DATE NULL,
+  optional DATE NOT NULL,
+  encoded JSON NULL
+);`)
+	diagnostics := Schema[schemaCheckNativeCustomValues](catalog)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
+	}
+}
+
+func TestSchemaStillChecksNamedNativeTypesWithoutCustomRepresentations(t *testing.T) {
+	t.Parallel()
+
+	catalog := parseSchemaCheckCatalog(t, `CREATE TABLE schema_check_plain_named_values (
+  value DATE NULL
+);`)
+	diagnostics := Schema[schemaCheckPlainNamedValue](catalog)
+	if got, want := diagnosticCodes(diagnostics), []string{codeIncompatibleColumnType, codeNullableDatabaseColumn}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes = %#v, want %#v", got, want)
+	}
+}
+
+func TestSchemaDoesNotInferRelationTypesForNamedNativeCustomRepresentations(t *testing.T) {
+	t.Parallel()
+
+	catalog := parseSchemaCheckCatalog(t, `CREATE TABLE schema_check_custom_relation_parents (
+  id BIGINT NOT NULL,
+  PRIMARY KEY (id)
+);
+CREATE TABLE schema_check_custom_relation_targets (
+  id BIGINT NOT NULL,
+  PRIMARY KEY (id)
+);
+CREATE TABLE schema_check_custom_relation_links (
+  parent_id BIGINT NOT NULL,
+  target_id BIGINT NOT NULL,
+  UNIQUE KEY schema_check_custom_relation_pair (parent_id, target_id)
+);`)
+	diagnostics := Schema[schemaCheckCustomRelationParent](catalog)
 	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", diagnostics)
 	}

@@ -116,7 +116,7 @@ func appendColumnCompatibilityDiagnostics(diagnostics []Diagnostic, descriptor *
 			continue
 		}
 		location := schemaLocation(column.Position())
-		if !compatibleSQLType(field.Kind(), column.TypeName()) {
+		if !compatibleFieldSQLType(field, column.TypeName()) {
 			diagnostics = append(diagnostics, Diagnostic{
 				Code:         codeIncompatibleColumnType,
 				Severity:     SeverityError,
@@ -127,7 +127,7 @@ func appendColumnCompatibilityDiagnostics(diagnostics []Diagnostic, descriptor *
 				Suppressible: false,
 			})
 		}
-		if field.Kind() != model.KindCustom {
+		if !hasApplicationDefinedRepresentation(field) {
 			goNullable := field.PointerDepth() > 0 || field.Kind() == model.KindBytes || field.IsSoftDelete()
 			switch {
 			case column.Nullable() && !goNullable:
@@ -317,7 +317,7 @@ func appendRelationColumnDiagnostics(
 			columnsPresent = false
 			continue
 		}
-		if compatibleSQLType(field.Kind(), column.TypeName()) {
+		if compatibleFieldSQLType(field, column.TypeName()) {
 			continue
 		}
 		diagnostics = append(diagnostics, Diagnostic{
@@ -433,7 +433,7 @@ func appendJunctionColumnDiagnostic(
 			Suppressible: false,
 		}), false
 	}
-	if compatibleSQLType(field.Kind(), column.TypeName()) {
+	if compatibleFieldSQLType(field, column.TypeName()) {
 		return diagnostics, true
 	}
 	return append(diagnostics, Diagnostic{
@@ -621,6 +621,17 @@ func compatibleSQLType(kind model.Kind, sqlType string) bool {
 	default:
 		return true
 	}
+}
+
+func compatibleFieldSQLType(field model.Field, sqlType string) bool {
+	if hasApplicationDefinedRepresentation(field) {
+		return true
+	}
+	return compatibleSQLType(field.Kind(), sqlType)
+}
+
+func hasApplicationDefinedRepresentation(field model.Field) bool {
+	return field.Kind() == model.KindCustom || field.UsesScanner() || field.UsesValuer()
 }
 
 var sqlIntegerTypes = map[string]bool{
