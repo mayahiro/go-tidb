@@ -22,7 +22,10 @@ const (
 	KindBytes
 	// KindTime represents time.Time.
 	KindTime
-	// KindCustom represents a type using sql.Scanner or driver.Valuer.
+	// KindCustom represents a non-native type supported through sql.Scanner or
+	// driver.Valuer. A named native scalar keeps its native Kind even when it
+	// implements either interface; inspect Field.UsesScanner and
+	// Field.UsesValuer for those capabilities.
 	KindCustom
 )
 

@@ -149,8 +149,11 @@ The current type check intentionally uses broad representation families. It
 does not yet compare integer widths, signed ranges, decimal precision and
 scale, string lengths, character sets, collations, temporal precision, or
 default expressions. Unknown future SQL types and application-selected custom
-types implementing `sql.Scanner` or `driver.Valuer` are not guessed. Custom
-type semantics remain the application's responsibility.
+types implementing `sql.Scanner` or `driver.Valuer` are not guessed. This also
+applies when such a type has an otherwise native underlying representation,
+such as a named string implementing `sql.Scanner`. `CMP004` through `CMP006`
+do not infer its physical type or nullability. Custom type semantics, including
+whether a Scanner accepts SQL `NULL`, remain the application's responsibility.
 
 The relation-index diagnostic is deliberately limited to access paths that the
 ORM generates deterministically for `has_many` and `many_to_many`. It reports
