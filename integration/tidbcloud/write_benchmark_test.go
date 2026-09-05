@@ -28,12 +28,14 @@ type writeBenchmarkRow struct {
 }
 
 type writeBenchmarkCase struct {
-	name      string
-	rows      int
-	seedRows  int
-	upsert    bool
-	unchanged bool
-	single    bool
+	name        string
+	rows        int
+	seedRows    int
+	upsert      bool
+	unchanged   bool
+	single      bool
+	batchSize   int
+	transaction bool
 }
 
 func BenchmarkTiDBCloudStarterWrite(b *testing.B) {
@@ -73,7 +75,7 @@ func BenchmarkTiDBCloudStarterWrite(b *testing.B) {
 				{name: "upsert_many_unchanged", rows: 100, seedRows: 100, upsert: true, unchanged: true},
 			} {
 				b.Run(test.name, func(b *testing.B) {
-					benchmarkWriteCase(b, ctx, connection, dsn, test, payloadBytes, config.ClientFoundRows)
+					benchmarkWriteCase(b, ctx, connection, dsn, test, payloadBytes, config.ClientFoundRows, "ServerRU")
 				})
 			}
 		})
@@ -104,9 +106,8 @@ func installWriteBenchmarkFixture(b *testing.B, ctx context.Context, database *s
 	})
 }
 
-func benchmarkWriteCase(b *testing.B, ctx context.Context, connection *sql.Conn, dsn string, test writeBenchmarkCase, payloadBytes int, foundRows bool) {
-	b.Helper()
-	values := make([]writeBenchmarkRow, test.rows)
+func makeWriteBenchmarkRows(count, payloadBytes int) []writeBenchmarkRow {
+	values := make([]writeBenchmarkRow, count)
 	for i := range values {
 		values[i] = writeBenchmarkRow{
 			K: int64(i + 1000), V0: int64(i + 2000), V1: i%2 == 0,
@@ -115,29 +116,29 @@ func benchmarkWriteCase(b *testing.B, ctx context.Context, connection *sql.Conn,
 			V4: time.Date(2026, time.September, 5, 0, 0, i%60, 123456000, time.UTC),
 		}
 	}
+	return values
+}
+
+func benchmarkWriteCase(b *testing.B, ctx context.Context, connection *sql.Conn, dsn string, test writeBenchmarkCase, payloadBytes int, foundRows bool, ruMetric string) {
+	b.Helper()
+	values := makeWriteBenchmarkRows(test.rows, payloadBytes)
 	pointers := make([]*writeBenchmarkRow, len(values))
 	for i := range values {
 		pointers[i] = &values[i]
 	}
 	execute := func(ctx context.Context) (int64, error) {
-		if test.single {
-			if test.upsert {
-				return orm.Upsert(&values[0]).Exec(ctx, connection)
-			}
-			return orm.Insert(&values[0]).Exec(ctx, connection)
+		if !test.transaction {
+			return executeWriteBenchmark(ctx, connection, pointers, test)
 		}
-		if test.upsert {
-			return orm.UpsertMany(pointers).Exec(ctx, connection)
-		}
-		return orm.InsertMany(pointers).Exec(ctx, connection)
+		var affected int64
+		err := orm.Transaction(ctx, connection, func(tx *sql.Tx) error {
+			var err error
+			affected, err = executeWriteBenchmark(ctx, tx, pointers, test)
+			return err
+		})
+		return affected, err
 	}
-	wantAffected := int64(test.rows + test.seedRows)
-	if test.unchanged {
-		wantAffected = int64(test.rows - test.seedRows)
-		if foundRows {
-			wantAffected += int64(test.seedRows)
-		}
-	}
+	wantAffected := writeBenchmarkAffectedRows(test, foundRows)
 	checkAffected := func(affected int64, err error) {
 		b.Helper()
 		if err != nil {
@@ -165,25 +166,76 @@ func benchmarkWriteCase(b *testing.B, ctx context.Context, connection *sql.Conn,
 	// Sample separately so the extra RU round trip is absent from ns/op.
 	const samples = 3
 	var totalRU float64
+	var metrics writeBenchmarkObservation
+	wantStatements := 1
+	if test.batchSize > 0 {
+		wantStatements = (test.rows-1)/test.batchSize + 1
+	}
 	for range samples {
 		seedIDs := prepareWriteBenchmark(b, ctx, connection, dsn, values, test)
-		var event orm.StatementEvent
-		statements := 0
-		observed := orm.WithStatementObserver(ctx, func(value orm.StatementEvent) {
-			event = value
-			statements++
-		}, orm.CollectServerRU())
+		metrics = writeBenchmarkObservation{}
+		observed := orm.WithStatementObserver(ctx, metrics.observe, orm.CollectServerRU())
 		checkAffected(execute(observed))
-		if statements != 1 || event.ServerRU == nil || !event.ServerRU.Known || event.ServerRU.Error != nil {
-			b.Fatalf("write benchmark requires one statement and a known ServerRU sample; statements=%d", statements)
+		if err := metrics.validate(wantStatements, test.transaction); err != nil {
+			fatalDatabaseError(b, dsn, "validate write benchmark observations", err)
 		}
-		totalRU += event.ServerRU.Value
+		totalRU += metrics.ru
 		verifyWriteBenchmark(b, ctx, connection, dsn, values, seedIDs, test)
 	}
-	b.ReportMetric(totalRU/samples, "ServerRU/op")
-	b.ReportMetric(totalRU/samples/float64(test.rows), "ServerRU/row")
-	b.ReportMetric(1, "statements/op")
+	b.ReportMetric(totalRU/samples, ruMetric+"/op")
+	b.ReportMetric(totalRU/samples/float64(test.rows), ruMetric+"/row")
+	b.ReportMetric(float64(metrics.statements), "statements/op")
+	b.ReportMetric(float64(metrics.begins+metrics.commits), "tx-controls/op")
+	b.ReportMetric(float64(metrics.maxArguments), "max-args/statement")
+	b.ReportMetric(float64(metrics.maxSQLBytes), "max-SQL-bytes/statement")
 	b.ReportMetric(float64(test.rows), "rows/op")
+}
+
+func writeBenchmarkAffectedRows(test writeBenchmarkCase, foundRows bool) int64 {
+	if !test.unchanged {
+		return int64(test.rows + test.seedRows)
+	}
+	affected := int64(test.rows - test.seedRows)
+	if foundRows {
+		affected += int64(test.seedRows)
+	}
+	return affected
+}
+
+// executeWriteBenchmark changes batch boundaries only; the caller owns any transaction.
+func executeWriteBenchmark(ctx context.Context, executor orm.ExecExecutor, values []*writeBenchmarkRow, test writeBenchmarkCase) (int64, error) {
+	if test.batchSize < 0 {
+		return 0, fmt.Errorf("write benchmark batch size must not be negative")
+	}
+	if test.single {
+		if len(values) != 1 {
+			return 0, fmt.Errorf("single write benchmark requires exactly one row")
+		}
+		if test.upsert {
+			return orm.Upsert(values[0]).Exec(ctx, executor)
+		}
+		return orm.Insert(values[0]).Exec(ctx, executor)
+	}
+	batchSize := test.batchSize
+	if batchSize == 0 {
+		batchSize = len(values)
+	}
+	var total int64
+	for start := 0; start < len(values); start += batchSize {
+		end := min(start+batchSize, len(values))
+		var affected int64
+		var err error
+		if test.upsert {
+			affected, err = orm.UpsertMany(values[start:end]).Exec(ctx, executor)
+		} else {
+			affected, err = orm.InsertMany(values[start:end]).Exec(ctx, executor)
+		}
+		total += affected
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
 }
 
 func prepareWriteBenchmark(b *testing.B, ctx context.Context, connection *sql.Conn, dsn string, values []writeBenchmarkRow, test writeBenchmarkCase) map[int64]int64 {

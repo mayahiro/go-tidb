@@ -224,6 +224,78 @@ autocommit DMLの計測であり、明示transaction全体または請求RUを�
 
 各trialは実データを書き込むためiteration数を制限してください
 
+## Write batch size比較
+
+同じ1,000行のinputを100、500、1,000行ずつ書き込む場合を比較します
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$' -benchmem -benchtime=1x -count=1 ./tidbcloud
+# Repeat a narrower comparison after the initial matrix.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$/^payload_2048$/^autocommit$/^upsert_changed$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+60 caseで32 byteと2,048 byteのJSON string payload、Insert、新規・混在・変更・同値Upsert、2種類のtransaction境界を比較します
+
+`autocommit` はDML statementごとに独立してcommitし、`transaction` はpinned connection上の1回の `orm.Transaction` へ全batchをまとめ、latencyとGo allocationにBEGINとCOMMITを含めます
+
+sessionのautocommit有効を必須とし、既存のTiDB transaction modeを変更せず記録します
+
+mode間ではatomicityが異なるため、同じmode内でbatch sizeを比較してください
+
+各caseは同じ値とconflictから開始し、混在caseはinputの前半をseedし、変更caseは整数fieldを1個変更します
+
+commit後に結果と既存IDを検証します
+
+writable columnは6個で各candidate batchは1 statementに収まるため、`batch_1000` はこのworkloadでの現行自動分割policyと同じDML形状です
+
+比較用の分割はpublic mutation APIへ渡すinput sliceで行い、ORMのpolicyは変更しません
+
+3種類のsizeは計測candidateであり、推奨defaultやpublic batch size optionではありません
+
+`Exec` の自動分割は引き続きplaceholder数に基づきます
+
+`DML-ServerRU/op` は1,000行のoperationに含まれる全batchのstatement別ServerRUを合算し、独立してresetした3 sampleを平均します
+
+`DML-ServerRU/row` はその合計をinput行数で割った値です
+
+RU probeは同じconnectionまたはactive transaction上で各DML直後に実行し、latencyとallocation計測に含めません
+
+BEGIN・COMMITのRU、setup、seed、検証、probe、cleanupはmetricに含めないため、transaction全体RUとautocommit RUの比較や請求RUとして使用できません
+
+`statements/op` は対象DMLの10、2、1 statement、`tx-controls/op` は明示BEGIN・COMMITの0または2 statementを数え、driverとnetworkの全round trip数ではありません
+
+`max-args/statement` と `max-SQL-bytes/statement` は最大のbind listとplaceholder SQL templateを表し、interpolation後のpacket sizeやpeak memoryではありません
+
+`B/op` はGoの総allocationでありretained heapやpeak heapではなく、接続準備、source data、検証を含めません
+
+full matrixの `1x` 実行ではwarm-up、計測、RU sampleで対象inputを合計300,000行処理し、resetとseedの追加writeも発生します
+
+resource使用量を制限するためfilterと固定iteration数を使用してください
+
+write baselineと同じ使い捨てtableを使用するため、同じDBで同時実行しません
+
+固定行数・single clientの結果から、より大きい行、placeholder上限に達するbatch、並行writeでの最適sizeは判断できません
+
+同じbatch処理を完全offlineでprofileできます
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$' -benchmem -benchtime=200ms -count=5 ./tidbcloud
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$/^payload_2048$/^upsert_true$/^batch_1000$' -benchtime=3s -cpuprofile /tmp/tidbgo-batch.cpu -memprofile /tmp/tidbgo-batch.mem -o /tmp/tidbgo-batch.test ./tidbcloud
+go -C tools tool pprof -top /tmp/tidbgo-batch.test /tmp/tidbgo-batch.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-batch.test /tmp/tidbgo-batch.mem
+```
+
+小さいbatch candidateをprofileする場合は `batch_1000` を `batch_100` に置き換えます
+
+offline executorはTiDBへ接続せず、driver引数変換と引数の保持も行いません
+
+dataとmetadataを計測前に準備するため、このbenchmarkでpayload長を変えても転送やJSON処理は計測しません
+
+## Relation同期の比較
+
+全削除・再挿入、集合差分、read-diffの実接続比較、identityとlockの前提、計測境界、offline profileは [Relation同期のbenchmark](relation-sync-benchmarks_ja.md) を参照してください
+
 ## EXPLAIN client benchmark
 
 1個のtyped SELECTをcompileし、3 operatorのTiDB row-format planをscanするclient-side costを計測します
