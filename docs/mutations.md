@@ -370,7 +370,7 @@ implicitly. Use `Transaction` when multiple operations must share a transaction
 with the default `database/sql` options:
 
 ```go
-err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err := orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Insert(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -381,15 +381,19 @@ err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 })
 ```
 
-`*sql.DB` and `*sql.Conn` implement `TransactionBeginner`. `Transaction`
+`Transaction` accepts an executor supporting `database/sql` `BeginTx`, including
+`*sql.DB`, `*sql.Conn`, and either configured with `Observe`. It
 commits after a nil callback result and rolls back after a callback error or
 panic. A panic is propagated. A callback error is returned unchanged when
 rollback succeeds; a rollback failure is joined to it. The callback receives a
-concrete `*sql.Tx`, owns the work inside the transaction, and must not commit or
-roll back that value itself. The helper never retries the callback and does not
+transaction-bound `orm.Executor` with inherited observer and capture settings,
+owns the work inside the transaction, and must not commit or roll back the
+transaction itself. Context overrides remain available inside the callback.
+The helper never retries the callback and does not
 support nested transactions.
 
 Use `BeginTx` directly when custom `sql.TxOptions` or manual lifecycle control
-is required. Connection configuration, ping, close, driver registration, DSN
+is required; use `Observe(tx, observer)` to configure that transaction's ORM
+statements. Connection configuration, ping, close, driver registration, DSN
 handling, TLS, retry policy, and transaction options remain application
 responsibilities.

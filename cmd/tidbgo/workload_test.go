@@ -192,9 +192,11 @@ func captureWorkloadExample(t *testing.T, scopes, calls int) []byte {
 	})
 	var artifact bytes.Buffer
 	capture := orm.NewRuntimeCapture(&artifact)
+	var queryLog bytes.Buffer
+	executor := starterapp.WithQueryLog(database, &queryLog)
 	for range scopes {
 		ctx := orm.WithRuntimeCapture(context.Background(), capture, orm.CollectServerRU())
-		if err := orm.Transaction(ctx, database, func(tx *sql.Tx) error {
+		if err := orm.Transaction(ctx, executor, func(tx orm.Executor) error {
 			for index := range calls {
 				value := starterapp.User{ID: int64(index + 1), Email: "private-workload-value@example.com"}
 				rows, err := starterapp.UpdateUserEmail(ctx, tx, &value)
@@ -212,6 +214,9 @@ func captureWorkloadExample(t *testing.T, scopes, calls int) []byte {
 	}
 	if err := capture.Err(); err != nil {
 		t.Fatal(err)
+	}
+	if lines := strings.Count(queryLog.String(), "\n"); lines != scopes*(calls+2) || strings.Contains(queryLog.String(), "private-workload-value") {
+		t.Fatalf("shared executor log has %d lines or leaked arguments: %s", lines, queryLog.String())
 	}
 	if connector.targets != scopes*calls || connector.probes != scopes*calls || connector.begins != scopes || connector.commits != scopes {
 		t.Fatalf("unexpected DB work: %#v", connector)

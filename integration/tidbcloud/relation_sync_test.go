@@ -105,7 +105,7 @@ func TestTiDBCloudStarterRelationSyncCandidates(t *testing.T) {
 					fatalDatabaseError(t, dsn, "prepare relation sync test", err)
 				}
 				execute := func() error {
-					return orm.Transaction(ctx, connection, func(tx *sql.Tx) error {
+					return orm.Transaction(ctx, connection, func(tx orm.Executor) error {
 						return executeRelationSyncCandidate(ctx, tx, values, payload, strategy)
 					})
 				}
@@ -123,7 +123,7 @@ func TestTiDBCloudStarterRelationSyncCandidates(t *testing.T) {
 				fatalDatabaseError(t, dsn, "prepare relation sync rollback", err)
 			}
 			rollback := errors.New("rollback synchronization")
-			err = orm.Transaction(ctx, connection, func(tx *sql.Tx) error {
+			err = orm.Transaction(ctx, connection, func(tx orm.Executor) error {
 				if err := executeRelationSyncCandidate(ctx, tx, relationSyncValues(10, "partial"), payload, strategy); err != nil {
 					return err
 				}

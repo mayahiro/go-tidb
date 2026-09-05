@@ -2,7 +2,6 @@ package orm
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 )
 
@@ -10,7 +9,7 @@ func BenchmarkTransaction(b *testing.B) {
 	state := &transactionTestState{}
 	database := openTransactionTestDB(b, state)
 	ctx := context.Background()
-	callback := func(*sql.Tx) error { return nil }
+	callback := func(Executor) error { return nil }
 
 	b.ReportAllocs()
 	b.ResetTimer()

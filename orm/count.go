@@ -31,6 +31,7 @@ func (q *SelectQuery[T]) Count(ctx context.Context, executor QueryExecutor) (int
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compileCount()
 	if err != nil {
 		return 0, err

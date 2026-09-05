@@ -43,6 +43,7 @@ func (q *UpsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return 0, err
@@ -140,6 +141,7 @@ func (q *UpsertManyQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (i
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	plan, err := q.prepare()
 	if err != nil {
 		return 0, err

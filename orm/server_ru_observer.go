@@ -76,7 +76,7 @@ func (observation *statementObservation) prepareServerRUExecutor(ctx context.Con
 		observation.event.StartedAt = time.Now()
 	}()
 
-	switch session := executor.(type) {
+	switch session := unwrapObservedExecutor(executor).(type) {
 	case *sql.DB:
 		startedAt := time.Now()
 		connection, err := session.Conn(ctx)

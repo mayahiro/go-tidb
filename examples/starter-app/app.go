@@ -277,10 +277,10 @@ WHERE u.id = ?
 GROUP BY u.id, u.email`, userID).Only(ctx, executor)
 }
 
-// WithQueryLog enables context-scoped statement logging for this example.
+// WithQueryLog configures statement logging once on a shared executor.
 // Interactive terminal writers receive colored operation names automatically.
-func WithQueryLog(ctx context.Context, writer io.Writer) context.Context {
-	return orm.WithStatementObserver(ctx, orm.NewStatementLogger(writer))
+func WithQueryLog(executor orm.Executor, writer io.Writer) orm.Executor {
+	return orm.Observe(executor, orm.NewStatementLogger(writer))
 }
 
 // InsertUser inserts one user and writes its AUTO_RANDOM ID back to value.
@@ -314,11 +314,11 @@ func SaveUser(ctx context.Context, executor orm.ExecExecutor, value *User) (int6
 // transaction, including any automatically split order batches.
 func SaveUserAndInsertOrders(
 	ctx context.Context,
-	beginner orm.TransactionBeginner,
+	beginner orm.Executor,
 	value *User,
 	orders []*Order,
 ) error {
-	return orm.Transaction(ctx, beginner, func(transaction *sql.Tx) error {
+	return orm.Transaction(ctx, beginner, func(transaction orm.Executor) error {
 		if _, err := orm.Update(value).Exec(ctx, transaction); err != nil {
 			return err
 		}

@@ -138,11 +138,11 @@ func TestStatementObserverRecordsTransactionLifecycle(t *testing.T) {
 	callbackFailure := errors.New("callback failure")
 	tests := []struct {
 		name       string
-		callback   func(*sql.Tx) error
+		callback   func(Executor) error
 		operations []StatementOperation
 	}{
-		{name: "commit", callback: func(*sql.Tx) error { return nil }, operations: []StatementOperation{StatementBegin, StatementCommit}},
-		{name: "rollback", callback: func(*sql.Tx) error { return callbackFailure }, operations: []StatementOperation{StatementBegin, StatementRollback}},
+		{name: "commit", callback: func(Executor) error { return nil }, operations: []StatementOperation{StatementBegin, StatementCommit}},
+		{name: "rollback", callback: func(Executor) error { return callbackFailure }, operations: []StatementOperation{StatementBegin, StatementRollback}},
 	}
 
 	for _, test := range tests {

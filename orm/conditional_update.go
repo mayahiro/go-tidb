@@ -107,6 +107,7 @@ func (q *UpdateWhereQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return 0, err

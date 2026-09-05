@@ -2,15 +2,29 @@
 
 [日本語](observability_ja.md)
 
-The `orm` package can observe executed statements without wrapping or replacing
-the caller-owned `database/sql` executor. Observation is opt-in and scoped to a
-`context.Context`:
+Configure opt-in observation once on the caller-owned executor and share the
+returned executor with repositories:
 
 ```go
-ctx = orm.WithStatementObserver(ctx, orm.NewStatementLogger(os.Stderr))
+executor := orm.Observe(db, orm.NewStatementLogger(os.Stderr))
 
-users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, db)
+users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, executor)
 ```
+
+`Observe` opens no connection, installs no global state, and does not own the
+pool's lifecycle. Preloads, bulk batches, and `orm.Transaction` inherit the
+settings. Pass the returned executor, not the original pool, to ORM calls.
+Keep the pool for configuration, ping, close, and explicit connection acquisition.
+The observer must support concurrent calls when the executor is shared.
+Wrapping an observed executor again replaces its default observer; passing nil
+removes the default without removing an inherited runtime capture.
+
+For a temporary override, use `WithStatementObserver(ctx, observer, options...)`.
+Its ordinary-observer options replace the defaults, so arguments and ServerRU
+must be opted into again. Passing nil disables the ordinary observer for that
+context. A capture-only context keeps the executor's default observer.
+These context APIs are optional for ordinary logging; no middleware or
+per-repository context setup is necessary.
 
 The built-in logger writes one completed statement per line:
 
@@ -45,8 +59,8 @@ output.
 When values are required to reproduce a query, enable them explicitly:
 
 ```go
-ctx = orm.WithStatementObserver(
-    ctx,
+executor := orm.Observe(
+    db,
     orm.NewStatementLogger(os.Stderr),
     orm.IncludeStatementArguments(),
 )
@@ -65,7 +79,7 @@ Use a custom `StatementObserver` when events should go to an application logger,
 trace, metric collector, or test assertion:
 
 ```go
-ctx = orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+executor := orm.Observe(db, func(event orm.StatementEvent) {
     metrics.Observe(
         string(event.Operation),
         event.Duration,
@@ -86,7 +100,7 @@ from the value, diagnostic duration, auxiliary statement count, and collection
 error.
 
 Observers run synchronously after the duration is captured. Custom observers
-should return quickly, be concurrency-safe when contexts are shared, and not
+should return quickly, be concurrency-safe when executors or contexts are shared, and not
 panic. `NewStatementLogger` serializes its own writes and ignores writer errors
 so logging cannot replace a database result. Passing nil to
 `WithStatementObserver` disables an inherited ordinary observer without
@@ -493,13 +507,15 @@ reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
 ## ServerRU
 
 `CollectServerRU` automatically samples recognized SELECT, INSERT, UPSERT,
-UPDATE, and DELETE operations when passed to `WithStatementObserver`,
+UPDATE, and DELETE operations when passed to `Observe`, `WithStatementObserver`,
 or `WithRuntimeCapture`. It does not sample `EXPLAIN`, transaction
 lifecycle events, or unclassified `EXEC` raw SQL.
 
 For `*sql.DB`, go-tidb temporarily pins one connection before the target call,
 executes the target and diagnostic on that connection, then returns it to the
-pool. A caller-supplied `*sql.Conn` or active `*sql.Tx` is used directly. Other
+pool. A caller-supplied `*sql.Conn` or active `*sql.Tx` is used directly.
+Executors configured with `Observe` and the executor supplied by `Transaction`
+retain this same-session handling. Other
 executor implementations still execute the target but report a collection
 error without an auxiliary query. The caller retains ownership of a supplied
 connection or transaction. Do not interleave another statement on it while a
@@ -567,9 +583,11 @@ typed mutations, automatically split bulk mutations, relation mutations, and
 mutations use `EXEC`.
 
 `Transaction` emits separate `BEGIN`, `COMMIT`, and `ROLLBACK` events. Statements
-executed through `go-tidb` inside its callback use the observer from the context
-passed to each ORM call. Calls made directly on `*sql.DB`, `*sql.Conn`, or
-`*sql.Tx` are outside this boundary because `go-tidb` does not install a
+executed through `go-tidb` inside its callback inherit the effective observer
+and runtime capture through the transaction-bound `orm.Executor`. Context
+overrides still apply to individual calls. Calls made directly on `*sql.DB`,
+`*sql.Conn`, `*sql.Tx`, or an executor's `QueryContext` / `ExecContext` methods
+are outside this boundary because `go-tidb` does not install a
 `database/sql` driver interceptor.
 
 No observer is installed by default. Offline `Build` and model inspection never

@@ -384,7 +384,7 @@ mutation methodが暗黙にtransactionをbegin、commit、rollbackすること�
 複数operationをdefaultの `database/sql` optionで同じtransactionに含める場合は `Transaction` を使います
 
 ```go
-err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err := orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Insert(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -395,7 +395,9 @@ err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 })
 ```
 
-`*sql.DB` と `*sql.Conn` は `TransactionBeginner` を実装します
+`Transaction` は `database/sql` の `BeginTx` を持つexecutorを受け付けます
+
+`*sql.DB`、`*sql.Conn` と、それらを `Observe` で設定したexecutorが該当します
 
 `Transaction` はcallbackがnil errorを返した場合にcommitし、callbackがerrorを返すかpanicした場合にrollbackします
 
@@ -403,10 +405,16 @@ panicはそのまま再送出します
 
 rollbackが成功した場合はcallback errorを変更せず返し、rollbackも失敗した場合は両方のerrorを結合します
 
-callbackにはconcrete `*sql.Tx` を渡し、callbackはtransaction内の処理を所有しますが、その `*sql.Tx` 自体をcommitまたはrollbackしてはいけません
+callbackにはobserverとcaptureの設定を継承するtransaction-boundな `orm.Executor` を渡します
+
+callbackはtransaction内の処理を所有しますが、そのtransaction自体をcommitまたはrollbackしてはいけません
+
+callback内でもcontextによる上書きを利用できます
 
 helperはcallbackをretryせず、nested transactionにも対応しません
 
 custom `sql.TxOptions` または手動のlifecycle管理が必要な場合は `BeginTx` を直接使います
+
+そのtransactionのORM statementを観測する場合は `Observe(tx, observer)` で設定します
 
 connection設定、ping、close、driver登録、DSN、TLS、retry policy、transaction optionはapplicationの責任です

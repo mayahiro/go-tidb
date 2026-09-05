@@ -334,7 +334,7 @@ affected, err = orm.ClearRelation[User]("Roles", user.ID).Exec(ctx, db)
 Group application-defined operations with the explicit transaction helper:
 
 ```go
-err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Update(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -396,12 +396,16 @@ the caller. See Go's official [SQL injection guidance](https://go.dev/doc/databa
 
 ## Statement observation
 
-Enable a context-scoped execution log without replacing the caller-owned
-executor:
+Configure a shared executor once, then pass it to repositories and ORM terminals:
 
 ```go
-ctx = orm.WithStatementObserver(ctx, orm.NewStatementLogger(os.Stderr))
+executor := orm.Observe(db, orm.NewStatementLogger(os.Stderr))
+users, err := orm.Query[User]().All(ctx, executor)
 ```
+
+Preloads and `orm.Transaction` inherit the observer. The caller still owns the
+underlying `database/sql` pool. `WithStatementObserver` is an optional context
+override; ordinary logging needs no middleware or per-repository setup.
 
 By default, the logger records operation, duration, bind count, affected rows,
 SQL template, and errors without receiving argument values. Interactive

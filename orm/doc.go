@@ -13,9 +13,10 @@
 // writes. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many
 // junction writes. Transaction groups application-defined work using a
-// concrete *sql.Tx without retrying it. Raw provides model-aware result
-// scanning for explicit SQL. WithStatementObserver adds context-scoped
-// execution events, and NewStatementLogger provides automatic terminal colors
+// transaction-bound Executor without retrying it. Raw provides model-aware
+// result scanning for explicit SQL. Observe configures a shared executor once,
+// while WithStatementObserver supplies optional context overrides.
+// NewStatementLogger provides automatic terminal colors
 // with bind values excluded unless explicitly enabled. RuntimeCapture records
 // actual typed queries, preloads, and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an

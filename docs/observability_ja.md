@@ -2,15 +2,31 @@
 
 [English](observability.md)
 
-`orm` packageはcaller-owned `database/sql` executorをwrapまたは置換せず、実行statementを観測できます
-
-観測はopt-inで `context.Context` 単位です
+caller-owned executorへopt-inの観測設定を一度行い、返されたexecutorをrepositoryで共有します
 
 ```go
-ctx = orm.WithStatementObserver(ctx, orm.NewStatementLogger(os.Stderr))
+executor := orm.Observe(db, orm.NewStatementLogger(os.Stderr))
 
-users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, db)
+users, err := orm.Query[User]().Where(orm.Equal("Active", true)).All(ctx, executor)
 ```
+
+`Observe` は接続を開かず、global stateを設定せず、poolのlifecycleを所有しません
+
+Preload、bulk batch、`orm.Transaction` は設定を継承します
+
+ORM callへは元のpoolではなく返されたexecutorを渡し、poolは設定、ping、close、明示的なconnection取得のために保持します
+
+executorを共有する場合はobserverがconcurrent callに対応する必要があります
+
+観測済みexecutorを再度wrapするとdefault observerを置き換え、nilを渡すと継承したruntime captureを維持したままdefault observerを解除します
+
+一時的な上書きには `WithStatementObserver(ctx, observer, options...)` を使います
+
+通常observerのoptionはdefaultを置き換えるため、argument valueとServerRUは再度opt-inする必要があります
+
+nilを渡すとそのcontextでは通常observerを無効化し、captureだけを設定したcontextではexecutorのdefault observerを維持します
+
+通常logにcontext APIは任意で、middlewareやrepositoryごとのcontext設定は不要です
 
 built-in loggerは完了したstatementを1行ずつ出力します
 
@@ -45,8 +61,8 @@ raw SQLをそのように組み立てた場合はSQL template自体にapplicatio
 queryの再現にvalueが必要な場合だけ明示的に有効化します
 
 ```go
-ctx = orm.WithStatementObserver(
-    ctx,
+executor := orm.Observe(
+    db,
     orm.NewStatementLogger(os.Stderr),
     orm.IncludeStatementArguments(),
 )
@@ -65,7 +81,7 @@ secret、personal data、大きなpayloadを公開する可能性があるため
 application logger、trace、metric collector、test assertionへeventを渡す場合はcustom `StatementObserver` を使います
 
 ```go
-ctx = orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+executor := orm.Observe(db, func(event orm.StatementEvent) {
     metrics.Observe(
         string(event.Operation),
         event.Duration,
@@ -90,7 +106,7 @@ target resultとServerRU value、diagnostic duration、auxiliary statement count
 
 durationを確定した後にobserverを同期実行します
 
-custom observerは短時間でreturnし、contextを共有する場合はconcurrency-safeにし、panicしないようにしてください
+custom observerは短時間でreturnし、executorまたはcontextを共有する場合はconcurrency-safeにし、panicしないようにしてください
 
 `NewStatementLogger` はwriteを直列化し、writer errorがdatabase resultを置き換えないよう無視します
 
@@ -526,13 +542,15 @@ TiDBの[EXPLAIN ANALYZE statement reference](https://docs.pingcap.com/ja/tidb/st
 
 ## ServerRU
 
-`CollectServerRU` は `WithStatementObserver` または `WithRuntimeCapture` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
+`CollectServerRU` は `Observe`、`WithStatementObserver` または `WithRuntimeCapture` へ渡した場合にrecognized SELECT、INSERT、UPSERT、UPDATE、DELETE operationを自動sampleします
 
 `EXPLAIN`、transaction lifecycle event、分類できないraw `EXEC` はsampleしません
 
 `*sql.DB` ではgo-tidbがtarget callの前に1 connectionを一時的にpinし、そのconnection上でtargetとdiagnosticを実行してからpoolへ返します
 
 caller-supplied `*sql.Conn` またはactiveな `*sql.Tx` は直接使います
+
+`Observe` で設定したexecutorと `Transaction` のcallbackへ渡されるexecutorでも、このsame-session処理を維持します
 
 渡されたconnectionまたはtransactionのownershipはcallerが維持します
 
@@ -604,9 +622,11 @@ typed upsertはlogical `UPSERT` operationを使います
 
 `Transaction` は `BEGIN`、`COMMIT`、`ROLLBACK` を別eventとして出力します
 
-callback内で `go-tidb` を通じて実行したstatementは、各ORM callへ渡したcontextのobserverを使います
+callback内で `go-tidb` を通じて実行したstatementは、transaction-boundな `orm.Executor` から有効なobserverとruntime captureを継承します
 
-`*sql.DB`、`*sql.Conn`、`*sql.Tx` を直接呼び出した場合は対象外です
+個別callへのcontextによる上書きも引き続き適用します
+
+`*sql.DB`、`*sql.Conn`、`*sql.Tx`、またはexecutorの `QueryContext` / `ExecContext` を直接呼び出した場合は対象外です
 
 `go-tidb` は `database/sql` driver interceptorをinstallしません
 

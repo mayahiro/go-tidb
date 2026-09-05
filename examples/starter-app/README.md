@@ -120,8 +120,11 @@ every automatically split insert batch atomic. `AddUserRoles`,
 pure-junction relation mutations.
 `LoadUserWithOrderCount` scans an aliased aggregate through
 `orm.Raw[User]`.
-`WithQueryLog` enables the built-in statement logger for selected operations
-without replacing the application-owned executor.
+`WithQueryLog` uses `orm.Observe` to configure the shared executor once.
+Pass the returned executor to the example functions; preloads and
+`SaveUserAndInsertOrders` inherit its logger without per-call context setup.
+The application retains ownership of the underlying pool. Use
+`orm.WithStatementObserver` only for temporary context overrides.
 Structured runtime capture is configured directly at a request or job boundary
 instead of adding a companion function for every repository operation:
 

@@ -340,7 +340,7 @@ affected, err = orm.ClearRelation[User]("Roles", user.ID).Exec(ctx, db)
 applicationが決めたoperationを明示的なtransaction helperでまとめられます
 
 ```go
-err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Update(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -416,11 +416,18 @@ Go公式の[SQL injection guidance](https://go.dev/doc/database/sql-injection)�
 
 ## Statement observation
 
-caller-owned executorを置換せず、context単位の実行logを有効化できます
+共有executorへ一度設定し、repositoryとORM terminalへ渡します
 
 ```go
-ctx = orm.WithStatementObserver(ctx, orm.NewStatementLogger(os.Stderr))
+executor := orm.Observe(db, orm.NewStatementLogger(os.Stderr))
+users, err := orm.Query[User]().All(ctx, executor)
 ```
+
+Preloadと `orm.Transaction` はobserver設定を継承します
+
+元の `database/sql` poolは引き続きcallerが所有します
+
+`WithStatementObserver` はcontext単位の任意の上書きに使い、通常logにはmiddlewareやrepositoryごとの設定を必要としません
 
 defaultのloggerはargument valueを受け取らず、operation、duration、bind count、affected rows、SQL template、errorを記録します
 

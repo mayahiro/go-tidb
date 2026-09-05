@@ -46,6 +46,7 @@ func (q *RawQuery[T]) All(ctx context.Context, executor QueryExecutor) ([]T, err
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return nil, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	descriptor, err := q.descriptor()
 	if err != nil {
 		return nil, err
@@ -79,6 +80,7 @@ func (q *RawQuery[T]) one(ctx context.Context, executor QueryExecutor, only bool
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return zero, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	descriptor, err := q.descriptor()
 	if err != nil {
 		return zero, err
@@ -173,6 +175,7 @@ func RawExec(ctx context.Context, executor ExecExecutor, statement string, argum
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	if strings.TrimSpace(statement) == "" {
 		return 0, fmt.Errorf("orm: raw mutation SQL must not be empty")
 	}

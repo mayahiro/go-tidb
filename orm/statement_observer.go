@@ -93,6 +93,7 @@ const (
 
 type statementObserverContextValue struct {
 	observer       StatementObserver
+	observerSet    bool
 	options        statementObserverContextOptions
 	runtimeCapture *RuntimeCapture
 	runtimeScope   *statementRuntimeScope
@@ -121,7 +122,7 @@ type statementRuntimeMetadata struct {
 	mutation      *queryshape.Mutation
 }
 
-// StatementObserverOption configures statement observation for one context.
+// StatementObserverOption configures statement observation on an executor or context.
 type StatementObserverOption interface {
 	applyStatementObserver(*statementObserverContextValue)
 }
@@ -165,7 +166,7 @@ type ServerRUOption interface {
 // @@tidb_last_query_info round trip. A *sql.DB executor is pinned internally
 // for the target statement and its diagnostic query. The target result is
 // never replaced by a collection failure. The option can configure
-// WithStatementObserver or WithRuntimeCapture.
+// Observe, WithStatementObserver, or WithRuntimeCapture.
 func CollectServerRU() ServerRUOption {
 	return collectServerRUOption{}
 }
@@ -175,9 +176,9 @@ func CollectServerRU() ServerRUOption {
 // The observer is called once after each attempted SELECT, EXPLAIN, mutation,
 // begin, commit, or rollback. Argument values are omitted unless
 // IncludeStatementArguments is passed. Passing nil disables an ordinary
-// observer inherited from ctx without disabling RuntimeCapture.
+// observer inherited from ctx or Observe without disabling RuntimeCapture.
 func WithStatementObserver(ctx context.Context, observer StatementObserver, options ...StatementObserverOption) context.Context {
-	value := &statementObserverContextValue{observer: observer}
+	value := &statementObserverContextValue{observer: observer, observerSet: true}
 	if parent := statementObserverContext(ctx); parent != nil {
 		value.runtimeCapture = parent.runtimeCapture
 		value.runtimeScope = parent.runtimeScope
