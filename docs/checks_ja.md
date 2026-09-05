@@ -81,6 +81,10 @@ fingerprintとQueryShapeはbind valueを除外しますが、SQL templateとerro
 
 runtime解析はmetadata不足、runtime N+1 SELECT候補、ServerRU収集failure、ServerRU baseline regressionもreportします
 
+明示的な `--workload` ではscope単位のRUとDML statement数のbudgetも比較し、回帰を `RU003`、比較不能を `RU004` として既存のfingerprint ruleに加えsuppress不可能なerrorで示します
+
+scopeとcoverageの条件は[操作単位のbaseline](workload-baselines_ja.md)を参照してください
+
 `RUN004` は同一scopeのtypedな単行 `Insert` または `Upsert` の反復をapplication review候補として示し、attempt数、target duration、取得済みServerRUとmeasurement coverageを付けます
 
 全てのMany callと自動batch分割を除外し、schemaやquery登録は不要で、writeの書き換えやtransaction境界の変更は行いません

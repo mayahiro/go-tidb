@@ -237,6 +237,14 @@ JSON出力は固定policy、summary、sort済みentry、status、measurement cov
 
 entry statusは `pass`、`regression`、`missing_baseline`、`missing_current`、`collection_error`、`incomplete_coverage`、`insufficient_samples` のいずれかです
 
+同種のoperation workloadを保存・比較する場合、`--workload` に同じscenario名を指定するとscopeごとのRU合計とDML statement数を1 sampleとして比較します
+
+operation当たりのcost回帰は `RU003`、比較不能は `RU004` になります
+
+runtime APIの追加やqueryごとの登録は不要で、`RU001` と `RU002` も無効にしません
+
+入力の前提、5 scope以上という条件、不完全captureの制約、JSON fieldは[操作単位のbaseline](workload-baselines_ja.md)を参照してください
+
 この値はTiDB statement ServerRUでありbilling RUではありません
 
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です

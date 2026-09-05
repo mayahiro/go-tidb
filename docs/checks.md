@@ -84,6 +84,11 @@ can still contain application data
 
 Runtime analysis also reports incomplete metadata, possible runtime N+1
 SELECTs, ServerRU collection failures, and ServerRU baseline regressions
+An explicit `--workload` adds per-scope RU and DML statement-count budgets;
+`RU003` reports regression and `RU004` reports unavailable comparison, both as
+non-suppressible errors alongside existing fingerprint rules
+See [operation-level baselines](workload-baselines.md) for scope and coverage requirements
+
 `RUN004` identifies repeated typed single-row `Insert` or `Upsert` attempts
 within one scope as candidates for application review, with attempt counts,
 target duration, and any collected ServerRU plus measurement coverage

@@ -64,6 +64,7 @@ type FingerprintServerRU struct {
 type Analysis struct {
 	Statistics            Statistics            `json:"statistics"`
 	ServerRUByFingerprint []FingerprintServerRU `json:"server_ru_by_fingerprint"`
+	Workload              *WorkloadServerRU     `json:"workload,omitempty"`
 	Diagnostics           []check.Diagnostic    `json:"diagnostics"`
 }
 
@@ -71,8 +72,10 @@ type Analysis struct {
 type AnalysisOption func(*analysisConfiguration)
 
 type analysisConfiguration struct {
-	catalog       *physicalschema.Catalog
-	schemaEnabled bool
+	catalog         *physicalschema.Catalog
+	schemaEnabled   bool
+	workloadEnabled bool
+	workloadName    string
 }
 
 // WithSchema enables physical index-prefix diagnostics using a catalog parsed
@@ -173,6 +176,7 @@ type analyzer struct {
 	queryPatterns    map[queryPatternKey]struct{}
 	schemaPatterns   map[queryPatternKey]struct{}
 	mutationPatterns map[string]querycheck.MutationIndexStatus
+	workload         *workloadAccumulator
 }
 
 func newAnalyzer(options ...AnalysisOption) *analyzer {
@@ -182,7 +186,6 @@ func newAnalyzer(options ...AnalysisOption) *analyzer {
 			Diagnostics:           make([]check.Diagnostic, 0),
 		},
 		captures:         make(map[string]struct{}),
-		scopes:           make(map[scopeKey]struct{}),
 		fingerprints:     make(map[string]int),
 		batches:          make(map[batchKey]int),
 		repeated:         make(map[repeatedQueryKey]int),
@@ -197,13 +200,22 @@ func newAnalyzer(options ...AnalysisOption) *analyzer {
 			option(&result.configuration)
 		}
 	}
+	if result.configuration.workloadEnabled {
+		result.workload = &workloadAccumulator{indices: make(map[scopeKey]int)}
+	} else {
+		result.scopes = make(map[scopeKey]struct{})
+	}
 	return result
 }
 
 func (analyzer *analyzer) add(record Record) {
 	analyzer.captures[record.CaptureID] = struct{}{}
 	scope := scopeKey{capture: record.CaptureID, scope: record.ScopeID}
-	analyzer.scopes[scope] = struct{}{}
+	if analyzer.workload != nil {
+		analyzer.workload.add(scope, record)
+	} else {
+		analyzer.scopes[scope] = struct{}{}
+	}
 	analyzer.fingerprints[record.Fingerprint]++
 	analyzer.analysis.Statistics.Statements++
 	analyzer.analysis.Statistics.TargetDuration = addDurationSaturated(analyzer.analysis.Statistics.TargetDuration, record.DurationNS)
@@ -307,6 +319,9 @@ func runtimeQueryPatternKey(record Record) queryPatternKey {
 }
 
 func (analyzer *analyzer) finish() Analysis {
+	if analyzer.workload != nil {
+		analyzer.analysis.Workload = analyzer.workload.finish(analyzer.configuration.workloadName)
+	}
 	for _, group := range analyzer.repeatedGroups {
 		if group.count > 1 {
 			analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, possibleNPlusOneDiagnostic(group))
@@ -319,6 +334,9 @@ func (analyzer *analyzer) finish() Analysis {
 	}
 	analyzer.analysis.Statistics.Captures = len(analyzer.captures)
 	analyzer.analysis.Statistics.Scopes = len(analyzer.scopes)
+	if analyzer.workload != nil {
+		analyzer.analysis.Statistics.Scopes = len(analyzer.workload.scopes)
+	}
 	analyzer.analysis.Statistics.Fingerprints = len(analyzer.fingerprints)
 	for fingerprint, accumulator := range analyzer.serverRU {
 		analyzer.analysis.ServerRUByFingerprint = append(
@@ -342,6 +360,11 @@ func (analyzer *analyzer) finish() Analysis {
 // without retaining every statement record in memory.
 func AnalyzeReader(reader io.Reader, options ...AnalysisOption) (Analysis, error) {
 	analyzer := newAnalyzer(options...)
+	if analyzer.configuration.workloadEnabled {
+		if err := ValidateWorkloadName(analyzer.configuration.workloadName); err != nil {
+			return Analysis{}, err
+		}
+	}
 	if err := decodeEach(reader, func(record Record) {
 		analyzer.add(record)
 	}); err != nil {

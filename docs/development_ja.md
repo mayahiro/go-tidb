@@ -105,6 +105,8 @@ go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationInd
 go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeWorkload$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkWorkloadBaselineAndComparison$' -benchmem -count=5
 ```
 
 全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
@@ -142,6 +144,12 @@ index照合結果はfingerprintごとにcacheし、coverageはrecordごとに数
 conditional observation benchmarkはUpdateWhereとDeleteWhereをobserverなし、通常observer、runtime captureの3種類で比較します
 
 captureではscalar metadata生成、JSON encode、discard writerを含みますが、driver変換とDB I/Oは含めません
+
+workload benchmarkは同一の構築済みUPDATE recordをscope budget集計の無効・有効で比較します
+
+1 statement、1 scope内の10,000 statement、各10 statementの1,000 scopeを含み、scope counterはscope内のattempt数ではなく異なるscope数に応じて増えます
+
+workload baselineとcomparisonのbenchmarkは各10 statementの5 scopeを使いvalidationも含みますが、JSON、runtime observation、実DBのRUは計測しません
 
 ## TiDB Cloud Starter integration test
 

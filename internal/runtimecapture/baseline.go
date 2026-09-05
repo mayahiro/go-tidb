@@ -12,10 +12,11 @@ import (
 const ServerRUBaselineVersion = 1
 
 // ServerRUBaseline stores deterministic per-fingerprint ServerRU statistics
-// for later offline comparison.
+// and optional explicitly named per-scope metrics for offline comparison.
 type ServerRUBaseline struct {
 	Version               int                           `json:"version"`
 	ServerRUByFingerprint []FingerprintServerRUBaseline `json:"server_ru_by_fingerprint"`
+	Workload              *WorkloadMetrics              `json:"workload,omitempty"`
 }
 
 // FingerprintServerRUBaseline stores successful ServerRU measurements and
@@ -32,8 +33,18 @@ type FingerprintServerRUBaseline struct {
 
 // NewServerRUBaseline creates a comparison-ready baseline from a completed
 // runtime analysis. It rejects incomplete measurement coverage, fewer than
-// five samples per fingerprint, and any collection error.
+// five samples per fingerprint, and any collection error. When workload
+// aggregation was requested it also requires five completely measured scopes
+// without unsupported statements, statement errors, or overflowing totals.
 func NewServerRUBaseline(analysis Analysis) (ServerRUBaseline, error) {
+	if analysis.Workload != nil {
+		if err := analysis.Workload.validate(); err != nil {
+			return ServerRUBaseline{}, fmt.Errorf("create ServerRU workload baseline: %w", err)
+		}
+		if reason := workloadCoverageProblem(*analysis.Workload); reason != "" {
+			return ServerRUBaseline{}, fmt.Errorf("create ServerRU workload baseline: %s", reason)
+		}
+	}
 	statistics := make([]FingerprintServerRUBaseline, len(analysis.ServerRUByFingerprint))
 	for index, source := range analysis.ServerRUByFingerprint {
 		if source.Errors != 0 {
@@ -56,6 +67,10 @@ func NewServerRUBaseline(analysis Analysis) (ServerRUBaseline, error) {
 	baseline := ServerRUBaseline{
 		Version:               ServerRUBaselineVersion,
 		ServerRUByFingerprint: statistics,
+	}
+	if analysis.Workload != nil {
+		copy := analysis.Workload.WorkloadMetrics
+		baseline.Workload = &copy
 	}
 	if err := baseline.Validate(); err != nil {
 		return ServerRUBaseline{}, fmt.Errorf("create ServerRU baseline: %w", err)
@@ -122,6 +137,11 @@ func (baseline ServerRUBaseline) Validate() error {
 				index,
 				ServerRUComparisonMinimumSamples,
 			)
+		}
+	}
+	if baseline.Workload != nil {
+		if err := baseline.Workload.validateBaseline(baseline.ServerRUByFingerprint); err != nil {
+			return fmt.Errorf("workload baseline: %w", err)
 		}
 	}
 	return nil

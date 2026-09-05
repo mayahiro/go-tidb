@@ -226,6 +226,14 @@ effective limit. Entry status is one of `pass`, `regression`,
 `incomplete_coverage`, or `insufficient_samples`. This value is TiDB statement
 ServerRU, not billing RU.
 
+Add `--workload` with the same scenario name when saving and comparing a
+uniform operation workload. Each scope then contributes its RU sum and DML
+statement count as one sample. `RU003` reports per-operation cost regression;
+`RU004` rejects unavailable comparisons. This requires no runtime API or
+per-query registration and does not disable `RU001` or `RU002`. See
+[operation-level baselines](workload-baselines.md) for the explicit input
+contract, five-scope minimum, incomplete-capture limits, and JSON fields.
+
 Analyze a completed artifact without a database connection:
 
 ```sh

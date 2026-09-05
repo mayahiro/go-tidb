@@ -111,6 +111,8 @@ go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationInd
 go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeWorkload$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkWorkloadBaselineAndComparison$' -benchmem -count=5
 ```
 
 These benchmarks are offline and exclude SQL execution, network calls, TiDB
@@ -142,6 +144,13 @@ fingerprint while coverage counts each record. The conditional-observation
 benchmark compares UpdateWhere and DeleteWhere with no observer, an ordinary
 observer, and runtime capture. Capture includes scalar metadata construction,
 JSON encoding, and a discard writer, but no driver conversion or database I/O.
+
+The workload benchmark runs identical prebuilt UPDATE records with scoped
+budget aggregation disabled and enabled. It covers one statement, 10,000
+statements in one scope, and 1,000 scopes of ten statements. Scope counters
+scale with distinct scopes, not attempts within a scope. The workload baseline
+and comparison benchmark includes validation for five ten-statement scopes.
+Neither benchmark measures JSON, runtime observation, or actual database RU.
 
 ## TiDB Cloud Starter integration tests
 

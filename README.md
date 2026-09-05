@@ -469,6 +469,14 @@ A current per-statement mean is an `RU001` regression only when it exceeds both
 130% of the baseline mean and the maximum value observed in the baseline.
 Missing fingerprints or unusable measurements produce `RU002`. Both are
 non-suppressible errors; equality with the effective limit passes.
+
+For repeated operations under equivalent input conditions, add `--workload`
+with the same scenario name to both commands. This also compares per-scope RU
+sums and DML statement counts, detecting increased repetitions even when
+per-statement RU is unchanged. `RU003` reports workload regression and `RU004`
+reports unavailable comparison. See [operation-level baselines](docs/workload-baselines.md)
+for the one-operation-per-scope contract and measurement limits.
+
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
 for scope, cost, writer-error, and retention details.

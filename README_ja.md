@@ -489,6 +489,12 @@ fingerprintの欠落または利用不能な計測は `RU002` になります
 
 どちらもsuppressできないerrorで、effective limitと同値の場合はpassします
 
+同等の入力条件でoperationを反復する場合、両commandの `--workload` に同じscenario名を指定するとscopeごとのRU合計とDML statement数も比較します
+
+statement単位RUが同じでも反復増加を検出でき、workload回帰は `RU003`、比較不能は `RU004` になります
+
+1 scopeを1 operationとする前提と計測の制約は[操作単位のbaseline](docs/workload-baselines_ja.md)を参照してください
+
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 
 scope、cost、writer error、retentionの詳細は[Statement observation guide](docs/observability_ja.md)を参照してください

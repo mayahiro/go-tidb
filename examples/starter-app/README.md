@@ -151,6 +151,25 @@ The fixed policy reports `RU001` only when the current mean exceeds both 130%
 of the baseline mean and the observed baseline maximum; missing or unusable
 measurements report `RU002`.
 
+To compare the cost of a whole operation, capture one invocation per scope
+and repeat the same scenario at least five times with equivalent fixtures.
+For example, `UpdateUserEmail` calls belonging to one job share the job's
+capture context; they do not each create a scope. No changes to the repository
+functions are needed. Declare the same workload name on both CLI invocations:
+
+```sh
+tidbgo baseline reference.jsonl --workload update-users-10 > baseline.json
+tidbgo analyze current.jsonl --workload update-users-10 --baseline baseline.json
+```
+
+This compares per-scope RU sums and DML statement counts in addition to
+per-fingerprint means. More calls within one scope can produce `RU003` even
+with unchanged per-statement RU. Incomplete or mismatched workload inputs
+produce `RU004`. The flag declares a uniform input, not a filter; keep setup,
+plan probes, and different scenarios outside the captured operation.
+BEGIN/COMMIT RU is not included. See [operation-level baselines](../../docs/workload-baselines.md)
+for coverage and incomplete-capture limits.
+
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with
 `tidbgo analyze`. Captured typed query shapes are checked automatically; pass
