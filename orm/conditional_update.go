@@ -111,7 +111,7 @@ func (q *UpdateWhereQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (
 	if err != nil {
 		return 0, err
 	}
-	observation := beginTypedMutationStatementObservation(ctx, StatementUpdate, compiled.sql, compiled.arguments, compiled.modelName, "update_where")
+	observation := beginConditionalMutationObservation(ctx, StatementUpdate, compiled, q.predicates, q.withDeleted, "update_where")
 	if observation != nil && observation.event.ServerRU != nil {
 		executor = observation.prepareServerRUExecExecutor(ctx, executor)
 	}
@@ -187,9 +187,10 @@ func (q *UpdateWhereQuery[T]) compile() (compiledMutation, error) {
 		writeActiveSoftDeletePredicate(&query, "", softDeleteField)
 	}
 	return compiledMutation{
-		modelName: descriptor.Name(),
-		sql:       query.String(),
-		arguments: compiler.arguments,
+		modelName:  descriptor.Name(),
+		descriptor: descriptor,
+		sql:        query.String(),
+		arguments:  compiler.arguments,
 	}, nil
 }
 

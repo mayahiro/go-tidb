@@ -382,7 +382,12 @@ func (q *DeleteQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err != nil {
 		return 0, err
 	}
-	observation := beginTypedMutationStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments, compiled.modelName, "delete")
+	var observation *statementObservation
+	if q.where {
+		observation = beginConditionalMutationObservation(ctx, inferStatementOperation(compiled.sql), compiled, q.predicates, false, "delete_where")
+	} else {
+		observation = beginTypedMutationStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments, compiled.modelName, "delete")
+	}
 	if observation != nil && observation.event.ServerRU != nil {
 		executor = observation.prepareServerRUExecExecutor(ctx, executor)
 	}

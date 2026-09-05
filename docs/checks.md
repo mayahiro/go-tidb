@@ -89,6 +89,14 @@ within one scope as candidates for application review, with attempt counts,
 target duration, and any collected ServerRU plus measurement coverage
 It excludes all Many calls and automatic batch splits, requires no schema or
 query registration, and never rewrites writes or changes transaction boundaries
+
+With `--schema`, captured `UpdateWhere` and `DeleteWhere` also receive a
+scalar predicate index check: `QRY008` warns when no supported leading-column
+bound has an index, `QRY009` marks uncertain coverage as information, and
+`QRY006` rejects missing schema inputs
+These rules need no query registration and do not run through source `lint`
+Separate mutation-shape, resolved-check, and uncertain-check counts make the
+boundary explicit; a matching prefix does not prove index use or low RU
 See [Statement observation](observability.md) for capture scope, artifact
 security, ServerRU cost, and baseline comparison
 

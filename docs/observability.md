@@ -126,7 +126,15 @@ shape. Raw SQL is marked as opaque. Collection preloads and automatically split
 bulk mutations are recorded from the actual execution path, so
 application-side statement count wrappers are unnecessary.
 
-Capture is opt-in. When it is disabled, query-shape construction and artifact
+`UpdateWhere` and `DeleteWhere` records also carry a scalar-only `mutation`
+shape: model, physical table, predicate operators and columns, empty-list
+classification, and any implicit active-row soft-delete column. Assignments
+and bind values are excluded. Soft-delete `DeleteWhere` retains its actual
+`UPDATE` operation and `delete_where` terminal. These records use the existing
+SQL statement fingerprint, including for ServerRU baselines. Artifact version
+is `1`.
+
+Capture is opt-in. When it is disabled, query/mutation-shape construction and artifact
 encoding do not run. Ordinary statement observers do not enable this extra
 metadata path. Capture performs no additional database I/O by default and
 never runs `EXPLAIN`. It records only statements executed through go-tidb with
@@ -278,6 +286,54 @@ values. Treat the artifact as sensitive development data and choose its file
 permissions, destination, and retention accordingly. The caller owns and
 closes the writer. Encoding and writer failures never replace database results;
 inspect `capture.Err()` when artifact completeness matters.
+
+### Conditional write index checks
+
+`tidbgo analyze runtime.jsonl --schema schema.sql` checks captured
+`UpdateWhere` and `DeleteWhere` predicates without application-side query
+registration or a database connection. It does not check primary-key `Update`
+or `Delete`, relation mutations, Many calls, or raw SQL through this rule.
+
+- `QRY008` is a suppressible warning when no supported predicate bound matches
+  the leading column of a default-usable direct-column index
+- `QRY009` is suppressible information when index coverage remains uncertain
+- `QRY006` is a non-suppressible error for a missing schema table or referenced
+  predicate column; assignment compatibility is outside this check
+
+Supported bounds are `Equal`, non-empty `In`, `IsNull`, the four ordered
+comparisons, and `Between`. One leading-column bound suffices; an index need
+not include every filter column. AND can retain a usable bound alongside
+residual predicates. OR is covered when every branch is bounded by the same
+leading column, including branches made empty by an empty `In`. Empty-list
+constants and their logical combinations can prove a no-row write; other
+value-dependent contradictions are not inferred.
+
+Without such a bound, OR/NOT, negative predicates, LIKE predicates, and
+expression, prefix-length, specialized, partial, or invisible indexes remain
+uncertain. In particular, this check does not model IndexMerge or inspect
+bind values to classify LIKE prefixes. Implicit soft-delete `IS NULL` is part
+of the predicate; `UpdateWhere.WithDeleted` removes it.
+
+`mutation_shape_statements` counts captured shapes.
+`schema_checked_statements` counts snapshot-check attempts for both SELECT
+and conditional writes. `mutation_index_checked_statements` counts resolved
+write checks, including warnings and proven no-row predicates;
+`mutation_index_uncertain_statements` counts unresolved write checks. Missing
+schema inputs count in neither resolved nor uncertain write checks and produce
+`QRY006`. Diagnostics are deduplicated by statement fingerprint while coverage
+counts every captured attempt, including failed statements. Without `--schema`,
+shapes are counted but index checks are not attempted.
+
+A matching prefix is only a structural candidate, not proof of index use,
+selectivity, narrow locks, or low RU. TiDB uses statistics and cost estimates
+to choose access paths. Review the actual plan and index write cost before
+adding an index. See TiDB's [index selection](https://docs.pingcap.com/tidb/stable/choose-index/)
+and [indexing guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/).
+Use plain SQL `EXPLAIN` for initial inspection; **`EXPLAIN ANALYZE` executes
+the write and can change data**, as documented in the
+[TiDB statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
+Offline analysis never executes either command or changes SQL or transaction
+boundaries. `tidbgo lint` does not currently apply these conditional-write rules.
 
 ## SELECT EXPLAIN
 

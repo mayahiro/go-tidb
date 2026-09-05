@@ -85,6 +85,14 @@ runtime解析はmetadata不足、runtime N+1 SELECT候補、ServerRU収集failur
 
 全てのMany callと自動batch分割を除外し、schemaやquery登録は不要で、writeの書き換えやtransaction境界の変更は行いません
 
+`--schema` を指定するとcaptured `UpdateWhere` と `DeleteWhere` のscalar predicateもindexと照合します
+
+`QRY008` はsupportedな先頭列boundに対応するindexがない場合のwarning、`QRY009` は未確定coverageのinfo、`QRY006` はschema不足のerrorです
+
+query登録は不要で、source `lint` では適用しません
+
+mutation shape数、判定済みcheck数、未確定check数を分離して境界を示し、一致するprefixがあってもindex利用や低RUを保証しません
+
 capture scope、artifact security、ServerRU cost、baseline比較は[Statement observation](observability_ja.md)を参照してください
 
 ## Go source解析

@@ -101,6 +101,8 @@ go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -be
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationIndexes$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
 ```
@@ -132,6 +134,14 @@ write反復のbenchmarkはiterationごとに構築済みstatement record 1,000�
 record構築、JSON decode、report encode、runtime captureは計測区間に含めません
 
 集計はattemptまたはRU sampleごとではなく異なるwrite groupごとにcounterを保持するため、解析時間と合わせてallocationも比較します
+
+mutation index benchmarkは同じSQL fingerprintのrecordが1件と1,000件の場合をparse済みschemaで比較します
+
+index照合結果はfingerprintごとにcacheし、coverageはrecordごとに数えます
+
+conditional observation benchmarkはUpdateWhereとDeleteWhereをobserverなし、通常observer、runtime captureの3種類で比較します
+
+captureではscalar metadata生成、JSON encode、discard writerを含みますが、driver変換とDB I/Oは含めません
 
 ## TiDB Cloud Starter integration test
 

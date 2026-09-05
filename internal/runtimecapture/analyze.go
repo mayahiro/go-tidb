@@ -24,20 +24,23 @@ const (
 // Statistics summarizes the captured execution set without claiming database
 // round trips outside go-tidb.
 type Statistics struct {
-	Captures                int     `json:"captures"`
-	Scopes                  int     `json:"scopes"`
-	Statements              int     `json:"statements"`
-	AuxiliaryStatements     int     `json:"auxiliary_statements"`
-	Fingerprints            int     `json:"fingerprints"`
-	BatchGroups             int     `json:"batch_groups"`
-	SplitBatches            int     `json:"split_batches"`
-	QueryShapeStatements    int     `json:"query_shape_statements"`
-	SchemaCheckedStatements int     `json:"schema_checked_statements"`
-	ServerRUSamples         int     `json:"server_ru_samples"`
-	ServerRUErrors          int     `json:"server_ru_errors"`
-	ServerRUTotal           float64 `json:"server_ru_total"`
-	TargetDuration          int64   `json:"target_duration_ns"`
-	DiagnosticDuration      int64   `json:"diagnostic_duration_ns"`
+	Captures                         int     `json:"captures"`
+	Scopes                           int     `json:"scopes"`
+	Statements                       int     `json:"statements"`
+	AuxiliaryStatements              int     `json:"auxiliary_statements"`
+	Fingerprints                     int     `json:"fingerprints"`
+	BatchGroups                      int     `json:"batch_groups"`
+	SplitBatches                     int     `json:"split_batches"`
+	QueryShapeStatements             int     `json:"query_shape_statements"`
+	SchemaCheckedStatements          int     `json:"schema_checked_statements"`
+	MutationShapeStatements          int     `json:"mutation_shape_statements"`
+	MutationIndexCheckedStatements   int     `json:"mutation_index_checked_statements"`
+	MutationIndexUncertainStatements int     `json:"mutation_index_uncertain_statements"`
+	ServerRUSamples                  int     `json:"server_ru_samples"`
+	ServerRUErrors                   int     `json:"server_ru_errors"`
+	ServerRUTotal                    float64 `json:"server_ru_total"`
+	TargetDuration                   int64   `json:"target_duration_ns"`
+	DiagnosticDuration               int64   `json:"diagnostic_duration_ns"`
 }
 
 // FingerprintServerRU contains constant-space ServerRU statistics for one
@@ -169,6 +172,7 @@ type analyzer struct {
 	queryDiagnostics map[string]struct{}
 	queryPatterns    map[queryPatternKey]struct{}
 	schemaPatterns   map[queryPatternKey]struct{}
+	mutationPatterns map[string]querycheck.MutationIndexStatus
 }
 
 func newAnalyzer(options ...AnalysisOption) *analyzer {
@@ -262,6 +266,9 @@ func (analyzer *analyzer) add(record Record) {
 				)
 			}
 		}
+	}
+	if record.Mutation != nil {
+		analyzer.analyzeMutation(record)
 	}
 	if repeatedWriteCandidate(record) {
 		analyzer.addRepeatedWrite(record, scope)
@@ -392,7 +399,7 @@ func incompleteMetadataDiagnostic(record Record) check.Diagnostic {
 		Code:     codeIncompleteMetadata,
 		Severity: check.SeverityWarning,
 		Title:    "Runtime query metadata is incomplete",
-		Message:  "go-tidb executed a statement but could not attach its complete typed query shape",
+		Message:  "go-tidb executed a statement but could not attach its complete typed statement metadata",
 		Evidence: []check.Evidence{
 			{Message: "Query fingerprint: " + record.Fingerprint},
 			{Message: record.MetadataError},
@@ -449,7 +456,7 @@ func nonEmptyRuntimeValue(value string) string {
 // FormatStatistics renders one stable human-readable runtime summary line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d query_shape_statements=%d schema_checked_statements=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
+		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d query_shape_statements=%d schema_checked_statements=%d mutation_shape_statements=%d mutation_index_checked_statements=%d mutation_index_uncertain_statements=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
 		statistics.Captures,
 		statistics.Scopes,
 		statistics.Statements,
@@ -458,6 +465,9 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.SplitBatches,
 		statistics.QueryShapeStatements,
 		statistics.SchemaCheckedStatements,
+		statistics.MutationShapeStatements,
+		statistics.MutationIndexCheckedStatements,
+		statistics.MutationIndexUncertainStatements,
 		time.Duration(statistics.TargetDuration),
 		statistics.AuxiliaryStatements,
 		time.Duration(statistics.DiagnosticDuration),

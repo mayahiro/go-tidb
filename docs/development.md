@@ -107,6 +107,8 @@ go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -be
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationIndexes$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
 ```
@@ -133,6 +135,13 @@ and excluded bulk splits. Record construction, JSON decoding, report encoding,
 and runtime capture are outside the timed region. Compare allocations as well
 as analysis time; aggregation retains one counter set per distinct write group,
 not every attempt or RU sample.
+
+The mutation-index benchmark compares one and 1,000 records of one SQL
+fingerprint against a pre-parsed schema. Index checks are cached per
+fingerprint while coverage counts each record. The conditional-observation
+benchmark compares UpdateWhere and DeleteWhere with no observer, an ordinary
+observer, and runtime capture. Capture includes scalar metadata construction,
+JSON encoding, and a discard writer, but no driver conversion or database I/O.
 
 ## TiDB Cloud Starter integration tests
 

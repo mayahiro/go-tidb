@@ -133,9 +133,17 @@ Raw SQLはopaqueとして記録します
 
 collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
 
+`UpdateWhere` と `DeleteWhere` のrecordには、scalar専用の `mutation` shapeとしてmodel、物理table、predicate operatorとcolumn、empty listかどうか、暗黙のactive-row soft-delete columnも記録します
+
+assignmentとbind valueは除外します
+
+soft-deleteの `DeleteWhere` は実際の `UPDATE` operationと `delete_where` terminalを維持します
+
+ServerRU baselineを含め既存のSQL statement fingerprintを使い、artifact versionは `1` です
+
 captureはopt-inです
 
-無効時はquery shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
+無効時はquery/mutation shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
 
 captureはdefaultで追加database I/Oを行わず、`EXPLAIN` を実行しません
 
@@ -301,6 +309,56 @@ artifactをsensitiveなdevelopment dataとして扱い、file permission、desti
 writerの所有とcloseはcallerが担当します
 
 encodeまたはwriter errorはdatabase resultを置き換えず、artifactの完全性が必要な場合は `capture.Err()` を確認します
+
+### 条件付きwriteのindex check
+
+`tidbgo analyze runtime.jsonl --schema schema.sql` はapplication側のquery登録やDB接続なしでcaptured `UpdateWhere` と `DeleteWhere` のpredicateを照合します
+
+主キー指定の `Update` と `Delete`、Relation mutation、Many call、raw SQLはこのruleの対象外です
+
+- `QRY008` はsupportedなpredicate boundに一致するdefault-usableなdirect-column indexの先頭列がない場合のsuppress可能なwarningです
+- `QRY009` はindex coverageを確定できない場合のsuppress可能なinfoです
+- `QRY006` はschema tableまたはpredicateが参照するcolumnがない場合のsuppress不可能なerrorです、assignmentのcompatibilityはこのcheckの対象外です
+
+`Equal`、空ではない `In`、`IsNull`、4種類の大小比較、`Between` をboundとして扱います
+
+indexの先頭列によるboundが1つあればよく、全filter columnを含むindexは要求しません
+
+ANDでは残余predicateがあっても利用できるboundを維持し、ORでは全branchが同じ先頭列でboundされる場合に照合済みとします
+
+空の `In` によって空集合となるbranchも扱います
+
+empty listの定数とその論理的な組み合わせでno-row writeを証明できる場合がありますが、その他のvalue依存の矛盾は推定しません
+
+そのようなboundがない場合、OR/NOT、否定predicate、LIKE predicate、expression・prefix-length・specialized・partial・invisible indexは未確定とします
+
+IndexMergeをモデル化せず、LIKE prefixの分類のためにbind valueを参照しません
+
+暗黙のsoft-delete `IS NULL` をpredicateに含め、`UpdateWhere.WithDeleted` では除外します
+
+`mutation_shape_statements` はcaptured shape数です
+
+`schema_checked_statements` はSELECTと条件付きwriteのsnapshot照合試行数です
+
+`mutation_index_checked_statements` はwarningや証明済みno-row predicateを含む判定済みwrite check数、`mutation_index_uncertain_statements` は未確定write check数です
+
+schema不足は判定済みと未確定のどちらにも加算せず、`QRY006` を生成します
+
+diagnosticはstatement fingerprintで重複を排除しますが、coverageは失敗statementを含む全captured attemptを数えます
+
+`--schema` がない場合はshapeだけを数え、index照合は試行しません
+
+一致するprefixは構造上の候補であり、index利用、selectivity、lock範囲の狭さ、低RUを保証しません
+
+TiDBは統計情報とcost推定に基づいてaccess pathを選択するため、indexを追加する前に実際のplanとindex更新costを確認してください
+
+TiDBの[index selection](https://docs.pingcap.com/tidb/stable/choose-index/)と[indexing guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
+
+最初の確認には通常のSQL `EXPLAIN` を使います、**`EXPLAIN ANALYZE` はwriteを実行し、dataを変更し得ます**、詳細は[TiDB statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/)を参照してください
+
+offline解析はどちらのcommandも実行せず、SQLやtransaction境界を変更しません
+
+`tidbgo lint` は現時点でこれらの条件付きwrite ruleを適用しません
 
 ## SELECT EXPLAIN
 

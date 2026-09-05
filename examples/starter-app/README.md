@@ -157,6 +157,17 @@ context unchanged. Analyze the resulting JSON Lines file with
 `--schema schema.sql` to add offline physical index-prefix checks without a
 database connection or an application-side query registry.
 
+The same capture includes the predicates of `ClaimJobLease`, `FailJobLease`,
+`RestoreVideo`, and `DeleteOrdersForUser`. `analyze --schema` checks their
+index-prefix candidates without changing these functions. The job primary
+key bounds `ClaimJobLease` even though it also has an OR lease condition;
+no index containing every WHERE column is required. `DeleteOrdersForUser`
+can produce `QRY008` when the snapshot lacks an index starting with `user_id`.
+Unsupported index or predicate shapes produce `QRY009` and count as uncertain,
+not successfully checked. Matching a prefix does not guarantee the chosen
+plan or RU. Use SQL `EXPLAIN` for initial inspection: `EXPLAIN ANALYZE` on a
+write executes it and can change data.
+
 Repeated `InsertUser` or `UpsertUser` calls with the same SQL fingerprint in
 one captured scope produce the advisory `RUN004` warning. No changes to these
 repository functions are needed. The report includes attempt counts, target

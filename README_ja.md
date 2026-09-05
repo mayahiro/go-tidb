@@ -459,6 +459,10 @@ offlineのTiDB `CREATE TABLE` snapshotを渡すと物理indexの `QRY006` と `Q
 
 coverage counterは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
 
+captured `UpdateWhere` と `DeleteWhere` のpredicateも `--schema` で照合し、`QRY008` はindex prefix候補の不足、`QRY009` は未確定coverageをreportします
+
+一致するprefixやdiagnosticがないことだけでは、index利用や低RUは保証されません
+
 runtime captureはdefaultで `EXPLAIN` またはその他のdatabase I/Oを追加しません
 
 recognized DML statementごとのsame-session diagnostic round tripを1回追加できる場合だけ `WithRuntimeCapture` へ `orm.CollectServerRU()` を渡します

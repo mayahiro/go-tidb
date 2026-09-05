@@ -48,9 +48,12 @@ func NewRuntimeCapture(writer io.Writer) *RuntimeCapture {
 //
 // Call it once at a request, job, or test-operation boundary and pass the
 // derived context through existing ORM terminals. It preserves an inherited
-// StatementObserver and never captures bind argument values. CollectServerRU
-// can explicitly add one same-session diagnostic query for each recognized DML
-// statement. A later WithStatementObserver call also preserves the capture.
+// StatementObserver and never captures bind argument values. Conditional
+// UpdateWhere and DeleteWhere calls include scalar predicate metadata for
+// offline schema-index checks, without assignments or their values.
+// CollectServerRU can explicitly add one same-session diagnostic query for
+// each recognized DML statement. A later WithStatementObserver call also
+// preserves the capture.
 // Installing another RuntimeCapture on the derived context replaces the
 // inherited capture and its options.
 func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ...RuntimeCaptureOption) context.Context {
@@ -126,6 +129,7 @@ func (capture *RuntimeCapture) observe(event StatementEvent, runtimeEvent *state
 		MetadataError:     metadata.metadataError,
 		Batch:             metadata.batch,
 		Query:             metadata.query,
+		Mutation:          metadata.mutation,
 	}
 	if event.ServerRU != nil {
 		record.ServerRU = &runtimecapture.ServerRU{

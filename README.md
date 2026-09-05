@@ -439,6 +439,10 @@ Supplying an offline TiDB `CREATE TABLE` snapshot
 also applies the `QRY006` and `QRY007` physical index checks. Coverage counters
 separate all captured statements from statements that carried a query shape
 and those checked against the snapshot.
+Captured `UpdateWhere` and `DeleteWhere` predicates are also checked with
+`--schema`: `QRY008` reports missing index-prefix candidates and `QRY009`
+reports uncertain coverage. Neither a matching prefix nor a clean report
+guarantees index use or low RU.
 
 Runtime capture does not add `EXPLAIN` or other database I/O by default. Add
 `orm.CollectServerRU()` to `WithRuntimeCapture` only when one extra

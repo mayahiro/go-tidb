@@ -203,7 +203,9 @@ affected, err := orm.DeleteWhere[Order](
 
 `DeleteWhere` はempty predicate listとRelation predicateを拒否します
 
-無条件のtyped delete operationはありません
+専用の無条件typed delete operationはありませんが、predicateが全rowにmatchする場合はあります
+
+空の `NotIn` は `TRUE`、空の `In` は `FALSE` へcompileします
 
 modelに `soft_delete` fieldがある場合、両delete builderはTiDBの `CURRENT_TIMESTAMP(6)` を代入し、`deleted_at IS NULL` を追加する1個の `UPDATE` を生成します
 
@@ -214,6 +216,12 @@ server timestampはcallerが所有するGo modelへ反映せず、statement obse
 tagがないmodelでは従来どおりphysical `DELETE` を使います
 
 soft-delete modelをhard deleteするapplication policyでは明示的な `RawExec` を使います
+
+operation境界でRuntimeCaptureを有効にすると、`UpdateWhere` と `DeleteWhere` はbind valueを含まないscalar predicate metadataを記録します
+
+`tidbgo analyze runtime.jsonl --schema schema.sql` で、queryごとの登録なしにindex prefixを診断できます
+
+supported predicate、未確定coverage、DML EXPLAINの安全性の境界は[条件付きwriteのindex check](observability_ja.md#条件付きwriteのindex-check)を参照してください
 
 ## Pure many-to-many Relation
 
