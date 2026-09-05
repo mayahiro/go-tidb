@@ -226,6 +226,7 @@ tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
 ```
 
 The CLI streams statement records instead of retaining the complete artifact
@@ -248,6 +249,28 @@ lookups require application review. Failed SELECT attempts are included
 because they still consume statements. Every suppression names an exact code
 and records a non-empty reason. Preload batch splits are excluded from the
 N+1 rule.
+
+`RUN004` reports two or more typed single-row `Insert` or `Upsert` attempts
+with the same capture, scope, SQL fingerprint, operation, and terminal. It is
+a suppressible warning and does not fail `tidbgo analyze`. It needs neither a
+query registry nor a schema snapshot. All `InsertMany` and `UpsertMany` calls
+are excluded, including unsplit and one-row calls, as are automatic batch
+splits, relation mutations, raw SQL, UPDATE, and DELETE.
+
+Evidence includes the captured attempt count, reported error count, summed
+target duration, and already-collected statement ServerRU with its sample and
+collection-error counts. Missing RU is shown as `unavailable`, not zero;
+partial totals cover only measured attempts. Known samples may also carry a
+collection error, for example after a connection-release failure. Failed
+attempts are included, so the count proves neither distinct input rows nor
+committed changes. The group-local RU total excludes BEGIN/COMMIT and is not
+billed RU or an estimate of bulk savings.
+
+Review generated-ID use, execution order, transaction boundaries, and
+intentional retries before replacing the calls with `InsertMany` or
+`UpsertMany`, then measure latency and RU. The diagnostic never batches writes,
+changes transaction boundaries, or collects additional RU. RU collection
+remains opt-in through `CollectServerRU` at capture time.
 
 Bind values are never written to the runtime artifact. SQL templates can still
 contain literals supplied through raw SQL, and database errors can contain

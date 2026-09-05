@@ -241,6 +241,7 @@ tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
 ```
 
 CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析します
@@ -266,6 +267,30 @@ statisticsは全captured statement、query shapeを持つstatement、snapshotと
 suppressionはexact codeと空ではないreasonを記録します
 
 preload batch splitはN+1 ruleから除外します
+
+`RUN004` は同一capture、scope、SQL fingerprint、operation、terminalでtypedな単行 `Insert` または `Upsert` が2回以上試行された場合にreportします
+
+suppress可能なwarningであり、`tidbgo analyze` を失敗させません
+
+query registryとschema snapshotは不要です
+
+未分割や1行だけの場合を含む全ての `InsertMany` と `UpsertMany`、自動batch分割、Relation mutation、raw SQL、UPDATE、DELETEは対象外です
+
+evidenceはcaptured attempt数、報告されたerror数、target durationの合計、取得済みstatement ServerRUとsample数およびcollection error数を含みます
+
+RU未取得はゼロではなく `unavailable` と表示し、部分取得の合計は計測できたattemptだけを対象にします
+
+connection release failureなどではknown sampleとcollection errorを同時に持つ場合があります
+
+失敗したattemptも含むため、この件数は異なるinput row数やcommit済み変更数を保証しません
+
+group単位のRU合計はBEGIN/COMMITを除外し、請求RUでもbulk化による削減見積もりでもありません
+
+`InsertMany` または `UpsertMany` へ置き換える前に、生成IDの利用、実行順、transaction境界、意図したretryを確認し、その後latencyとRUを計測してください
+
+diagnosticはwriteのbatch化、transaction境界の変更、追加のRU取得を行いません
+
+RU収集は引き続きcapture時の `CollectServerRU` によるopt-inです
 
 bind valueはruntime artifactへ書き込みません
 

@@ -18,6 +18,7 @@ const (
 	codeIncompleteMetadata = "RUN001"
 	codePossibleNPlusOne   = "RUN002"
 	codeServerRUFailure    = "RUN003"
+	codeRepeatedWrite      = "RUN004"
 )
 
 // Statistics summarizes the captured execution set without claiming database
@@ -162,6 +163,8 @@ type analyzer struct {
 	batches          map[batchKey]int
 	repeated         map[repeatedQueryKey]int
 	repeatedGroups   []repeatedQueryGroup
+	repeatedWrites   map[repeatedQueryKey]int
+	writeGroups      []repeatedWriteGroup
 	metadataErrors   map[string]struct{}
 	queryDiagnostics map[string]struct{}
 	queryPatterns    map[queryPatternKey]struct{}
@@ -260,6 +263,9 @@ func (analyzer *analyzer) add(record Record) {
 			}
 		}
 	}
+	if repeatedWriteCandidate(record) {
+		analyzer.addRepeatedWrite(record, scope)
+	}
 	if !nPlusOneCandidate(record) {
 		return
 	}
@@ -297,6 +303,11 @@ func (analyzer *analyzer) finish() Analysis {
 	for _, group := range analyzer.repeatedGroups {
 		if group.count > 1 {
 			analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, possibleNPlusOneDiagnostic(group))
+		}
+	}
+	for _, group := range analyzer.writeGroups {
+		if group.count > 1 {
+			analyzer.analysis.Diagnostics = append(analyzer.analysis.Diagnostics, repeatedWriteDiagnostic(group))
 		}
 	}
 	analyzer.analysis.Statistics.Captures = len(analyzer.captures)

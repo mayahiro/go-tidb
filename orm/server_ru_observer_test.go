@@ -273,6 +273,53 @@ func TestServerRUCollectionSharedByObserverAndRuntimeCapture(t *testing.T) {
 	}
 }
 
+func TestRuntimeCaptureAnalyzesRepeatedWritesWithCollectedServerRU(t *testing.T) {
+	t.Parallel()
+
+	for _, upsert := range []bool{false, true} {
+		state := &serverRUObserverState{serverRU: `{"ru_consumption":1.25}`}
+		database := openServerRUObserverDB(t, state)
+		var output bytes.Buffer
+		capture := NewRuntimeCapture(&output)
+		ctx := WithRuntimeCapture(context.Background(), capture, CollectServerRU())
+		for index := range 2 {
+			value := bulkMutationModel{ID: int64(index + 1), Value: 10}
+			var err error
+			if upsert {
+				_, err = Upsert(&value).Exec(ctx, database)
+			} else {
+				_, err = Insert(&value).Exec(ctx, database)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := capture.Err(); err != nil {
+			t.Fatal(err)
+		}
+		analysis, err := runtimecapture.AnalyzeReader(bytes.NewReader(output.Bytes()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(analysis.Diagnostics) != 1 || analysis.Diagnostics[0].Code != "RUN004" {
+			t.Fatalf("upsert=%t diagnostics = %#v", upsert, analysis.Diagnostics)
+		}
+		found := false
+		for _, evidence := range analysis.Diagnostics[0].Evidence {
+			if evidence.Message == "Captured statement ServerRU: total=2.5, samples=2/2, collection_errors=0" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing captured RU evidence: %#v", analysis.Diagnostics[0])
+		}
+		targetConnection, ruConnection, targetCount, ruCount, _ := state.snapshot()
+		if targetConnection != ruConnection || targetCount != 2 || ruCount != 2 {
+			t.Fatalf("unexpected DB work: target connection=%d RU connection=%d target statements=%d RU statements=%d", targetConnection, ruConnection, targetCount, ruCount)
+		}
+	}
+}
+
 func TestRuntimeCaptureAggregatesTargetAndServerRUDiagnosticsSeparately(t *testing.T) {
 	t.Parallel()
 

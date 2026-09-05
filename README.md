@@ -432,7 +432,10 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 The analyzer applies `QRY002` through `QRY005` to captured query shapes and
-reports possible N+1 SELECTs. Supplying an offline TiDB `CREATE TABLE` snapshot
+reports possible N+1 SELECTs. `RUN004` reports repeated single-row `Insert` or
+`Upsert` attempts within one scope, with counts and any collected ServerRU;
+it excludes Many calls and never batches writes automatically.
+Supplying an offline TiDB `CREATE TABLE` snapshot
 also applies the `QRY006` and `QRY007` physical index checks. Coverage counters
 separate all captured statements from statements that carried a query shape
 and those checked against the snapshot.

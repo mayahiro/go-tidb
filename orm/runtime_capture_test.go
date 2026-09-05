@@ -156,6 +156,18 @@ func TestRuntimeCaptureRecordsAutomaticBulkSplit(t *testing.T) {
 	if records[0].Batch.Rows != maxMutationParameters/2 || records[1].Batch.Rows != 1 {
 		t.Fatalf("runtime bulk rows = %d, %d", records[0].Batch.Rows, records[1].Batch.Rows)
 	}
+	// Repeating the call repeats both SQL fingerprints. Neither the Many
+	// calls nor their automatic splits are single-row write candidates.
+	if _, err := InsertMany(values).Exec(ctx, executor); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err := runtimecapture.AnalyzeReader(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.Diagnostics) != 0 || analysis.Statistics.Statements != 4 || analysis.Statistics.SplitBatches != 2 {
+		t.Fatalf("automatic bulk splits produced write warnings: %#v", analysis)
+	}
 }
 
 func TestRuntimeCaptureSeparatesRelationMutationModelAndPath(t *testing.T) {
@@ -175,6 +187,16 @@ func TestRuntimeCaptureSeparatesRelationMutationModelAndPath(t *testing.T) {
 	record := records[0]
 	if record.Source != runtimecapture.SourceTypedMutation || record.Terminal != "relation_insert" || record.Model != "preloadUser" || record.Relation != "preloadUser.Roles" {
 		t.Fatalf("relation mutation record = %#v", record)
+	}
+	if _, err := AddRelation[preloadUser]("Roles", uint64(7), uint64(12)).Exec(ctx, executor); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err := runtimecapture.AnalyzeReader(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.Diagnostics) != 0 || analysis.Statistics.Statements != 2 {
+		t.Fatalf("relation mutations produced write warnings: %#v", analysis)
 	}
 }
 

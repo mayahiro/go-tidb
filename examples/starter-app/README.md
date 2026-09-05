@@ -156,6 +156,23 @@ context unchanged. Analyze the resulting JSON Lines file with
 `tidbgo analyze`. Captured typed query shapes are checked automatically; pass
 `--schema schema.sql` to add offline physical index-prefix checks without a
 database connection or an application-side query registry.
+
+Repeated `InsertUser` or `UpsertUser` calls with the same SQL fingerprint in
+one captured scope produce the advisory `RUN004` warning. No changes to these
+repository functions are needed. The report includes attempt counts, target
+duration, and any collected ServerRU with sample coverage; uncollected RU is
+`unavailable`, not zero. `InsertOrders` and `UpsertUsers` remain excluded even
+when they split into several statements or receive only one row.
+Generated-ID dependencies, execution order, transaction boundaries, and
+intentional retries must be reviewed before switching to bulk calls; the
+analyzer does not combine writes automatically. For example, `InsertUser`
+writes back a generated ID while bulk insert does not. Intentional single-row
+writes can be acknowledged with a reason:
+
+```sh
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+```
+
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

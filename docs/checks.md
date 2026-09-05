@@ -84,6 +84,11 @@ can still contain application data
 
 Runtime analysis also reports incomplete metadata, possible runtime N+1
 SELECTs, ServerRU collection failures, and ServerRU baseline regressions
+`RUN004` identifies repeated typed single-row `Insert` or `Upsert` attempts
+within one scope as candidates for application review, with attempt counts,
+target duration, and any collected ServerRU plus measurement coverage
+It excludes all Many calls and automatic batch splits, requires no schema or
+query registration, and never rewrites writes or changes transaction boundaries
 See [Statement observation](observability.md) for capture scope, artifact
 security, ServerRU cost, and baseline comparison
 
@@ -176,6 +181,7 @@ suppressions
 
 ```sh
 tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
 tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
 ```
 

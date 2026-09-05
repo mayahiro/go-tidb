@@ -106,6 +106,7 @@ go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchme
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
 ```
@@ -125,6 +126,13 @@ the output itself contains one entry per fingerprint. The comparison benchmark
 uses matching one- and 10,000-fingerprint baseline/current sets and includes
 validation plus deterministic merge, but excludes JSON decoding and report
 encoding.
+
+The repeated-write benchmark analyzes 1,000 prebuilt statement records per
+iteration. It covers single inserts, upserts with known RU, isolated scopes,
+and excluded bulk splits. Record construction, JSON decoding, report encoding,
+and runtime capture are outside the timed region. Compare allocations as well
+as analysis time; aggregation retains one counter set per distinct write group,
+not every attempt or RU sample.
 
 ## TiDB Cloud Starter integration tests
 

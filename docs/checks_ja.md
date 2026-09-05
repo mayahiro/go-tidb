@@ -81,6 +81,10 @@ fingerprintとQueryShapeはbind valueを除外しますが、SQL templateとerro
 
 runtime解析はmetadata不足、runtime N+1 SELECT候補、ServerRU収集failure、ServerRU baseline regressionもreportします
 
+`RUN004` は同一scopeのtypedな単行 `Insert` または `Upsert` の反復をapplication review候補として示し、attempt数、target duration、取得済みServerRUとmeasurement coverageを付けます
+
+全てのMany callと自動batch分割を除外し、schemaやquery登録は不要で、writeの書き換えやtransaction境界の変更は行いません
+
 capture scope、artifact security、ServerRU cost、baseline比較は[Statement observation](observability_ja.md)を参照してください
 
 ## Go source解析
@@ -153,6 +157,7 @@ planの選択はdata distributionとstatisticsに依存するため、plan diagn
 
 ```sh
 tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
 tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
 ```
 

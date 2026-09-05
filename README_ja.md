@@ -453,6 +453,8 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 
 analyzerはcaptured query shapeへ `QRY002` から `QRY005` を適用し、N+1 SELECT候補をreportします
 
+`RUN004` は同一scopeの単行 `Insert` または `Upsert` の反復を件数と取得済みServerRU付きでreportし、Many callを除外してwriteの自動batch化は行いません
+
 offlineのTiDB `CREATE TABLE` snapshotを渡すと物理indexの `QRY006` と `QRY007` も適用します
 
 coverage counterは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します

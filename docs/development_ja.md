@@ -100,6 +100,7 @@ go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchme
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
 ```
@@ -123,6 +124,14 @@ baseline benchmarkは保存対象のfingerprint aggregateが1個の場合と10,0
 出力自体がfingerprintごとに1 entryを持つため、このpathのmemoryはfingerprint数に応じて増えます
 
 comparison benchmarkは一致する1件と10,000件のbaselineとcurrent fingerprint setを使い、validationとdeterministic mergeを含みますがJSON decodeとreport encodeは含みません
+
+write反復のbenchmarkはiterationごとに構築済みstatement record 1,000件を解析します
+
+単行insert、known RU付きupsert、独立scope、対象外のbulk分割を含みます
+
+record構築、JSON decode、report encode、runtime captureは計測区間に含めません
+
+集計はattemptまたはRU sampleごとではなく異なるwrite groupごとにcounterを保持するため、解析時間と合わせてallocationも比較します
 
 ## TiDB Cloud Starter integration test
 
