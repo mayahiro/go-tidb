@@ -453,9 +453,19 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 
 analyzerはcaptured query shapeへ `QRY002` から `QRY005` を適用し、N+1 SELECT候補をreportします
 
+`RUN004` は同一scopeの単行 `Insert` または `Upsert` の反復を件数と取得済みServerRU付きでreportし、Many callを除外してwriteの自動batch化は行いません
+
+`RUN005` は同様にtypedな `Update` または `UpdateWhere` の反復をreview候補として示しますが、一括化可能とは断定しません
+
+soft-delete terminalとraw SQLは除外し、application側の追加計装は不要です
+
 offlineのTiDB `CREATE TABLE` snapshotを渡すと物理indexの `QRY006` と `QRY007` も適用します
 
 coverage counterは全captured statement、query shapeを持つstatement、snapshotと照合したstatementを分離します
+
+captured `UpdateWhere` と `DeleteWhere` のpredicateも `--schema` で照合し、`QRY008` はindex prefix候補の不足、`QRY009` は未確定coverageをreportします
+
+一致するprefixやdiagnosticがないことだけでは、index利用や低RUは保証されません
 
 runtime captureはdefaultで `EXPLAIN` またはその他のdatabase I/Oを追加しません
 
@@ -482,6 +492,12 @@ currentのstatement単位meanがbaseline meanの130%とbaselineで観測した�
 fingerprintの欠落または利用不能な計測は `RU002` になります
 
 どちらもsuppressできないerrorで、effective limitと同値の場合はpassします
+
+同等の入力条件でoperationを反復する場合、両commandの `--workload` に同じscenario名を指定するとscopeごとのRU合計とDML statement数も比較します
+
+statement単位RUが同じでも反復増加を検出でき、workload回帰は `RU003`、比較不能は `RU004` になります
+
+1 scopeを1 operationとする前提と計測の制約は[操作単位のbaseline](docs/workload-baselines_ja.md)を参照してください
 
 bind valueは除外しますが、SQL templateとerrorにはapplication dataが含まれる場合があります
 

@@ -53,29 +53,30 @@ type ServerRU struct {
 
 // Record is one completed ORM statement in a runtime capture JSON Lines file.
 type Record struct {
-	Version           int               `json:"version"`
-	CaptureID         string            `json:"capture_id"`
-	ScopeID           uint64            `json:"scope_id"`
-	Sequence          uint64            `json:"sequence"`
-	Operation         string            `json:"operation"`
-	Source            Source            `json:"source"`
-	Terminal          string            `json:"terminal,omitempty"`
-	Model             string            `json:"model,omitempty"`
-	Relation          string            `json:"relation,omitempty"`
-	Fingerprint       string            `json:"fingerprint"`
-	SQL               string            `json:"sql"`
-	ArgumentCount     int               `json:"argument_count"`
-	StartedAt         time.Time         `json:"started_at"`
-	DurationNS        int64             `json:"duration_ns"`
-	RowsReturned      int64             `json:"rows_returned,omitempty"`
-	RowsReturnedKnown bool              `json:"rows_returned_known"`
-	RowsAffected      int64             `json:"rows_affected,omitempty"`
-	RowsAffectedKnown bool              `json:"rows_affected_known"`
-	Error             string            `json:"error,omitempty"`
-	MetadataError     string            `json:"metadata_error,omitempty"`
-	Batch             *Batch            `json:"batch,omitempty"`
-	Query             *queryshape.Query `json:"query,omitempty"`
-	ServerRU          *ServerRU         `json:"server_ru,omitempty"`
+	Version           int                  `json:"version"`
+	CaptureID         string               `json:"capture_id"`
+	ScopeID           uint64               `json:"scope_id"`
+	Sequence          uint64               `json:"sequence"`
+	Operation         string               `json:"operation"`
+	Source            Source               `json:"source"`
+	Terminal          string               `json:"terminal,omitempty"`
+	Model             string               `json:"model,omitempty"`
+	Relation          string               `json:"relation,omitempty"`
+	Fingerprint       string               `json:"fingerprint"`
+	SQL               string               `json:"sql"`
+	ArgumentCount     int                  `json:"argument_count"`
+	StartedAt         time.Time            `json:"started_at"`
+	DurationNS        int64                `json:"duration_ns"`
+	RowsReturned      int64                `json:"rows_returned,omitempty"`
+	RowsReturnedKnown bool                 `json:"rows_returned_known"`
+	RowsAffected      int64                `json:"rows_affected,omitempty"`
+	RowsAffectedKnown bool                 `json:"rows_affected_known"`
+	Error             string               `json:"error,omitempty"`
+	MetadataError     string               `json:"metadata_error,omitempty"`
+	Batch             *Batch               `json:"batch,omitempty"`
+	Query             *queryshape.Query    `json:"query,omitempty"`
+	Mutation          *queryshape.Mutation `json:"mutation,omitempty"`
+	ServerRU          *ServerRU            `json:"server_ru,omitempty"`
 }
 
 // StatementFingerprint returns a stable bind-free identity for one SQL
@@ -113,6 +114,16 @@ func (record Record) Validate() error {
 	}
 	if record.ArgumentCount < 0 {
 		return fmt.Errorf("runtime capture record has negative argument_count")
+	}
+	if record.Mutation != nil {
+		validTerminal := record.Terminal == "update_where" && record.Operation == "UPDATE" ||
+			record.Terminal == "delete_where" && (record.Operation == "DELETE" || record.Operation == "UPDATE")
+		if record.Source != SourceTypedMutation || !validTerminal || record.Query != nil || record.Batch != nil {
+			return fmt.Errorf("runtime capture mutation shape requires a typed conditional write")
+		}
+		if record.Mutation.Model == "" || record.Mutation.Table == "" || len(record.Mutation.Predicates) == 0 {
+			return fmt.Errorf("runtime capture mutation shape requires model, table, and predicates")
+		}
 	}
 	if record.ServerRU != nil {
 		if record.ServerRU.DiagnosticDurationNS < 0 {

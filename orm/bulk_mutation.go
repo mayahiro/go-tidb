@@ -58,18 +58,17 @@ func (plan bulkMutationPlan) compileSingle() (compiledMutation, error) {
 	if plan.values.Len() > rowsPerStatement {
 		return compiledMutation{}, bulkBuildStatementLimitError(plan.operation, plan.descriptor, plan.values.Len(), rowsPerStatement)
 	}
-	return plan.compileRange(0, plan.values.Len())
+	return plan.compileRange(0, plan.values.Len(), "")
 }
 
-func (plan bulkMutationPlan) compileRange(start, end int) (compiledMutation, error) {
+func (plan bulkMutationPlan) compileRange(start, end int, statement string) (compiledMutation, error) {
 	rowCount := end - start
 	arguments := make([]any, rowCount*len(plan.insertFields))
 	if err := fillInsertManyArguments(arguments, plan.values, plan.descriptor, plan.insertFields, plan.pointerElements, start, end, plan.operation); err != nil {
 		return compiledMutation{}, err
 	}
-	statement := renderInsert(plan.descriptor.TableName(), plan.insertFields, rowCount)
-	if len(plan.updateFields) != 0 {
-		statement = appendOnDuplicateKeyUpdate(statement, plan.updateFields)
+	if statement == "" {
+		statement = renderInsert(plan.descriptor.TableName(), plan.insertFields, rowCount, plan.updateFields)
 	}
 	return compiledMutation{
 		modelName:  plan.descriptor.Name(),
@@ -121,12 +120,21 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 	if len(plan.updateFields) != 0 {
 		statementOperation = StatementUpsert
 	}
+	// Retain only the previous batch's immutable SQL within this execution.
+	// Arguments remain independent for executors and observers that retain them.
+	var previousSQL string
+	var previousRows int
 	for statementIndex, start := 0, 0; start < plan.values.Len(); statementIndex, start = statementIndex+1, start+rowsPerStatement {
 		end := min(start+rowsPerStatement, plan.values.Len())
-		compiled, compileErr := plan.compileRange(start, end)
+		statement := ""
+		if end-start == previousRows {
+			statement = previousSQL
+		}
+		compiled, compileErr := plan.compileRange(start, end, statement)
 		if compileErr != nil {
 			return totalAffected, plan.batchError(statementIndex, statementCount, start, end, "compile", compileErr)
 		}
+		previousSQL, previousRows = compiled.sql, end-start
 		observation := beginStatementObservation(ctx, statementOperation, compiled.sql, compiled.arguments)
 		plan.attachRuntimeCapture(observation, &statementGroup, statementOperation, statementIndex, statementCount, start, end)
 		statementExecutor := executor

@@ -12,6 +12,12 @@ func baselineCommand() *cli.Command {
 	return cli.NewCommand("baseline").
 		ID("baseline-command").
 		About("Create a versioned ServerRU baseline from a runtime capture").
+		Option(
+			cli.ValueOption(workloadID).
+				Long("workload").
+				Parser(cli.StringParser()).
+				Help("Declare every scope as one repetition of the same named operation and input conditions"),
+		).
 		Argument(
 			cli.Positional(baselineInputID).
 				Parser(cli.StringParser()).
@@ -21,11 +27,15 @@ func baselineCommand() *cli.Command {
 }
 
 func runBaseline(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
+	options, diagnostic := workloadOptions(invocation)
+	if diagnostic != nil {
+		return cli.Outcome{}, diagnostic
+	}
 	reader, closeInput, diagnostic := openRuntimeCaptureInput(context, invocation, baselineInputID)
 	if diagnostic != nil {
 		return cli.Outcome{}, diagnostic
 	}
-	analysis, err := runtimecapture.AnalyzeReader(reader)
+	analysis, err := runtimecapture.AnalyzeReader(reader, options...)
 	if closeErr := closeInput(); err == nil && closeErr != nil {
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "close runtime capture input: "+closeErr.Error())
 	}

@@ -133,9 +133,17 @@ Raw SQLはopaqueとして記録します
 
 collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
 
+`UpdateWhere` と `DeleteWhere` のrecordには、scalar専用の `mutation` shapeとしてmodel、物理table、predicate operatorとcolumn、empty listかどうか、暗黙のactive-row soft-delete columnも記録します
+
+assignmentとbind valueは除外します
+
+soft-deleteの `DeleteWhere` は実際の `UPDATE` operationと `delete_where` terminalを維持します
+
+ServerRU baselineを含め既存のSQL statement fingerprintを使い、artifact versionは `1` です
+
 captureはopt-inです
 
-無効時はquery shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
+無効時はquery/mutation shape生成とartifact encodeを実行せず、通常のstatement observerもこの追加metadata pathを有効化しません
 
 captureはdefaultで追加database I/Oを行わず、`EXPLAIN` を実行しません
 
@@ -229,6 +237,14 @@ JSON出力は固定policy、summary、sort済みentry、status、measurement cov
 
 entry statusは `pass`、`regression`、`missing_baseline`、`missing_current`、`collection_error`、`incomplete_coverage`、`insufficient_samples` のいずれかです
 
+同種のoperation workloadを保存・比較する場合、`--workload` に同じscenario名を指定するとscopeごとのRU合計とDML statement数を1 sampleとして比較します
+
+operation当たりのcost回帰は `RU003`、比較不能は `RU004` になります
+
+runtime APIの追加やqueryごとの登録は不要で、`RU001` と `RU002` も無効にしません
+
+入力の前提、5 scope以上という条件、不完全captureの制約、JSON fieldは[操作単位のbaseline](workload-baselines_ja.md)を参照してください
+
 この値はTiDB statement ServerRUでありbilling RUではありません
 
 derived contextを使ってgo-tidbから実行したstatementだけを記録し、直接の `database/sql` または他ORMのcallは対象外です
@@ -241,6 +257,8 @@ tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 ```
 
 CLIはartifact全体をmemoryへ保持せずstatement recordをstreaming解析します
@@ -267,6 +285,48 @@ suppressionはexact codeと空ではないreasonを記録します
 
 preload batch splitはN+1 ruleから除外します
 
+`RUN004` は同一capture、scope、SQL fingerprint、operation、terminalでtypedな単行 `Insert` または `Upsert` が2回以上試行された場合にreportします
+
+suppress可能なwarningであり、`tidbgo analyze` を失敗させません
+
+query registryとschema snapshotは不要です
+
+未分割や1行だけの場合を含む全ての `InsertMany` と `UpsertMany`、自動batch分割、Relation mutation、raw SQL、UPDATE、DELETEは対象外です
+
+`RUN005` は同一capture、scope、SQL fingerprint、operation、terminalでtypedな `Update` または `UpdateWhere` が2回以上試行された場合にreportします
+
+同様にsuppress可能なwarningであり、`analyze` を失敗させず、schema、baseline、`--workload`、query登録は不要です
+
+raw SQL、Relation mutation、batch、soft-deleteの `Delete`／`DeleteWhere` はSQLがUPDATEでも除外しますが、`UpdateWhere` による明示的なrestoreは含みます
+
+どちらのruleもcaptured attempt数、報告されたerror数、target durationの合計、取得済みstatement ServerRUとsample数およびcollection error数をevidenceに含みます
+
+RU未取得はゼロではなく `unavailable` と表示し、部分取得の合計は計測できたattemptだけを対象にします
+
+connection release failureなどではknown sampleとcollection errorを同時に持つ場合があります
+
+失敗したattemptも含むため、この件数は異なるinput row数やcommit済み変更数を保証しません
+
+group単位のRU合計はBEGIN/COMMITを除外し、請求RUでもbulk化による削減見積もりでもありません
+
+`RUN004` では `InsertMany` または `UpsertMany` へ置き換える前に、生成IDの利用、実行順、transaction境界、意図したretryを確認し、その後latencyとRUを計測してください
+
+diagnosticはwriteのbatch化、transaction境界の変更、追加のRU取得を行いません
+
+RU収集は引き続きcapture時の `CollectServerRU` によるopt-inです
+
+`RUN005` では行ごとの値、lease条件、atomic increment、実行順、transaction境界、意図したretryを維持したまま、assignmentとpredicateを整理してstatement数を減らせるか確認してください
+
+bind valueがないため、同じfingerprintでもassignmentの値の一致、異なる更新対象、一括化可能性は証明できません
+
+`UpdateWhere` は既に複数行を更新する場合があり、affected rowsが0でもattemptから除外しません
+
+呼び出し元の特定、loop、高RU、削減余地を証明するdiagnosticではないため、変更前後のlatency、RU、結果を計測してください
+
+この候補warningと[操作単位のbaseline](workload-baselines_ja.md)は別の目的を持ちます
+
+`RUN005` はbaselineがなくても反復のreviewを促し、`RU003` は実測したoperation単位の回帰を判定します、意図した反復をsuppressしてもbudget regressionはsuppressされません
+
 bind valueはruntime artifactへ書き込みません
 
 Raw SQLへ直接記述したliteralはSQL templateに残り、database errorにもvalueが含まれる場合があります
@@ -276,6 +336,56 @@ artifactをsensitiveなdevelopment dataとして扱い、file permission、desti
 writerの所有とcloseはcallerが担当します
 
 encodeまたはwriter errorはdatabase resultを置き換えず、artifactの完全性が必要な場合は `capture.Err()` を確認します
+
+### 条件付きwriteのindex check
+
+`tidbgo analyze runtime.jsonl --schema schema.sql` はapplication側のquery登録やDB接続なしでcaptured `UpdateWhere` と `DeleteWhere` のpredicateを照合します
+
+主キー指定の `Update` と `Delete`、Relation mutation、Many call、raw SQLはこのruleの対象外です
+
+- `QRY008` はsupportedなpredicate boundに一致するdefault-usableなdirect-column indexの先頭列がない場合のsuppress可能なwarningです
+- `QRY009` はindex coverageを確定できない場合のsuppress可能なinfoです
+- `QRY006` はschema tableまたはpredicateが参照するcolumnがない場合のsuppress不可能なerrorです、assignmentのcompatibilityはこのcheckの対象外です
+
+`Equal`、空ではない `In`、`IsNull`、4種類の大小比較、`Between` をboundとして扱います
+
+indexの先頭列によるboundが1つあればよく、全filter columnを含むindexは要求しません
+
+ANDでは残余predicateがあっても利用できるboundを維持し、ORでは全branchが同じ先頭列でboundされる場合に照合済みとします
+
+空の `In` によって空集合となるbranchも扱います
+
+empty listの定数とその論理的な組み合わせでno-row writeを証明できる場合がありますが、その他のvalue依存の矛盾は推定しません
+
+そのようなboundがない場合、OR/NOT、否定predicate、LIKE predicate、expression・prefix-length・specialized・partial・invisible indexは未確定とします
+
+IndexMergeをモデル化せず、LIKE prefixの分類のためにbind valueを参照しません
+
+暗黙のsoft-delete `IS NULL` をpredicateに含め、`UpdateWhere.WithDeleted` では除外します
+
+`mutation_shape_statements` はcaptured shape数です
+
+`schema_checked_statements` はSELECTと条件付きwriteのsnapshot照合試行数です
+
+`mutation_index_checked_statements` はwarningや証明済みno-row predicateを含む判定済みwrite check数、`mutation_index_uncertain_statements` は未確定write check数です
+
+schema不足は判定済みと未確定のどちらにも加算せず、`QRY006` を生成します
+
+diagnosticはstatement fingerprintで重複を排除しますが、coverageは失敗statementを含む全captured attemptを数えます
+
+`--schema` がない場合はshapeだけを数え、index照合は試行しません
+
+一致するprefixは構造上の候補であり、index利用、selectivity、lock範囲の狭さ、低RUを保証しません
+
+TiDBは統計情報とcost推定に基づいてaccess pathを選択するため、indexを追加する前に実際のplanとindex更新costを確認してください
+
+TiDBの[index selection](https://docs.pingcap.com/tidb/stable/choose-index/)と[indexing guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
+
+最初の確認には通常のSQL `EXPLAIN` を使います、**`EXPLAIN ANALYZE` はwriteを実行し、dataを変更し得ます**、詳細は[TiDB statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/)を参照してください
+
+offline解析はどちらのcommandも実行せず、SQLやtransaction境界を変更しません
+
+`tidbgo lint` は現時点でこれらの条件付きwrite ruleを適用しません
 
 ## SELECT EXPLAIN
 

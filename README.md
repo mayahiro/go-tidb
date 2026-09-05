@@ -432,10 +432,20 @@ tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 ```
 
 The analyzer applies `QRY002` through `QRY005` to captured query shapes and
-reports possible N+1 SELECTs. Supplying an offline TiDB `CREATE TABLE` snapshot
+reports possible N+1 SELECTs. `RUN004` reports repeated single-row `Insert` or
+`Upsert` attempts within one scope, with counts and any collected ServerRU;
+it excludes Many calls and never batches writes automatically.
+`RUN005` similarly reports repeated typed `Update` or `UpdateWhere` attempts
+for review, without claiming they can be combined. It excludes soft-delete
+terminals and raw SQL and needs no extra application instrumentation.
+Supplying an offline TiDB `CREATE TABLE` snapshot
 also applies the `QRY006` and `QRY007` physical index checks. Coverage counters
 separate all captured statements from statements that carried a query shape
 and those checked against the snapshot.
+Captured `UpdateWhere` and `DeleteWhere` predicates are also checked with
+`--schema`: `QRY008` reports missing index-prefix candidates and `QRY009`
+reports uncertain coverage. Neither a matching prefix nor a clean report
+guarantees index use or low RU.
 
 Runtime capture does not add `EXPLAIN` or other database I/O by default. Add
 `orm.CollectServerRU()` to `WithRuntimeCapture` only when one extra
@@ -462,6 +472,14 @@ A current per-statement mean is an `RU001` regression only when it exceeds both
 130% of the baseline mean and the maximum value observed in the baseline.
 Missing fingerprints or unusable measurements produce `RU002`. Both are
 non-suppressible errors; equality with the effective limit passes.
+
+For repeated operations under equivalent input conditions, add `--workload`
+with the same scenario name to both commands. This also compares per-scope RU
+sums and DML statement counts, detecting increased repetitions even when
+per-statement RU is unchanged. `RU003` reports workload regression and `RU004`
+reports unavailable comparison. See [operation-level baselines](docs/workload-baselines.md)
+for the one-operation-per-scope contract and measurement limits.
+
 Bind values remain excluded, but SQL templates and errors can still contain
 application data. See the [statement observation guide](docs/observability.md)
 for scope, cost, writer-error, and retention details.

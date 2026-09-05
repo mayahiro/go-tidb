@@ -81,6 +81,32 @@ fingerprintとQueryShapeはbind valueを除外しますが、SQL templateとerro
 
 runtime解析はmetadata不足、runtime N+1 SELECT候補、ServerRU収集failure、ServerRU baseline regressionもreportします
 
+明示的な `--workload` ではscope単位のRUとDML statement数のbudgetも比較し、回帰を `RU003`、比較不能を `RU004` として既存のfingerprint ruleに加えsuppress不可能なerrorで示します
+
+scopeとcoverageの条件は[操作単位のbaseline](workload-baselines_ja.md)を参照してください
+
+`RUN004` は同一scopeのtypedな単行 `Insert` または `Upsert` の反復をapplication review候補として示し、attempt数、target duration、取得済みServerRUとmeasurement coverageを付けます
+
+全てのMany callと自動batch分割を除外し、schemaやquery登録は不要で、writeの書き換えやtransaction境界の変更は行いません
+
+`RUN005` は同一capture scope・fingerprint・terminalのtypedな `Update` または `UpdateWhere` の2回以上の試行を、同じ件数・時間・RUのevidenceとともにreportします
+
+suppress可能なwarningであり、loop、異なるrow、一括化可能性、回帰の証明ではありません
+
+raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、batchは対象外です
+
+行ごとの値、lease条件、atomic increment、実行順、transaction境界、retryを確認してからoperationを変更してください
+
+schema、baseline、`--workload`、application codeの追加は不要です
+
+`--schema` を指定するとcaptured `UpdateWhere` と `DeleteWhere` のscalar predicateもindexと照合します
+
+`QRY008` はsupportedな先頭列boundに対応するindexがない場合のwarning、`QRY009` は未確定coverageのinfo、`QRY006` はschema不足のerrorです
+
+query登録は不要で、source `lint` では適用しません
+
+mutation shape数、判定済みcheck数、未確定check数を分離して境界を示し、一致するprefixがあってもindex利用や低RUを保証しません
+
 capture scope、artifact security、ServerRU cost、baseline比較は[Statement observation](observability_ja.md)を参照してください
 
 ## Go source解析
@@ -153,6 +179,8 @@ planの選択はdata distributionとstatisticsに依存するため、plan diagn
 
 ```sh
 tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
 ```
 

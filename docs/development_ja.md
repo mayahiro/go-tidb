@@ -100,8 +100,13 @@ go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchme
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationIndexes$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeWorkload$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkWorkloadBaselineAndComparison$' -benchmem -count=5
 ```
 
 全てoffline benchmarkであり、SQL execution、network call、TiDB optimization、actual RU consumptionを含みません
@@ -123,6 +128,28 @@ baseline benchmarkは保存対象のfingerprint aggregateが1個の場合と10,0
 出力自体がfingerprintごとに1 entryを持つため、このpathのmemoryはfingerprint数に応じて増えます
 
 comparison benchmarkは一致する1件と10,000件のbaselineとcurrent fingerprint setを使い、validationとdeterministic mergeを含みますがJSON decodeとreport encodeは含みません
+
+write反復のbenchmarkはiterationごとに構築済みstatement record 1,000件を解析します
+
+単行insert、known RU付きupsert、主キーupdate、known RU付き条件update、insertとupdateの独立scope、対象外のbulk分割とsoft deleteを含みます
+
+record構築、JSON decode、report encode、runtime captureは計測区間に含めません
+
+集計はattemptまたはRU sampleごとではなく異なるwrite groupごとにcounterを保持するため、解析時間と合わせてallocationも比較します
+
+mutation index benchmarkは同じSQL fingerprintのrecordが1件と1,000件の場合をparse済みschemaで比較します
+
+index照合結果はfingerprintごとにcacheし、coverageはrecordごとに数えます
+
+conditional observation benchmarkはUpdateWhereとDeleteWhereをobserverなし、通常observer、runtime captureの3種類で比較します
+
+captureではscalar metadata生成、JSON encode、discard writerを含みますが、driver変換とDB I/Oは含めません
+
+workload benchmarkは同一の構築済みUPDATE recordをscope budget集計の無効・有効で比較します
+
+1 statement、1 scope内の10,000 statement、各10 statementの1,000 scopeを含み、scope counterはscope内のattempt数ではなく異なるscope数に応じて増えます
+
+workload baselineとcomparisonのbenchmarkは各10 statementの5 scopeを使いvalidationも含みますが、JSON、runtime observation、実DBのRUは計測しません
 
 ## TiDB Cloud Starter integration test
 
@@ -166,6 +193,135 @@ scalar terminal、slice predicate、application-selected DECIMAL type、temporal
 既存fixture tableを検出した場合は削除せず失敗します
 
 同じdatabaseに対する複数suiteを同時実行しません
+
+## Write compiler benchmark
+
+単行CRUD、field指定更新、valueとpointerのbulk writeを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$/^upsert_values$/^rows_24580$' -benchtime=3s -cpuprofile /tmp/tidbgo-write.cpu -memprofile /tmp/tidbgo-write.mem -o /tmp/tidbgo-write.test
+go -C tools tool pprof -top /tmp/tidbgo-write.test /tmp/tidbgo-write.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-write.test /tmp/tidbgo-write.mem
+```
+
+offline workloadはnative scalar、nullable pointer、byte slice、time value、pointer receiverの `driver.Valuer` を含みます
+
+100行と24,580行を対象とし、後者は8 columnのfull batch 3個と残り7行へ分割します
+
+各operationでbuilderを作成し、warm済みmodel metadataを使用します
+
+`Value` の実行とDB接続は行わず、compilerと引数準備のcostを計測し、driver conversion、network latency、RUは含みません
+
+mutation planはfield accessとValuer receiverの選択、およびmodelごとに1個のdefault single-row Upsert SQLをcacheします
+
+bulk実行は同じ行数のbatch SQLをその実行内で再利用し、batch sizeや選択fieldをkeyとするglobal cacheは保持しません
+
+各batchのargument sliceは独立しています
+
+## Connected write baseline
+
+前述の専用databaseと固定iteration数を使用します
+
+```sh
+TIDBGO_TEST_DSN='<user>:<password>@tcp(<host>:4000)/tidbgo_test_ci?tls=true&parseTime=true&interpolateParams=true' \
+  go -C integration test -run '^$' \
+    -bench '^BenchmarkTiDBCloudStarterWrite$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+opt-in benchmarkは `tidbgo_it_write_benchmark` だけを作成し、既存tableを拒否し、自身で作成したtableをcleanup時に削除します
+
+1個のpinned connectionを使用し、DSNの `interpolateParams` と `clientFoundRows` を維持するため、比較時はdriver設定を揃えます
+
+32 byteと2,048 byteのJSON string payloadで、単行Insert、新規・変更・同値のUpsert、100行Insert、混在・変更・同値のBulk Upsertを計測します
+
+tableは `AUTO_RANDOM` primary keyと別のunique keyを持ちます
+
+trialごとにtimer外でrowをresetして同じconflictをseedし、反復Upsertが別のworkloadへ変わることを防ぎます
+
+warm-upとRU sampleでは最終値、affected row数、既存ID、generated IDの反映contractを検証します
+
+latencyとGo allocationにsetup、検証、RU queryを含めません
+
+計測後の独立した3 sampleから `ServerRU/op` と `ServerRU/row` を報告し、各sampleはpinned connectionで対象statement直後に自動収集します
+
+`statements/op` は対象DMLだけを数え、setup、seed、検証、RU収集、cleanupはこれらのmetric外で追加resourceを消費します
+
+autocommit DMLの計測であり、明示transaction全体または請求RUを表しません
+
+各trialは実データを書き込むためiteration数を制限してください
+
+## Write batch size比較
+
+同じ1,000行のinputを100、500、1,000行ずつ書き込む場合を比較します
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$' -benchmem -benchtime=1x -count=1 ./tidbcloud
+# Repeat a narrower comparison after the initial matrix.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$/^payload_2048$/^autocommit$/^upsert_changed$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+60 caseで32 byteと2,048 byteのJSON string payload、Insert、新規・混在・変更・同値Upsert、2種類のtransaction境界を比較します
+
+`autocommit` はDML statementごとに独立してcommitし、`transaction` はpinned connection上の1回の `orm.Transaction` へ全batchをまとめ、latencyとGo allocationにBEGINとCOMMITを含めます
+
+sessionのautocommit有効を必須とし、既存のTiDB transaction modeを変更せず記録します
+
+mode間ではatomicityが異なるため、同じmode内でbatch sizeを比較してください
+
+各caseは同じ値とconflictから開始し、混在caseはinputの前半をseedし、変更caseは整数fieldを1個変更します
+
+commit後に結果と既存IDを検証します
+
+writable columnは6個で各candidate batchは1 statementに収まるため、`batch_1000` はこのworkloadでの現行自動分割policyと同じDML形状です
+
+比較用の分割はpublic mutation APIへ渡すinput sliceで行い、ORMのpolicyは変更しません
+
+3種類のsizeは計測candidateであり、推奨defaultやpublic batch size optionではありません
+
+`Exec` の自動分割は引き続きplaceholder数に基づきます
+
+`DML-ServerRU/op` は1,000行のoperationに含まれる全batchのstatement別ServerRUを合算し、独立してresetした3 sampleを平均します
+
+`DML-ServerRU/row` はその合計をinput行数で割った値です
+
+RU probeは同じconnectionまたはactive transaction上で各DML直後に実行し、latencyとallocation計測に含めません
+
+BEGIN・COMMITのRU、setup、seed、検証、probe、cleanupはmetricに含めないため、transaction全体RUとautocommit RUの比較や請求RUとして使用できません
+
+`statements/op` は対象DMLの10、2、1 statement、`tx-controls/op` は明示BEGIN・COMMITの0または2 statementを数え、driverとnetworkの全round trip数ではありません
+
+`max-args/statement` と `max-SQL-bytes/statement` は最大のbind listとplaceholder SQL templateを表し、interpolation後のpacket sizeやpeak memoryではありません
+
+`B/op` はGoの総allocationでありretained heapやpeak heapではなく、接続準備、source data、検証を含めません
+
+full matrixの `1x` 実行ではwarm-up、計測、RU sampleで対象inputを合計300,000行処理し、resetとseedの追加writeも発生します
+
+resource使用量を制限するためfilterと固定iteration数を使用してください
+
+write baselineと同じ使い捨てtableを使用するため、同じDBで同時実行しません
+
+固定行数・single clientの結果から、より大きい行、placeholder上限に達するbatch、並行writeでの最適sizeは判断できません
+
+同じbatch処理を完全offlineでprofileできます
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$' -benchmem -benchtime=200ms -count=5 ./tidbcloud
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$/^payload_2048$/^upsert_true$/^batch_1000$' -benchtime=3s -cpuprofile /tmp/tidbgo-batch.cpu -memprofile /tmp/tidbgo-batch.mem -o /tmp/tidbgo-batch.test ./tidbcloud
+go -C tools tool pprof -top /tmp/tidbgo-batch.test /tmp/tidbgo-batch.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-batch.test /tmp/tidbgo-batch.mem
+```
+
+小さいbatch candidateをprofileする場合は `batch_1000` を `batch_100` に置き換えます
+
+offline executorはTiDBへ接続せず、driver引数変換と引数の保持も行いません
+
+dataとmetadataを計測前に準備するため、このbenchmarkでpayload長を変えても転送やJSON処理は計測しません
+
+## Relation同期の比較
+
+全削除・再挿入、集合差分、read-diffの実接続比較、identityとlockの前提、計測境界、offline profileは [Relation同期のbenchmark](relation-sync-benchmarks_ja.md) を参照してください
 
 ## EXPLAIN client benchmark
 

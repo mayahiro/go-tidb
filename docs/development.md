@@ -106,8 +106,13 @@ go test ./internal/querycheck -run '^$' -bench '^BenchmarkDiagnostics$' -benchme
 go test ./internal/queryshape -run '^$' -bench '^BenchmarkQueryFingerprint$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeCapturedQueryShapes$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeServerRUOneFingerprint$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeRepeatedWrites$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeMutationIndexes$' -benchmem -count=5
+go test ./orm -run '^$' -bench '^BenchmarkConditionalMutationObservation$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkNewServerRUBaseline$' -benchmem -count=5
 go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkCompareServerRU$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkAnalyzeWorkload$' -benchmem -count=5
+go test ./internal/runtimecapture -run '^$' -bench '^BenchmarkWorkloadBaselineAndComparison$' -benchmem -count=5
 ```
 
 These benchmarks are offline and exclude SQL execution, network calls, TiDB
@@ -125,6 +130,28 @@ the output itself contains one entry per fingerprint. The comparison benchmark
 uses matching one- and 10,000-fingerprint baseline/current sets and includes
 validation plus deterministic merge, but excludes JSON decoding and report
 encoding.
+
+The repeated-write benchmark analyzes 1,000 prebuilt statement records per
+iteration. It covers single inserts, upserts with known RU, primary-key
+updates, conditional updates with known RU, isolated insert/update scopes,
+and excluded bulk splits and soft deletes. Record construction, JSON decoding,
+report encoding, and runtime capture are outside the timed region. Compare
+allocations as well as analysis time; aggregation retains one counter set per
+distinct write group, not every attempt or RU sample.
+
+The mutation-index benchmark compares one and 1,000 records of one SQL
+fingerprint against a pre-parsed schema. Index checks are cached per
+fingerprint while coverage counts each record. The conditional-observation
+benchmark compares UpdateWhere and DeleteWhere with no observer, an ordinary
+observer, and runtime capture. Capture includes scalar metadata construction,
+JSON encoding, and a discard writer, but no driver conversion or database I/O.
+
+The workload benchmark runs identical prebuilt UPDATE records with scoped
+budget aggregation disabled and enabled. It covers one statement, 10,000
+statements in one scope, and 1,000 scopes of ten statements. Scope counters
+scale with distinct scopes, not attempts within a scope. The workload baseline
+and comparison benchmark includes validation for five ten-statement scopes.
+Neither benchmark measures JSON, runtime observation, or actual database RU.
 
 ## TiDB Cloud Starter integration tests
 
@@ -164,6 +191,128 @@ ServerRU reads, plus statement observation spanning root and preload SELECTs
 It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
+
+## Write compiler benchmarks
+
+Measure single-row CRUD, selected-field updates, and value/pointer bulk writes:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$/^upsert_values$/^rows_24580$' -benchtime=3s -cpuprofile /tmp/tidbgo-write.cpu -memprofile /tmp/tidbgo-write.mem -o /tmp/tidbgo-write.test
+go -C tools tool pprof -top /tmp/tidbgo-write.test /tmp/tidbgo-write.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-write.test /tmp/tidbgo-write.mem
+```
+
+The offline workload includes native scalars, nullable pointers, byte slices,
+time values, and a pointer-receiver `driver.Valuer`. It covers 100 rows and
+24,580 rows: three full eight-column batches followed by a seven-row remainder.
+It creates a builder for each operation, uses warmed model metadata, and never
+calls `Value` or a database. It measures compiler and argument preparation cost,
+not driver conversion, network latency, or RU.
+
+The mutation plan caches field access and Valuer receiver selection, plus one
+default single-row upsert SQL per model. Bulk execution reuses equal-sized batch
+SQL within that execution; it retains no global cache keyed by batch size or
+selected fields. Each batch has its own argument slice.
+
+## Connected write baseline
+
+Use the dedicated database described above and a fixed iteration count:
+
+```sh
+TIDBGO_TEST_DSN='<user>:<password>@tcp(<host>:4000)/tidbgo_test_ci?tls=true&parseTime=true&interpolateParams=true' \
+  go -C integration test -run '^$' \
+    -bench '^BenchmarkTiDBCloudStarterWrite$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+This opt-in benchmark creates only `tidbgo_it_write_benchmark`, refuses an
+existing table, and drops the table it created during cleanup. It uses one
+pinned connection and preserves the DSN's `interpolateParams` and
+`clientFoundRows` settings. Compare runs with identical driver settings.
+
+The matrix covers single inserts, new/changed/unchanged upserts, 100-row
+inserts, and mixed/changed/unchanged bulk upserts, with 32-byte and 2,048-byte
+JSON string payloads. The table has an `AUTO_RANDOM` primary key and a separate
+unique key. Every trial resets rows and seeds the same conflicts outside the
+timer, so repeated upserts do not silently turn into a different workload.
+Warm-up and RU samples verify final values, affected rows, existing IDs, and
+the generated-ID assignment contract.
+
+Latency and Go allocations exclude setup, validation, and RU queries. Three
+separate post-timing samples report `ServerRU/op` and `ServerRU/row`; each uses
+automatic collection immediately after the target statement on the pinned
+connection. `statements/op` counts target DML only. Setup, seeding, validation,
+RU collection, and cleanup consume additional resources outside these metrics.
+These are autocommit DML measurements, not explicit-transaction totals or
+billing RU. Keep iteration counts bounded because every trial writes real data.
+
+## Write batch-size comparison
+
+Compare 100-, 500-, and 1,000-row batches for the same 1,000 input rows:
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$' -benchmem -benchtime=1x -count=1 ./tidbcloud
+# Repeat a narrower comparison after the initial matrix.
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterWriteBatchSizes$/^payload_2048$/^autocommit$/^upsert_changed$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+The 60 cases cover 32-byte and 2,048-byte JSON string payloads, inserts,
+new/mixed/changed/unchanged upserts, and two transaction boundaries. In
+`autocommit`, each DML statement commits independently. In `transaction`, all
+batches use one `orm.Transaction` on the pinned connection; latency and Go
+allocations include BEGIN and COMMIT. The benchmark requires session autocommit
+to be enabled and records the existing TiDB transaction mode without changing it.
+Compare batch sizes within the same mode; the modes have different atomicity.
+
+Each case starts with the same values and conflicts. The mixed case seeds the
+first half of the input, and the changed case changes one integer field.
+Results and existing IDs are verified after commit. With six writable columns,
+all candidate batches fit in one statement, so `batch_1000` has the same DML
+shape as the current automatic policy for this workload. The comparison uses
+the public mutation API to slice inputs; it does not change the ORM's policy.
+The three sizes are measurement candidates, not recommended defaults or public
+batch-size options. Automatic `Exec` batching still uses the placeholder budget.
+
+`DML-ServerRU/op` sums the per-statement ServerRU over all batches for one
+1,000-row operation, then averages three independently reset samples.
+`DML-ServerRU/row` divides that sum by input rows. RU probes run immediately
+after each DML statement on the same connection or active transaction, outside
+latency and allocation measurement. These metrics exclude BEGIN/COMMIT RU,
+setup, seeding, verification, probes, and cleanup; **they cannot compare total
+transaction RU against autocommit RU or represent billed RU**.
+
+`statements/op` counts target DML (10, 2, or 1); `tx-controls/op` counts explicit
+BEGIN/COMMIT (0 or 2). Neither counts all driver/network round trips.
+`max-args/statement` and `max-SQL-bytes/statement` describe the largest bind list
+and placeholder SQL template, not interpolated packet size or peak memory.
+`B/op` measures total Go allocation, not retained or peak heap. Connection
+setup, source data, and verification are excluded from it.
+
+The full `1x` matrix executes 300,000 target input rows across warm-up, timing,
+and RU samples, plus reset and seed writes. Use filters and fixed iteration
+counts to bound resource use. It uses the same disposable table as the write
+baseline, so do not run them concurrently against one database. Results from
+this fixed-size, single-client workload do not establish an optimal size for
+larger rows, placeholder-limit batches, or concurrent writers.
+
+The same batching loop can be profiled entirely offline:
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$' -benchmem -benchtime=200ms -count=5 ./tidbcloud
+go -C integration test -run '^$' -bench '^BenchmarkWriteBatchCompiler$/^payload_2048$/^upsert_true$/^batch_1000$' -benchtime=3s -cpuprofile /tmp/tidbgo-batch.cpu -memprofile /tmp/tidbgo-batch.mem -o /tmp/tidbgo-batch.test ./tidbcloud
+go -C tools tool pprof -top /tmp/tidbgo-batch.test /tmp/tidbgo-batch.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-batch.test /tmp/tidbgo-batch.mem
+```
+
+Replace `batch_1000` with `batch_100` to profile the smaller-batch candidate.
+The offline executor does not connect to TiDB, convert driver arguments, or
+retain them. Data and metadata are prepared before timing; payload length does
+not measure transmission or JSON processing in this benchmark.
+
+## Relation synchronization comparison
+
+See [Relation synchronization benchmarks](relation-sync-benchmarks.md) for the connected replacement, set-based, and read-diff comparison, identity and locking assumptions, measurement boundaries, and offline profiles
 
 ## EXPLAIN client benchmark
 

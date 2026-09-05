@@ -9,14 +9,16 @@ import (
 )
 
 type mutationFieldPlan struct {
-	field model.Field
-	index []int
+	field         model.Field
+	index         []int
+	addressValuer bool
 }
 
 type mutationModelPlan struct {
 	descriptor    *model.Descriptor
 	insertFields  []mutationFieldPlan
 	insertSQL     string
+	upsertSQL     string
 	insertErr     error
 	autoRandom    *mutationFieldPlan
 	updateFields  []mutationFieldPlan
@@ -43,7 +45,7 @@ func mutationPlanFor(descriptor *model.Descriptor) *mutationModelPlan {
 func compileMutationModelPlan(descriptor *model.Descriptor) *mutationModelPlan {
 	plan := &mutationModelPlan{descriptor: descriptor}
 	for _, field := range descriptor.Fields() {
-		current := mutationFieldPlan{field: field, index: field.Index()}
+		current := compileMutationFieldPlan(field)
 		if field.IsPrimaryKey() {
 			plan.primaryKey = append(plan.primaryKey, current)
 		}
@@ -69,10 +71,13 @@ func compileMutationModelPlan(descriptor *model.Descriptor) *mutationModelPlan {
 	}
 
 	if plan.insertErr == nil {
-		plan.insertSQL = renderInsert(descriptor.TableName(), plan.insertFields, 1)
+		plan.insertSQL = renderInsert(descriptor.TableName(), plan.insertFields, 1, nil)
 	}
 	if len(plan.updateFields) == 0 && plan.updateErr == nil {
 		plan.updateErr = fmt.Errorf("orm: model %s has no writable non-primary-key fields", descriptor.Name())
+	}
+	if plan.insertErr == nil && plan.updateErr == nil {
+		plan.upsertSQL = appendOnDuplicateKeyUpdate(plan.insertSQL, plan.updateFields)
 	}
 	if len(plan.primaryKey) == 0 {
 		plan.primaryKeyErr = fmt.Errorf("orm: model %s requires a declared primary key", descriptor.Name())
@@ -89,6 +94,15 @@ func compileMutationModelPlan(descriptor *model.Descriptor) *mutationModelPlan {
 	}
 	if plan.primaryKeyErr == nil {
 		plan.deleteSQL = renderPrimaryKeyDelete(descriptor.TableName(), plan.primaryKey, plan.softDelete)
+	}
+	return plan
+}
+
+func compileMutationFieldPlan(field model.Field) mutationFieldPlan {
+	plan := mutationFieldPlan{field: field, index: field.Index()}
+	if field.UsesValuer() {
+		fieldType := field.GoType()
+		plan.addressValuer = !fieldType.Implements(driverValuerType) && reflect.PointerTo(fieldType).Implements(driverValuerType)
 	}
 	return plan
 }
@@ -124,7 +138,7 @@ func selectedUpdateFields(descriptor *model.Descriptor, names []string, operatio
 			return nil, fmt.Errorf("orm: %s field %s.%s cannot be used as a database argument", operation, descriptor.Name(), name)
 		}
 		seen[name] = true
-		fields[index] = mutationFieldPlan{field: field, index: field.Index()}
+		fields[index] = compileMutationFieldPlan(field)
 	}
 	return fields, nil
 }
@@ -139,7 +153,7 @@ func mutationArguments(root reflect.Value, descriptor *model.Descriptor, fields 
 
 func fillMutationArguments(arguments []any, root reflect.Value, descriptor *model.Descriptor, fields []mutationFieldPlan) error {
 	for index, field := range fields {
-		argument, err := mutationArgument(root, descriptor, field.field, field.index)
+		argument, err := mutationArgument(root, descriptor, field)
 		if err != nil {
 			return err
 		}

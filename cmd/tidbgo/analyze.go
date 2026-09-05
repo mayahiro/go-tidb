@@ -28,6 +28,12 @@ func analyzeCommand() *cli.Command {
 		ID("analyze-command").
 		About("Analyze a go-tidb runtime capture without a database connection").
 		Option(
+			cli.ValueOption(workloadID).
+				Long("workload").
+				Parser(cli.StringParser()).
+				Help("Declare every scope as one repetition of the same named operation and input conditions"),
+		).
+		Option(
 			cli.Flag(analyzeJSONID).
 				Long("json").
 				Help("Write the runtime analysis as JSON"),
@@ -152,11 +158,15 @@ func analyzeBaseline(context *cli.Context, invocation *cli.Invocation) (*runtime
 }
 
 func analyzeOptions(context *cli.Context, invocation *cli.Invocation) ([]runtimecapture.AnalysisOption, *cli.Diagnostic) {
-	catalog, present, diagnostic := schemaFromOption(context, invocation, analyzeSchemaID)
-	if diagnostic != nil || !present {
+	options, diagnostic := workloadOptions(invocation)
+	if diagnostic != nil {
 		return nil, diagnostic
 	}
-	return []runtimecapture.AnalysisOption{runtimecapture.WithSchema(catalog)}, nil
+	catalog, present, diagnostic := schemaFromOption(context, invocation, analyzeSchemaID)
+	if diagnostic != nil || !present {
+		return options, diagnostic
+	}
+	return append(options, runtimecapture.WithSchema(catalog)), nil
 }
 
 func parsedAnalyzeSuppressions(invocation *cli.Invocation) []diagnosticreport.Suppression {
@@ -174,6 +184,7 @@ type runtimeAnalysisJSON struct {
 	Statistics            runtimecapture.Statistics               `json:"statistics"`
 	ServerRUByFingerprint []runtimecapture.FingerprintServerRU    `json:"server_ru_by_fingerprint"`
 	ServerRUComparison    *runtimecapture.ServerRUComparison      `json:"server_ru_comparison,omitempty"`
+	Workload              *runtimecapture.WorkloadServerRU        `json:"workload,omitempty"`
 	Diagnostics           []check.Diagnostic                      `json:"diagnostics"`
 	Suppressed            []diagnosticreport.SuppressedDiagnostic `json:"suppressed"`
 	Summary               diagnosticreport.Summary                `json:"summary"`
@@ -191,6 +202,7 @@ func writeRuntimeAnalysisJSON(
 		Statistics:            analysis.Statistics,
 		ServerRUByFingerprint: analysis.ServerRUByFingerprint,
 		ServerRUComparison:    comparison,
+		Workload:              analysis.Workload,
 		Diagnostics:           report.Diagnostics(),
 		Suppressed:            report.Suppressed(),
 		Summary:               report.Summary(),
@@ -219,6 +231,11 @@ func writeRuntimeAnalysisText(
 			return err
 		}
 	}
+	if analysis.Workload != nil {
+		if _, err := fmt.Fprintln(writer, runtimecapture.FormatWorkloadServerRU(*analysis.Workload)); err != nil {
+			return err
+		}
+	}
 	if comparison != nil {
 		for _, entry := range comparison.Entries {
 			if _, err := fmt.Fprintln(writer, runtimecapture.FormatFingerprintServerRUComparison(entry)); err != nil {
@@ -227,6 +244,11 @@ func writeRuntimeAnalysisText(
 		}
 		if _, err := fmt.Fprintln(writer, runtimecapture.FormatServerRUComparisonSummary(*comparison)); err != nil {
 			return err
+		}
+		if comparison.Workload != nil {
+			if _, err := fmt.Fprintln(writer, runtimecapture.FormatWorkloadComparison(*comparison.Workload)); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := fmt.Fprintln(writer, runtimecapture.FormatStatistics(analysis.Statistics)); err != nil {

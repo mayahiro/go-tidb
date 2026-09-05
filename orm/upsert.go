@@ -85,10 +85,14 @@ func (q *UpsertQuery[T]) compile() (compiledMutation, error) {
 	if err != nil {
 		return compiledMutation{}, err
 	}
+	statement := plan.upsertSQL
+	if len(q.fields) != 0 {
+		statement = appendOnDuplicateKeyUpdate(plan.insertSQL, updateFields)
+	}
 	return compiledMutation{
 		modelName:  descriptor.Name(),
 		descriptor: descriptor,
-		sql:        appendOnDuplicateKeyUpdate(plan.insertSQL, updateFields),
+		sql:        statement,
 		arguments:  arguments,
 	}, nil
 }
@@ -159,25 +163,39 @@ func (q *UpsertManyQuery[T]) prepare() (bulkMutationPlan, error) {
 }
 
 func appendOnDuplicateKeyUpdate(statement string, fields []mutationFieldPlan) string {
-	capacity := len(statement) + len(" ON DUPLICATE KEY UPDATE ")
+	var query strings.Builder
+	query.Grow(len(statement) + onDuplicateKeyUpdateCapacity(fields))
+	query.WriteString(statement)
+	writeOnDuplicateKeyUpdate(&query, fields)
+	return query.String()
+}
+
+func onDuplicateKeyUpdateCapacity(fields []mutationFieldPlan) int {
+	if len(fields) == 0 {
+		return 0
+	}
+	capacity := len(" ON DUPLICATE KEY UPDATE ")
 	for index, field := range fields {
 		if index != 0 {
 			capacity += len(", ")
 		}
 		capacity += len(field.field.ColumnName())*2 + len("`` = VALUES(``)")
 	}
-	var query strings.Builder
-	query.Grow(capacity)
-	query.WriteString(statement)
+	return capacity
+}
+
+func writeOnDuplicateKeyUpdate(query *strings.Builder, fields []mutationFieldPlan) {
+	if len(fields) == 0 {
+		return
+	}
 	query.WriteString(" ON DUPLICATE KEY UPDATE ")
 	for index, field := range fields {
 		if index != 0 {
 			query.WriteString(", ")
 		}
-		writeQuotedIdentifier(&query, field.field.ColumnName())
+		writeQuotedIdentifier(query, field.field.ColumnName())
 		query.WriteString(" = VALUES(")
-		writeQuotedIdentifier(&query, field.field.ColumnName())
+		writeQuotedIdentifier(query, field.field.ColumnName())
 		query.WriteByte(')')
 	}
-	return query.String()
 }

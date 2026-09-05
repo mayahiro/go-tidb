@@ -84,6 +84,33 @@ can still contain application data
 
 Runtime analysis also reports incomplete metadata, possible runtime N+1
 SELECTs, ServerRU collection failures, and ServerRU baseline regressions
+An explicit `--workload` adds per-scope RU and DML statement-count budgets;
+`RU003` reports regression and `RU004` reports unavailable comparison, both as
+non-suppressible errors alongside existing fingerprint rules
+See [operation-level baselines](workload-baselines.md) for scope and coverage requirements
+
+`RUN004` identifies repeated typed single-row `Insert` or `Upsert` attempts
+within one scope as candidates for application review, with attempt counts,
+target duration, and any collected ServerRU plus measurement coverage
+It excludes all Many calls and automatic batch splits, requires no schema or
+query registration, and never rewrites writes or changes transaction boundaries
+
+`RUN005` reports two or more typed `Update` or `UpdateWhere` attempts with
+the same fingerprint and terminal in one capture scope, with the same count,
+duration, and RU evidence. It is a suppressible warning, not proof of a loop,
+distinct rows, batchability, or a regression. Raw SQL, soft-delete
+`Delete`/`DeleteWhere`, relation mutations, and batches are excluded
+Review row-specific values, lease conditions, atomic increments, ordering,
+transaction boundaries, and retries before changing the operation
+It needs no schema, baseline, `--workload`, or additional application code
+
+With `--schema`, captured `UpdateWhere` and `DeleteWhere` also receive a
+scalar predicate index check: `QRY008` warns when no supported leading-column
+bound has an index, `QRY009` marks uncertain coverage as information, and
+`QRY006` rejects missing schema inputs
+These rules need no query registration and do not run through source `lint`
+Separate mutation-shape, resolved-check, and uncertain-check counts make the
+boundary explicit; a matching prefix does not prove index use or low RU
 See [Statement observation](observability.md) for capture scope, artifact
 security, ServerRU cost, and baseline comparison
 
@@ -176,6 +203,8 @@ suppressions
 
 ```sh
 tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
 ```
 

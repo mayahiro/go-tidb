@@ -126,7 +126,15 @@ shape. Raw SQL is marked as opaque. Collection preloads and automatically split
 bulk mutations are recorded from the actual execution path, so
 application-side statement count wrappers are unnecessary.
 
-Capture is opt-in. When it is disabled, query-shape construction and artifact
+`UpdateWhere` and `DeleteWhere` records also carry a scalar-only `mutation`
+shape: model, physical table, predicate operators and columns, empty-list
+classification, and any implicit active-row soft-delete column. Assignments
+and bind values are excluded. Soft-delete `DeleteWhere` retains its actual
+`UPDATE` operation and `delete_where` terminal. These records use the existing
+SQL statement fingerprint, including for ServerRU baselines. Artifact version
+is `1`.
+
+Capture is opt-in. When it is disabled, query/mutation-shape construction and artifact
 encoding do not run. Ordinary statement observers do not enable this extra
 metadata path. Capture performs no additional database I/O by default and
 never runs `EXPLAIN`. It records only statements executed through go-tidb with
@@ -218,6 +226,14 @@ effective limit. Entry status is one of `pass`, `regression`,
 `incomplete_coverage`, or `insufficient_samples`. This value is TiDB statement
 ServerRU, not billing RU.
 
+Add `--workload` with the same scenario name when saving and comparing a
+uniform operation workload. Each scope then contributes its RU sum and DML
+statement count as one sample. `RU003` reports per-operation cost regression;
+`RU004` rejects unavailable comparisons. This requires no runtime API or
+per-query registration and does not disable `RU001` or `RU002`. See
+[operation-level baselines](workload-baselines.md) for the explicit input
+contract, five-scope minimum, incomplete-capture limits, and JSON fields.
+
 Analyze a completed artifact without a database connection:
 
 ```sh
@@ -226,6 +242,8 @@ tidbgo analyze runtime.jsonl --json
 tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 ```
 
 The CLI streams statement records instead of retaining the complete artifact
@@ -249,12 +267,103 @@ because they still consume statements. Every suppression names an exact code
 and records a non-empty reason. Preload batch splits are excluded from the
 N+1 rule.
 
+`RUN004` reports two or more typed single-row `Insert` or `Upsert` attempts
+with the same capture, scope, SQL fingerprint, operation, and terminal. It is
+a suppressible warning and does not fail `tidbgo analyze`. It needs neither a
+query registry nor a schema snapshot. All `InsertMany` and `UpsertMany` calls
+are excluded, including unsplit and one-row calls, as are automatic batch
+splits, relation mutations, raw SQL, UPDATE, and DELETE.
+
+`RUN005` reports two or more typed `Update` or `UpdateWhere` attempts with
+the same capture, scope, SQL fingerprint, operation, and terminal. It is also
+a suppressible warning that does not fail `analyze`, and needs no schema,
+baseline, `--workload`, or query registration. Raw SQL, relation mutations,
+batches, and soft-delete `Delete`/`DeleteWhere` are excluded even when their
+SQL is an UPDATE. An explicit restore through `UpdateWhere` is included.
+
+Both rules include the captured attempt count, reported error count, summed
+target duration, and already-collected statement ServerRU with its sample and
+collection-error counts. Missing RU is shown as `unavailable`, not zero;
+partial totals cover only measured attempts. Known samples may also carry a
+collection error, for example after a connection-release failure. Failed
+attempts are included, so the count proves neither distinct input rows nor
+committed changes. The group-local RU total excludes BEGIN/COMMIT and is not
+billed RU or an estimate of bulk savings.
+
+For `RUN004`, review generated-ID use, execution order, transaction boundaries, and
+intentional retries before replacing the calls with `InsertMany` or
+`UpsertMany`, then measure latency and RU. The diagnostic never batches writes,
+changes transaction boundaries, or collects additional RU. RU collection
+remains opt-in through `CollectServerRU` at capture time.
+
+For `RUN005`, review whether assignments and predicates allow fewer
+statements without changing row-specific values, lease conditions, atomic
+increments, execution order, transaction boundaries, or intentional retries.
+Bind values are absent, so a shared fingerprint does not prove equal
+assignments, distinct targets, or combinable writes. `UpdateWhere` can already
+affect multiple rows, and zero affected rows do not exclude an attempt.
+The diagnostic does not identify the call site or prove a loop, higher RU, or
+potential savings. Measure latency, RU, and results before making a change.
+
+These advisory warnings and [operation-level baselines](workload-baselines.md)
+serve different purposes: `RUN005` suggests review of repetitions even without
+a baseline; `RU003` checks measured per-operation regression. Suppressing an
+intentional repetition does not suppress a budget regression.
+
 Bind values are never written to the runtime artifact. SQL templates can still
 contain literals supplied through raw SQL, and database errors can contain
 values. Treat the artifact as sensitive development data and choose its file
 permissions, destination, and retention accordingly. The caller owns and
 closes the writer. Encoding and writer failures never replace database results;
 inspect `capture.Err()` when artifact completeness matters.
+
+### Conditional write index checks
+
+`tidbgo analyze runtime.jsonl --schema schema.sql` checks captured
+`UpdateWhere` and `DeleteWhere` predicates without application-side query
+registration or a database connection. It does not check primary-key `Update`
+or `Delete`, relation mutations, Many calls, or raw SQL through this rule.
+
+- `QRY008` is a suppressible warning when no supported predicate bound matches
+  the leading column of a default-usable direct-column index
+- `QRY009` is suppressible information when index coverage remains uncertain
+- `QRY006` is a non-suppressible error for a missing schema table or referenced
+  predicate column; assignment compatibility is outside this check
+
+Supported bounds are `Equal`, non-empty `In`, `IsNull`, the four ordered
+comparisons, and `Between`. One leading-column bound suffices; an index need
+not include every filter column. AND can retain a usable bound alongside
+residual predicates. OR is covered when every branch is bounded by the same
+leading column, including branches made empty by an empty `In`. Empty-list
+constants and their logical combinations can prove a no-row write; other
+value-dependent contradictions are not inferred.
+
+Without such a bound, OR/NOT, negative predicates, LIKE predicates, and
+expression, prefix-length, specialized, partial, or invisible indexes remain
+uncertain. In particular, this check does not model IndexMerge or inspect
+bind values to classify LIKE prefixes. Implicit soft-delete `IS NULL` is part
+of the predicate; `UpdateWhere.WithDeleted` removes it.
+
+`mutation_shape_statements` counts captured shapes.
+`schema_checked_statements` counts snapshot-check attempts for both SELECT
+and conditional writes. `mutation_index_checked_statements` counts resolved
+write checks, including warnings and proven no-row predicates;
+`mutation_index_uncertain_statements` counts unresolved write checks. Missing
+schema inputs count in neither resolved nor uncertain write checks and produce
+`QRY006`. Diagnostics are deduplicated by statement fingerprint while coverage
+counts every captured attempt, including failed statements. Without `--schema`,
+shapes are counted but index checks are not attempted.
+
+A matching prefix is only a structural candidate, not proof of index use,
+selectivity, narrow locks, or low RU. TiDB uses statistics and cost estimates
+to choose access paths. Review the actual plan and index write cost before
+adding an index. See TiDB's [index selection](https://docs.pingcap.com/tidb/stable/choose-index/)
+and [indexing guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/).
+Use plain SQL `EXPLAIN` for initial inspection; **`EXPLAIN ANALYZE` executes
+the write and can change data**, as documented in the
+[TiDB statement reference](https://docs.pingcap.com/tidb/stable/sql-statement-explain-analyze/).
+Offline analysis never executes either command or changes SQL or transaction
+boundaries. `tidbgo lint` does not currently apply these conditional-write rules.
 
 ## SELECT EXPLAIN
 

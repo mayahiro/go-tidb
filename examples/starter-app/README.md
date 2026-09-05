@@ -151,11 +151,73 @@ The fixed policy reports `RU001` only when the current mean exceeds both 130%
 of the baseline mean and the observed baseline maximum; missing or unusable
 measurements report `RU002`.
 
+To compare the cost of a whole operation, capture one invocation per scope
+and repeat the same scenario at least five times with equivalent fixtures.
+For example, `UpdateUserEmail` calls belonging to one job share the job's
+capture context; they do not each create a scope. No changes to the repository
+functions are needed. Declare the same workload name on both CLI invocations:
+
+```sh
+tidbgo baseline reference.jsonl --workload update-users-10 > baseline.json
+tidbgo analyze current.jsonl --workload update-users-10 --baseline baseline.json
+```
+
+This compares per-scope RU sums and DML statement counts in addition to
+per-fingerprint means. More calls within one scope can produce `RU003` even
+with unchanged per-statement RU. Incomplete or mismatched workload inputs
+produce `RU004`. The flag declares a uniform input, not a filter; keep setup,
+plan probes, and different scenarios outside the captured operation.
+BEGIN/COMMIT RU is not included. See [operation-level baselines](../../docs/workload-baselines.md)
+for coverage and incomplete-capture limits.
+
 The existing functions in this example continue to receive the derived
 context unchanged. Analyze the resulting JSON Lines file with
 `tidbgo analyze`. Captured typed query shapes are checked automatically; pass
 `--schema schema.sql` to add offline physical index-prefix checks without a
 database connection or an application-side query registry.
+
+The same capture includes the predicates of `ClaimJobLease`, `FailJobLease`,
+`RestoreVideo`, and `DeleteOrdersForUser`. `analyze --schema` checks their
+index-prefix candidates without changing these functions. The job primary
+key bounds `ClaimJobLease` even though it also has an OR lease condition;
+no index containing every WHERE column is required. `DeleteOrdersForUser`
+can produce `QRY008` when the snapshot lacks an index starting with `user_id`.
+Unsupported index or predicate shapes produce `QRY009` and count as uncertain,
+not successfully checked. Matching a prefix does not guarantee the chosen
+plan or RU. Use SQL `EXPLAIN` for initial inspection: `EXPLAIN ANALYZE` on a
+write executes it and can change data.
+
+Repeated `InsertUser` or `UpsertUser` calls with the same SQL fingerprint in
+one captured scope produce the advisory `RUN004` warning. No changes to these
+repository functions are needed. The report includes attempt counts, target
+duration, and any collected ServerRU with sample coverage; uncollected RU is
+`unavailable`, not zero. `InsertOrders` and `UpsertUsers` remain excluded even
+when they split into several statements or receive only one row.
+Generated-ID dependencies, execution order, transaction boundaries, and
+intentional retries must be reviewed before switching to bulk calls; the
+analyzer does not combine writes automatically. For example, `InsertUser`
+writes back a generated ID while bulk insert does not. Intentional single-row
+writes can be acknowledged with a reason:
+
+```sh
+tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+```
+
+Repeated `UpdateUserEmail`, `ClaimJobLease`, `FailJobLease`, or `RestoreVideo`
+calls with the same fingerprint and terminal in one scope produce the advisory
+`RUN005` warning with the same attempt, duration, and RU coverage evidence.
+No changes to these functions, schema snapshot, or `--workload` flag are needed.
+This is a review candidate, not a recommendation to combine leases or atomic
+increments: preserve per-row values, concurrency conditions, execution order,
+and transaction boundaries, and check retries before measuring a rewrite.
+`DeleteVideo` is excluded even though its soft delete executes an UPDATE.
+Intentional repetitions can be acknowledged without disabling operation-level
+budget regression checks:
+
+```sh
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
+```
+
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

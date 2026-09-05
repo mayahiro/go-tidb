@@ -118,6 +118,7 @@ type statementRuntimeMetadata struct {
 	metadataError string
 	batch         *runtimecapture.Batch
 	query         *queryshape.Query
+	mutation      *queryshape.Mutation
 }
 
 // StatementObserverOption configures statement observation for one context.

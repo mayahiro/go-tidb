@@ -11,11 +11,12 @@ import (
 
 var driverValuerType = reflect.TypeFor[driver.Valuer]()
 
-func mutationArgument(root reflect.Value, descriptor *model.Descriptor, field model.Field, index []int) (any, error) {
+func mutationArgument(root reflect.Value, descriptor *model.Descriptor, plan mutationFieldPlan) (any, error) {
+	field := plan.field
 	if !field.CanValue() {
 		return nil, fmt.Errorf("orm: mutation field %s.%s cannot be used as a database argument", descriptor.Name(), field.GoName())
 	}
-	value, null, err := modelFieldValue(root, index)
+	value, null, err := modelFieldValue(root, plan.index)
 	if err != nil {
 		return nil, fmt.Errorf("orm: read mutation field %s.%s: %w", descriptor.Name(), field.GoName(), err)
 	}
@@ -25,10 +26,7 @@ func mutationArgument(root reflect.Value, descriptor *model.Descriptor, field mo
 	if field.IsSoftDelete() && field.PointerDepth() == 0 && value.Interface().(time.Time).IsZero() {
 		return nil, nil
 	}
-	if value.CanInterface() && value.Type().Implements(driverValuerType) {
-		return value.Interface(), nil
-	}
-	if value.CanAddr() && value.Addr().CanInterface() && value.Addr().Type().Implements(driverValuerType) {
+	if plan.addressValuer && value.CanAddr() && value.Addr().CanInterface() {
 		return value.Addr().Interface(), nil
 	}
 	if !value.CanInterface() {

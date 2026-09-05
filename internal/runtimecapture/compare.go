@@ -54,7 +54,8 @@ type ServerRUComparisonPolicy struct {
 	MaximumMeanRatio float64 `json:"maximum_mean_ratio"`
 }
 
-// ServerRUComparisonSummary counts comparison results by category.
+// ServerRUComparisonSummary counts fingerprint comparison results by category.
+// Workload results are separate; Diagnostics includes both comparison levels.
 type ServerRUComparisonSummary struct {
 	Fingerprints int `json:"fingerprints"`
 	Passed       int `json:"passed"`
@@ -78,25 +79,33 @@ type FingerprintServerRUComparison struct {
 	Limit           float64                  `json:"limit"`
 }
 
-// ServerRUComparison contains deterministic fingerprint-sorted results for a
-// saved baseline and a current runtime analysis.
+// ServerRUComparison contains deterministic fingerprint-sorted results and
+// optional operation-level results for a baseline and current runtime analysis.
 type ServerRUComparison struct {
-	Policy  ServerRUComparisonPolicy        `json:"policy"`
-	Summary ServerRUComparisonSummary       `json:"summary"`
-	Entries []FingerprintServerRUComparison `json:"entries"`
+	Policy   ServerRUComparisonPolicy        `json:"policy"`
+	Summary  ServerRUComparisonSummary       `json:"summary"`
+	Entries  []FingerprintServerRUComparison `json:"entries"`
+	Workload *WorkloadComparison             `json:"workload,omitempty"`
 }
 
 // CompareServerRU compares current per-statement means with a validated saved
 // baseline without database access. A comparable fingerprint requires exact
 // measurement coverage and at least five successful samples on each side. A
 // regression exceeds both 130 percent of the baseline mean and the maximum
-// value observed in the baseline.
+// value observed in the baseline. Explicit workload metrics compare per-scope
+// RU sums and DML statement counts with the same policy, independently of
+// fingerprint results. Missing current workload declarations never pass.
 func CompareServerRU(analysis Analysis, baseline ServerRUBaseline) (ServerRUComparison, error) {
 	if err := baseline.Validate(); err != nil {
 		return ServerRUComparison{}, fmt.Errorf("compare ServerRU baseline: %w", err)
 	}
 	if err := validateCurrentServerRU(analysis.ServerRUByFingerprint); err != nil {
 		return ServerRUComparison{}, fmt.Errorf("compare current ServerRU: %w", err)
+	}
+	if analysis.Workload != nil {
+		if err := analysis.Workload.validate(); err != nil {
+			return ServerRUComparison{}, fmt.Errorf("compare current workload: %w", err)
+		}
 	}
 
 	baselineEntries := baseline.ServerRUByFingerprint
@@ -142,6 +151,7 @@ func CompareServerRU(analysis Analysis, baseline ServerRUBaseline) (ServerRUComp
 		}
 	}
 	comparison.Summary.Fingerprints = len(comparison.Entries)
+	comparison.Workload = compareWorkload(analysis.Workload, baseline.Workload)
 	return comparison, nil
 }
 
@@ -283,7 +293,7 @@ func (comparison ServerRUComparison) Diagnostics() []check.Diagnostic {
 			Suppressible: false,
 		})
 	}
-	return diagnostics
+	return append(diagnostics, comparison.Workload.diagnostics()...)
 }
 
 func formatServerRURegressionEvidence(entry FingerprintServerRUComparison) string {

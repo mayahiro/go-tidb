@@ -254,7 +254,7 @@ func TestAnalyzeAggregatesServerRUCostAndReportsFailures(t *testing.T) {
 	if got := analysis.ServerRUByFingerprint; !reflect.DeepEqual(got, wantByFingerprint) {
 		t.Fatalf("ServerRUByFingerprint = %#v, want %#v", got, wantByFingerprint)
 	}
-	if got, want := diagnosticCodes(analysis), []string{codeServerRUFailure}; !reflect.DeepEqual(got, want) {
+	if got, want := diagnosticCodes(analysis), []string{codeServerRUFailure, codeRepeatedUpdate, codeRepeatedUpdate}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
 	formatted := FormatStatistics(statistics)

@@ -193,7 +193,9 @@ affected, err := orm.DeleteWhere[Order](
 ```
 
 `DeleteWhere` rejects an empty predicate list and relation predicates. There
-is no unconditional typed delete operation.
+is no dedicated unconditional typed delete operation. A predicate can still
+match every row: an empty `NotIn` compiles to `TRUE`, while an empty `In`
+compiles to `FALSE`.
 
 When the model has a `soft_delete` field, both delete builders emit one
 `UPDATE` that assigns TiDB's `CURRENT_TIMESTAMP(6)` and adds
@@ -202,6 +204,12 @@ The server timestamp is not assigned back to the caller-owned Go model, and
 statement observation reports the actual operation as `UPDATE`. A model
 without the tag continues to use physical `DELETE`. Use explicit `RawExec`
 when an application policy requires a hard delete for a soft-delete model.
+
+With RuntimeCapture enabled at the operation boundary, `UpdateWhere` and
+`DeleteWhere` record bind-free scalar predicate metadata. Run
+`tidbgo analyze runtime.jsonl --schema schema.sql` for index-prefix diagnostics
+without per-query registration. See [conditional write index checks](observability.md#conditional-write-index-checks)
+for supported predicates, uncertain coverage, and the DML EXPLAIN safety boundary.
 
 ## Pure many-to-many relations
 
