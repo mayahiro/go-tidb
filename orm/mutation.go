@@ -188,7 +188,7 @@ func (q *InsertManyQuery[T]) compile() (compiledMutation, error) {
 	return compiledMutation{
 		modelName:  descriptor.Name(),
 		descriptor: descriptor,
-		sql:        renderInsert(descriptor.TableName(), plan.insertFields, len(q.values)),
+		sql:        renderInsert(descriptor.TableName(), plan.insertFields, len(q.values), nil),
 		arguments:  arguments,
 	}, nil
 }
@@ -490,9 +490,9 @@ func mutationModelValue[T any](value *T, operation string) (reflect.Value, *mode
 	return reflect.ValueOf(value).Elem(), descriptor, nil
 }
 
-func renderInsert(table string, fields []mutationFieldPlan, rows int) string {
+func renderInsert(table string, fields []mutationFieldPlan, rows int, updateFields []mutationFieldPlan) string {
 	var query strings.Builder
-	query.Grow(insertSQLCapacity(table, fields, rows))
+	query.Grow(insertSQLCapacity(table, fields, rows) + onDuplicateKeyUpdateCapacity(updateFields))
 	query.WriteString("INSERT INTO ")
 	writeQuotedIdentifier(&query, table)
 	query.WriteString(" (")
@@ -516,6 +516,7 @@ func renderInsert(table string, fields []mutationFieldPlan, rows int) string {
 		}
 		query.WriteByte(')')
 	}
+	writeOnDuplicateKeyUpdate(&query, updateFields)
 	return query.String()
 }
 

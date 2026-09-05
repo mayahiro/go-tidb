@@ -165,6 +165,60 @@ It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
 current run. A pre-existing fixture table causes a failure and is not removed.
 Do not run multiple suites concurrently against the same database
 
+## Write compiler benchmarks
+
+Measure single-row CRUD, selected-field updates, and value/pointer bulk writes:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$/^upsert_values$/^rows_24580$' -benchtime=3s -cpuprofile /tmp/tidbgo-write.cpu -memprofile /tmp/tidbgo-write.mem -o /tmp/tidbgo-write.test
+go -C tools tool pprof -top /tmp/tidbgo-write.test /tmp/tidbgo-write.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-write.test /tmp/tidbgo-write.mem
+```
+
+The offline workload includes native scalars, nullable pointers, byte slices,
+time values, and a pointer-receiver `driver.Valuer`. It covers 100 rows and
+24,580 rows: three full eight-column batches followed by a seven-row remainder.
+It creates a builder for each operation, uses warmed model metadata, and never
+calls `Value` or a database. It measures compiler and argument preparation cost,
+not driver conversion, network latency, or RU.
+
+The mutation plan caches field access and Valuer receiver selection, plus one
+default single-row upsert SQL per model. Bulk execution reuses equal-sized batch
+SQL within that execution; it retains no global cache keyed by batch size or
+selected fields. Each batch has its own argument slice.
+
+## Connected write baseline
+
+Use the dedicated database described above and a fixed iteration count:
+
+```sh
+TIDBGO_TEST_DSN='<user>:<password>@tcp(<host>:4000)/tidbgo_test_ci?tls=true&parseTime=true&interpolateParams=true' \
+  go -C integration test -run '^$' \
+    -bench '^BenchmarkTiDBCloudStarterWrite$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+This opt-in benchmark creates only `tidbgo_it_write_benchmark`, refuses an
+existing table, and drops the table it created during cleanup. It uses one
+pinned connection and preserves the DSN's `interpolateParams` and
+`clientFoundRows` settings. Compare runs with identical driver settings.
+
+The matrix covers single inserts, new/changed/unchanged upserts, 100-row
+inserts, and mixed/changed/unchanged bulk upserts, with 32-byte and 2,048-byte
+JSON string payloads. The table has an `AUTO_RANDOM` primary key and a separate
+unique key. Every trial resets rows and seeds the same conflicts outside the
+timer, so repeated upserts do not silently turn into a different workload.
+Warm-up and RU samples verify final values, affected rows, existing IDs, and
+the generated-ID assignment contract.
+
+Latency and Go allocations exclude setup, validation, and RU queries. Three
+separate post-timing samples report `ServerRU/op` and `ServerRU/row`; each uses
+automatic collection immediately after the target statement on the pinned
+connection. `statements/op` counts target DML only. Setup, seeding, validation,
+RU collection, and cleanup consume additional resources outside these metrics.
+These are autocommit DML measurements, not explicit-transaction totals or
+billing RU. Keep iteration counts bounded because every trial writes real data.
+
 ## EXPLAIN client benchmark
 
 Measure the client-side cost of compiling one typed SELECT and scanning a

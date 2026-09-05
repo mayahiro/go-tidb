@@ -167,6 +167,63 @@ scalar terminal、slice predicate、application-selected DECIMAL type、temporal
 
 同じdatabaseに対する複数suiteを同時実行しません
 
+## Write compiler benchmark
+
+単行CRUD、field指定更新、valueとpointerのbulk writeを計測します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkMutationWrite$/^upsert_values$/^rows_24580$' -benchtime=3s -cpuprofile /tmp/tidbgo-write.cpu -memprofile /tmp/tidbgo-write.mem -o /tmp/tidbgo-write.test
+go -C tools tool pprof -top /tmp/tidbgo-write.test /tmp/tidbgo-write.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-write.test /tmp/tidbgo-write.mem
+```
+
+offline workloadはnative scalar、nullable pointer、byte slice、time value、pointer receiverの `driver.Valuer` を含みます
+
+100行と24,580行を対象とし、後者は8 columnのfull batch 3個と残り7行へ分割します
+
+各operationでbuilderを作成し、warm済みmodel metadataを使用します
+
+`Value` の実行とDB接続は行わず、compilerと引数準備のcostを計測し、driver conversion、network latency、RUは含みません
+
+mutation planはfield accessとValuer receiverの選択、およびmodelごとに1個のdefault single-row Upsert SQLをcacheします
+
+bulk実行は同じ行数のbatch SQLをその実行内で再利用し、batch sizeや選択fieldをkeyとするglobal cacheは保持しません
+
+各batchのargument sliceは独立しています
+
+## Connected write baseline
+
+前述の専用databaseと固定iteration数を使用します
+
+```sh
+TIDBGO_TEST_DSN='<user>:<password>@tcp(<host>:4000)/tidbgo_test_ci?tls=true&parseTime=true&interpolateParams=true' \
+  go -C integration test -run '^$' \
+    -bench '^BenchmarkTiDBCloudStarterWrite$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+```
+
+opt-in benchmarkは `tidbgo_it_write_benchmark` だけを作成し、既存tableを拒否し、自身で作成したtableをcleanup時に削除します
+
+1個のpinned connectionを使用し、DSNの `interpolateParams` と `clientFoundRows` を維持するため、比較時はdriver設定を揃えます
+
+32 byteと2,048 byteのJSON string payloadで、単行Insert、新規・変更・同値のUpsert、100行Insert、混在・変更・同値のBulk Upsertを計測します
+
+tableは `AUTO_RANDOM` primary keyと別のunique keyを持ちます
+
+trialごとにtimer外でrowをresetして同じconflictをseedし、反復Upsertが別のworkloadへ変わることを防ぎます
+
+warm-upとRU sampleでは最終値、affected row数、既存ID、generated IDの反映contractを検証します
+
+latencyとGo allocationにsetup、検証、RU queryを含めません
+
+計測後の独立した3 sampleから `ServerRU/op` と `ServerRU/row` を報告し、各sampleはpinned connectionで対象statement直後に自動収集します
+
+`statements/op` は対象DMLだけを数え、setup、seed、検証、RU収集、cleanupはこれらのmetric外で追加resourceを消費します
+
+autocommit DMLの計測であり、明示transaction全体または請求RUを表しません
+
+各trialは実データを書き込むためiteration数を制限してください
+
 ## EXPLAIN client benchmark
 
 1個のtyped SELECTをcompileし、3 operatorのTiDB row-format planをscanするclient-side costを計測します
