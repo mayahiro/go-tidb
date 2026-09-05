@@ -203,6 +203,21 @@ writes can be acknowledged with a reason:
 tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
 ```
 
+Repeated `UpdateUserEmail`, `ClaimJobLease`, `FailJobLease`, or `RestoreVideo`
+calls with the same fingerprint and terminal in one scope produce the advisory
+`RUN005` warning with the same attempt, duration, and RU coverage evidence.
+No changes to these functions, schema snapshot, or `--workload` flag are needed.
+This is a review candidate, not a recommendation to combine leases or atomic
+increments: preserve per-row values, concurrency conditions, execution order,
+and transaction boundaries, and check retries before measuring a rewrite.
+`DeleteVideo` is excluded even though its soft delete executes an UPDATE.
+Intentional repetitions can be acknowledged without disabling operation-level
+budget regression checks:
+
+```sh
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
+```
+
 `ExplainUserByEmail` asks TiDB for the default row-format plan of a typed
 SELECT without executing that root SELECT.
 `ExplainAnalyzeUserByEmail` explicitly executes the same typed SELECT and

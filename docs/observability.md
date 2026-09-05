@@ -243,6 +243,7 @@ tidbgo analyze runtime.jsonl --schema schema.sql
 tidbgo analyze current-runtime.jsonl --baseline server-ru-baseline.json
 tidbgo analyze runtime.jsonl --suppress 'RUN002=intentional polling'
 tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 ```
 
 The CLI streams statement records instead of retaining the complete artifact
@@ -273,7 +274,14 @@ query registry nor a schema snapshot. All `InsertMany` and `UpsertMany` calls
 are excluded, including unsplit and one-row calls, as are automatic batch
 splits, relation mutations, raw SQL, UPDATE, and DELETE.
 
-Evidence includes the captured attempt count, reported error count, summed
+`RUN005` reports two or more typed `Update` or `UpdateWhere` attempts with
+the same capture, scope, SQL fingerprint, operation, and terminal. It is also
+a suppressible warning that does not fail `analyze`, and needs no schema,
+baseline, `--workload`, or query registration. Raw SQL, relation mutations,
+batches, and soft-delete `Delete`/`DeleteWhere` are excluded even when their
+SQL is an UPDATE. An explicit restore through `UpdateWhere` is included.
+
+Both rules include the captured attempt count, reported error count, summed
 target duration, and already-collected statement ServerRU with its sample and
 collection-error counts. Missing RU is shown as `unavailable`, not zero;
 partial totals cover only measured attempts. Known samples may also carry a
@@ -282,11 +290,25 @@ attempts are included, so the count proves neither distinct input rows nor
 committed changes. The group-local RU total excludes BEGIN/COMMIT and is not
 billed RU or an estimate of bulk savings.
 
-Review generated-ID use, execution order, transaction boundaries, and
+For `RUN004`, review generated-ID use, execution order, transaction boundaries, and
 intentional retries before replacing the calls with `InsertMany` or
 `UpsertMany`, then measure latency and RU. The diagnostic never batches writes,
 changes transaction boundaries, or collects additional RU. RU collection
 remains opt-in through `CollectServerRU` at capture time.
+
+For `RUN005`, review whether assignments and predicates allow fewer
+statements without changing row-specific values, lease conditions, atomic
+increments, execution order, transaction boundaries, or intentional retries.
+Bind values are absent, so a shared fingerprint does not prove equal
+assignments, distinct targets, or combinable writes. `UpdateWhere` can already
+affect multiple rows, and zero affected rows do not exclude an attempt.
+The diagnostic does not identify the call site or prove a loop, higher RU, or
+potential savings. Measure latency, RU, and results before making a change.
+
+These advisory warnings and [operation-level baselines](workload-baselines.md)
+serve different purposes: `RUN005` suggests review of repetitions even without
+a baseline; `RU003` checks measured per-operation regression. Suppressing an
+intentional repetition does not suppress a budget regression.
 
 Bind values are never written to the runtime artifact. SQL templates can still
 contain literals supplied through raw SQL, and database errors can contain

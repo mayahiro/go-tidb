@@ -132,11 +132,12 @@ validation plus deterministic merge, but excludes JSON decoding and report
 encoding.
 
 The repeated-write benchmark analyzes 1,000 prebuilt statement records per
-iteration. It covers single inserts, upserts with known RU, isolated scopes,
-and excluded bulk splits. Record construction, JSON decoding, report encoding,
-and runtime capture are outside the timed region. Compare allocations as well
-as analysis time; aggregation retains one counter set per distinct write group,
-not every attempt or RU sample.
+iteration. It covers single inserts, upserts with known RU, primary-key
+updates, conditional updates with known RU, isolated insert/update scopes,
+and excluded bulk splits and soft deletes. Record construction, JSON decoding,
+report encoding, and runtime capture are outside the timed region. Compare
+allocations as well as analysis time; aggregation retains one counter set per
+distinct write group, not every attempt or RU sample.
 
 The mutation-index benchmark compares one and 1,000 records of one SQL
 fingerprint against a pre-parsed schema. Index checks are cached per

@@ -88,7 +88,7 @@ func TestAnalyzeReaderAcceptsMutationShapeAndKeepsServerRUIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(analysis.Diagnostics) != 1 || analysis.Diagnostics[0].Code != querycheck.CodeMutationMissingIndex || analysis.Statistics.MutationIndexCheckedStatements != 2 {
+	if len(analysis.Diagnostics) != 2 || analysis.Diagnostics[0].Code != querycheck.CodeMutationMissingIndex || analysis.Diagnostics[1].Code != codeRepeatedUpdate || analysis.Statistics.MutationIndexCheckedStatements != 2 {
 		t.Fatalf("streamed analysis = %#v", analysis)
 	}
 	if len(analysis.ServerRUByFingerprint) != 1 || analysis.ServerRUByFingerprint[0].Fingerprint != "s1:write" || analysis.ServerRUByFingerprint[0].Total != 2.5 || analysis.ServerRUByFingerprint[0].Samples != 2 {

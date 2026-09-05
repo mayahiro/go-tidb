@@ -89,6 +89,16 @@ scopeとcoverageの条件は[操作単位のbaseline](workload-baselines_ja.md)�
 
 全てのMany callと自動batch分割を除外し、schemaやquery登録は不要で、writeの書き換えやtransaction境界の変更は行いません
 
+`RUN005` は同一capture scope・fingerprint・terminalのtypedな `Update` または `UpdateWhere` の2回以上の試行を、同じ件数・時間・RUのevidenceとともにreportします
+
+suppress可能なwarningであり、loop、異なるrow、一括化可能性、回帰の証明ではありません
+
+raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、batchは対象外です
+
+行ごとの値、lease条件、atomic increment、実行順、transaction境界、retryを確認してからoperationを変更してください
+
+schema、baseline、`--workload`、application codeの追加は不要です
+
 `--schema` を指定するとcaptured `UpdateWhere` と `DeleteWhere` のscalar predicateもindexと照合します
 
 `QRY008` はsupportedな先頭列boundに対応するindexがない場合のwarning、`QRY009` は未確定coverageのinfo、`QRY006` はschema不足のerrorです
@@ -170,6 +180,7 @@ planの選択はdata distributionとstatisticsに依存するため、plan diagn
 ```sh
 tidbgo analyze runtime.jsonl --suppress 'RUN002=bounded retry loop'
 tidbgo analyze runtime.jsonl --suppress 'RUN004=single inserts are required for generated IDs'
+tidbgo analyze runtime.jsonl --suppress 'RUN005=intentional per-row lease boundary'
 tidbgo lint . --suppress 'SRC001=full row is intentionally returned'
 ```
 

@@ -435,6 +435,9 @@ The analyzer applies `QRY002` through `QRY005` to captured query shapes and
 reports possible N+1 SELECTs. `RUN004` reports repeated single-row `Insert` or
 `Upsert` attempts within one scope, with counts and any collected ServerRU;
 it excludes Many calls and never batches writes automatically.
+`RUN005` similarly reports repeated typed `Update` or `UpdateWhere` attempts
+for review, without claiming they can be combined. It excludes soft-delete
+terminals and raw SQL and needs no extra application instrumentation.
 Supplying an offline TiDB `CREATE TABLE` snapshot
 also applies the `QRY006` and `QRY007` physical index checks. Coverage counters
 separate all captured statements from statements that carried a query shape

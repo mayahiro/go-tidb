@@ -81,6 +81,10 @@ fingerprintのcheckは引き続き有効で、SQL形状が変わった場合はw
 
 新しいSQLと実測を確認してからbaselineを置き換えてください、workload modeはrewriteを自動承認しません
 
+候補warningの `RUN005` はこのbudgetと独立してtypedな `Update`／`UpdateWhere` の反復をreportします
+
+`--workload` やbaselineは不要で、一括化可能性や回帰を証明しません、理由付きでsuppressしても `RU003` と `RU004` は無効になりません
+
 ## 出力と制約
 
 解析JSONは `workload` にscope数、計測済みscopeとmeasurement coverage、DMLとtransaction controlの件数、scopeごとの `total`、`mean`、`min`、`max` を持つ `server_ru` と `statement_count` を追加します
@@ -101,7 +105,7 @@ capture/scope ID、operationごとのrecord、冗長な成功・error counterは
 
 runtime artifactのformatとSQL生成は変更しません
 
-CLIはofflineで動作し、`--workload` がある場合だけscopeごとのcounterを保持します、全statementやRU sampleは保持せず、memoryは異なるscopeと既存の解析identityの数に応じて増加します
+CLIはofflineで動作し、`--workload` がある場合だけscopeごとのbudget counterを保持します、全statementやRU sampleは保持せず、memoryは異なるscopeと既存の解析identityの数に応じて増加します
 
 budgetはrecognized SELECT、INSERT、UPSERT、UPDATE、DELETEを含みます
 

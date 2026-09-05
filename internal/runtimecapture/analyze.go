@@ -19,6 +19,7 @@ const (
 	codePossibleNPlusOne   = "RUN002"
 	codeServerRUFailure    = "RUN003"
 	codeRepeatedWrite      = "RUN004"
+	codeRepeatedUpdate     = "RUN005"
 )
 
 // Statistics summarizes the captured execution set without claiming database
@@ -282,7 +283,7 @@ func (analyzer *analyzer) add(record Record) {
 	if record.Mutation != nil {
 		analyzer.analyzeMutation(record)
 	}
-	if repeatedWriteCandidate(record) {
+	if repeatedWriteCandidate(record) || repeatedUpdateCandidate(record) {
 		analyzer.addRepeatedWrite(record, scope)
 	}
 	if !nPlusOneCandidate(record) {

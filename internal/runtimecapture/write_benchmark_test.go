@@ -17,6 +17,10 @@ func BenchmarkAnalyzeRepeatedWrites(b *testing.B) {
 		{name: "upsert_ru", operation: "UPSERT", terminal: "upsert", ru: true},
 		{name: "separate_scopes", operation: "INSERT", terminal: "insert", scopes: true},
 		{name: "bulk", operation: "INSERT", terminal: "insert_many", batch: true},
+		{name: "update", operation: "UPDATE", terminal: "update"},
+		{name: "update_where_ru", operation: "UPDATE", terminal: "update_where", ru: true},
+		{name: "update_separate_scopes", operation: "UPDATE", terminal: "update", scopes: true},
+		{name: "soft_delete", operation: "UPDATE", terminal: "delete"},
 	} {
 		b.Run(test.name, func(b *testing.B) {
 			records := make([]Record, 1000)
@@ -27,6 +31,12 @@ func BenchmarkAnalyzeRepeatedWrites(b *testing.B) {
 				records[index].SQL = "INSERT INTO `users` (`email`) VALUES (?)"
 				if test.operation == "UPSERT" {
 					records[index].SQL += " ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)"
+				}
+				if test.operation == "UPDATE" {
+					records[index].SQL = "UPDATE `users` SET `email` = ? WHERE `id` = ?"
+					if test.terminal == "delete" {
+						records[index].SQL = "UPDATE `users` SET `deleted_at` = CURRENT_TIMESTAMP WHERE `id` = ?"
+					}
 				}
 				if test.ru {
 					records[index].ServerRU = &ServerRU{Known: true, Value: float64(index%5) / 4, AuxiliaryStatements: 1}

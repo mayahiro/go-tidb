@@ -78,11 +78,45 @@ func TestApplicationWorkloadBaselineFromActualRuntimeCapture(t *testing.T) {
 				if output.Workload == nil || output.Workload.CompleteScopes != test.scopes || output.Workload.Samples != test.scopes*test.calls || output.Workload.StatementCount.Mean != float64(test.calls) || output.Workload.ServerRU.Mean != float64(test.calls)*1.25 || output.ServerRUComparison.Summary.Regressions != 0 || output.ServerRUComparison.Summary.Unavailable != 0 {
 					t.Fatalf("analysis = %#v", output)
 				}
-				if test.wantStatus == int(exitDiagnosticFailure) && (output.Summary.Errors != 1 || output.Diagnostics[0].Code != "RU003" || output.Diagnostics[0].Suppressible || !output.ServerRUComparison.Workload.StatementsRegressed || !output.ServerRUComparison.Workload.ServerRURegressed) {
+				// Repetition warnings are independent of the operation budget:
+				// unchanged intentional repetitions pass, increased calls fail.
+				updates, regressions := 0, 0
+				for _, diagnostic := range output.Diagnostics {
+					switch diagnostic.Code {
+					case "RUN005":
+						updates++
+						if !diagnostic.Suppressible {
+							t.Fatalf("update warning is not suppressible: %#v", diagnostic)
+						}
+					case "RU003":
+						regressions++
+						if diagnostic.Suppressible {
+							t.Fatalf("budget regression is suppressible: %#v", diagnostic)
+						}
+					default:
+						t.Fatalf("unexpected diagnostic: %#v", diagnostic)
+					}
+				}
+				if updates != test.scopes || output.Summary.Warnings != test.scopes {
+					t.Fatalf("missing per-scope update warnings: %#v", output)
+				}
+				if test.wantStatus == int(exitDiagnosticFailure) && (output.Summary.Errors != 1 || regressions != 1 || !output.ServerRUComparison.Workload.StatementsRegressed || !output.ServerRUComparison.Workload.ServerRURegressed) {
 					t.Fatalf("missing operation regression: %#v", output)
 				}
 			}
 		})
+	}
+	// Suppressing intentional UPDATE repetitions must not waive the operation
+	// regression, even when every per-statement mean still matches its baseline.
+	suppressed := runApplicationAt(t, directory, captureWorkloadExample(t, 5, 20),
+		"analyze", "--workload", "update-users-2", "--baseline", "baseline.json", "--json",
+		"--suppress", "RUN005=intentional per-row updates")
+	var suppressedOutput runtimeAnalysisJSON
+	if err := json.Unmarshal(suppressed.Stdout(), &suppressedOutput); err != nil {
+		t.Fatal(err)
+	}
+	if suppressed.Status() != exitDiagnosticFailure || len(suppressed.Stderr()) != 0 || suppressedOutput.Summary.Errors != 1 || suppressedOutput.Summary.Warnings != 0 || suppressedOutput.Summary.Suppressed != 5 || len(suppressedOutput.Diagnostics) != 1 || suppressedOutput.Diagnostics[0].Code != "RU003" {
+		t.Fatalf("suppression hid operation regression: %#v stderr=%s", suppressedOutput, suppressed.Stderr())
 	}
 	// An explicit current declaration is required; scope IDs and a saved name
 	// cannot tell the CLI what the current application operation means.

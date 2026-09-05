@@ -115,8 +115,6 @@ func TestAnalyzeRepeatedWriteExclusions(t *testing.T) {
 		{"preload", func(record *Record) { record.Source = SourcePreload }},
 		{"missing_terminal", func(record *Record) { record.Terminal = "" }},
 		{"mismatched_terminal", func(record *Record) { record.Terminal = "upsert" }},
-		{"update", func(record *Record) { record.Operation, record.Terminal = "UPDATE", "update" }},
-		{"update_where", func(record *Record) { record.Operation, record.Terminal = "UPDATE", "update_where" }},
 		{"delete", func(record *Record) { record.Operation, record.Terminal = "DELETE", "delete" }},
 		{"delete_where", func(record *Record) { record.Operation, record.Terminal = "DELETE", "delete_where" }},
 	} {
@@ -254,11 +252,16 @@ func repeatedWriteRecord(sequence uint64, operation string) Record {
 
 func onlyRepeatedWriteDiagnostic(t *testing.T, analysis Analysis) check.Diagnostic {
 	t.Helper()
+	return onlyRuntimeWriteDiagnostic(t, analysis, codeRepeatedWrite)
+}
+
+func onlyRuntimeWriteDiagnostic(t *testing.T, analysis Analysis, code string) check.Diagnostic {
+	t.Helper()
 	var result *check.Diagnostic
 	for _, diagnostic := range analysis.Diagnostics {
-		if diagnostic.Code == codeRepeatedWrite {
+		if diagnostic.Code == code {
 			if result != nil {
-				t.Fatalf("more than one RUN004: %#v", analysis.Diagnostics)
+				t.Fatalf("more than one %s: %#v", code, analysis.Diagnostics)
 			}
 			result = &diagnostic
 		} else if diagnostic.Code != codeServerRUFailure {
@@ -266,7 +269,7 @@ func onlyRepeatedWriteDiagnostic(t *testing.T, analysis Analysis) check.Diagnost
 		}
 	}
 	if result == nil {
-		t.Fatalf("missing RUN004: %#v", analysis.Diagnostics)
+		t.Fatalf("missing %s: %#v", code, analysis.Diagnostics)
 	}
 	return *result
 }

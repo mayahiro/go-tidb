@@ -131,7 +131,7 @@ comparison benchmarkは一致する1件と10,000件のbaselineとcurrent fingerp
 
 write反復のbenchmarkはiterationごとに構築済みstatement record 1,000件を解析します
 
-単行insert、known RU付きupsert、独立scope、対象外のbulk分割を含みます
+単行insert、known RU付きupsert、主キーupdate、known RU付き条件update、insertとupdateの独立scope、対象外のbulk分割とsoft deleteを含みます
 
 record構築、JSON decode、report encode、runtime captureは計測区間に含めません
 

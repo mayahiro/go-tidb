@@ -88,6 +88,11 @@ Fingerprint checks remain active. SQL-shape changes still produce `RU002`,
 even if workload totals improve. Review the new SQL and measurements before
 replacing the baseline; workload mode does not automatically accept rewrites.
 
+The advisory `RUN005` warning reports repeated typed `Update`/`UpdateWhere`
+attempts independently of these budgets. It needs no `--workload` or baseline
+and does not prove batchability or regression. Suppressing it with a reason
+does not waive `RU003` or `RU004`.
+
 ## Output and limits
 
 Analysis JSON adds `workload`, containing scope counts, complete-scope and
@@ -106,9 +111,9 @@ passing fingerprint summary does not imply a passing workload comparison.
 The baseline stays at format version `1` and adds optional `workload` metrics.
 It stores no capture/scope IDs, operation records, or redundant success/error
 counters. Runtime artifact format and SQL generation are unchanged. The CLI
-works offline and retains per-scope counters only when `--workload` is present;
-it does not retain every statement or RU sample. Memory grows with distinct
-scopes and other existing analysis identities.
+works offline and retains per-scope budget counters only when `--workload` is
+present; it does not retain every statement or RU sample. Memory grows with
+distinct scopes and other existing analysis identities.
 
 The budget includes recognized SELECT, INSERT, UPSERT, UPDATE, and DELETE
 statements. BEGIN, COMMIT, and ROLLBACK events are counted separately, but their
