@@ -116,6 +116,13 @@ func ListClipsWithGenres(ctx context.Context, executor orm.QueryExecutor) ([]Cli
 	).All(ctx, executor)
 }
 
+// UpdateClipGenrePriorities updates each existing edge by its primary key,
+// preserving its identity, relation keys, and other payload fields. Supply a
+// transaction executor when all automatically split statements must be atomic.
+func UpdateClipGenrePriorities(ctx context.Context, executor orm.ExecExecutor, values []*ClipGenre) (int64, error) {
+	return orm.UpdateMany(values, "Priority").Exec(ctx, executor)
+}
+
 // JobLease is an application-owned conditional-update model.
 type JobLease struct {
 	model.Meta `tidbgo:"table=job_leases"`

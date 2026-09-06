@@ -68,10 +68,16 @@ func TestMutationPlansPreserveCustomArgumentsAndNullableFields(t *testing.T) {
 				}
 			}
 		}
-		_, got, err := Update(&row, "Value", "Address", "Pointer", "Deep", "DeletedAt").Build()
 		updateWant := []any{want[2], want[3], want[4], want[5], nil, row.ID}
-		if err != nil || !reflect.DeepEqual(got, updateWant) {
-			t.Fatalf("update embeddedNil=%t: arguments = %#v, error = %v, want %#v", embeddedNil, got, err, updateWant)
+		for name, build := range map[string]func() (string, []any, error){
+			"update":          Update(&row, "Value", "Address", "Pointer", "Deep", "DeletedAt").Build,
+			"update_values":   UpdateMany([]mutationPlanRow{row}, "Value", "Address", "Pointer", "Deep", "DeletedAt").Build,
+			"update_pointers": UpdateMany([]*mutationPlanRow{&row}, "Value", "Address", "Pointer", "Deep", "DeletedAt").Build,
+		} {
+			_, got, err := build()
+			if err != nil || !reflect.DeepEqual(got, updateWant) {
+				t.Fatalf("%s embeddedNil=%t: arguments = %#v, error = %v, want %#v", name, embeddedNil, got, err, updateWant)
+			}
 		}
 	}
 }

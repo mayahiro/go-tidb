@@ -188,7 +188,7 @@ suiteはconnection poolを1 connectionに制限します
 
 scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTのstatement observationを確認します
 
-固定された18個の `tidbgo_it_*` tableを作成し、現在のrunが作成したtableだけを削除します
+接続testは固定名の `tidbgo_it_*` fixture tableを作成し、現在のrunが作成したtableだけを削除します
 
 既存fixture tableを検出した場合は削除せず失敗します
 
@@ -218,6 +218,55 @@ mutation planはfield accessとValuer receiverの選択、およびmodelごと�
 bulk実行は同じ行数のbatch SQLをその実行内で再利用し、batch sizeや選択fieldをkeyとするglobal cacheは保持しません
 
 各batchのargument sliceは独立しています
+
+## 行ごとのUPDATEの検証とbenchmark
+
+一括UPDATEの正当性testはnullable値、JSON、applicationが選択したDECIMAL値、複合主キーと上位bitが立つunsigned主キー、soft delete、restore、UNIQUE key error、未存在row、transactionのcommitとrollbackを確認します
+
+`interpolateParams` と `clientFoundRows` の両設定を検証し、今回作成した3個の `tidbgo_it_update_many*` tableだけを削除します
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^TestTiDBCloudStarterUpdateMany$' -count=1 -v ./tidbcloud
+```
+
+DBなしでclient側compiler costを比較し、同じ入力と選択fieldに対する単行 `Update` 反復と `UpdateMany` をprofileします
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^loop$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-loop.cpu -memprofile /tmp/tidbgo-update-loop.mem -o /tmp/tidbgo-update-loop.test
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^values$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-many.cpu -memprofile /tmp/tidbgo-update-many.mem -o /tmp/tidbgo-update-many.test
+go -C tools tool pprof -top /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.mem
+go -C tools tool pprof -top /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.mem
+```
+
+offline workloadはwarm済みmetadata、native scalar、pointer、byte slice、time、実行しないcustom Valuerを使います
+
+選択fieldと全writable field、value／pointer slice、自動分割を含み、networkやRUではなくcompileとargument準備を測定します
+
+CASE statementはkey引数を反復するため、statement数やallocation数が減っても、全projectionでallocation byte数が減るとは限りません
+
+接続比較は新規 `tidbgo_it_update_shapes` tableに1000行を作成し、既存tableがあれば拒否します
+
+Update loop、`UpdateMany`、事前compile済みの派生table JOIN、hint付きJOINを比較し、各sampleは25、100、500行をtransaction内で更新してrollbackします
+
+costを限定するためiteration数を固定してください
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterUpdateMany$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+# SQL-only shape comparison, one warm-up and three samples per case:
+go -C integration test -run '^TestTiDBCloudStarterUpdateManySQLShapes$' -count=1 -v ./tidbcloud
+```
+
+`ns/op` はDMLだけを測定し、setup、BEGIN、ROLLBACK、結果確認、別試行で3回取得するsame-session RU sampleを除外します
+
+`DML-ServerRU/op` はcaptured UPDATE RUの合計であり、請求RUやcommit済みtransaction全体のcostではありません
+
+`DML-statements/op` にtransaction controlとRU probeは含まず、fixtureには更新対象のsecondary indexがないため、実applicationのindex、値、並行性、batch、commit経路で再測定してから一般化してください
+
+普遍的な速度やRUの閾値をtestで要求しません
 
 ## Connected write baseline
 

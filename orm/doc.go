@@ -11,7 +11,7 @@
 // parameter batches. Read-only via relations reuse payload-bearing edge
 // mappings and support edge-field ordering without hydrating the edge.
 // Insert, automatically bounded InsertMany, Upsert,
-// UpsertMany, Update, UpdateWhere, Delete, and DeleteWhere provide typed model
+// UpsertMany, Update, UpdateMany, UpdateWhere, Delete, and DeleteWhere provide typed model
 // writes. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many
 // junction writes. Transaction groups application-defined work using a

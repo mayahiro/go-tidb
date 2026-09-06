@@ -28,7 +28,7 @@ func TestAnalyzeRepeatedUpdates(t *testing.T) {
 			if diagnostic.Message != "One runtime scope attempted the same typed UPDATE statement 2 times; repetition does not prove that the calls can be combined" {
 				t.Fatalf("message = %q", diagnostic.Message)
 			}
-			for _, want := range []string{"assignments and predicates", "row-specific values", "lease conditions", "atomic increments", "execution order", "transaction boundaries", "intentional retries", "measure latency and RU"} {
+			for _, want := range []string{"assignments and predicates", "UpdateMany", "distinct primary-key", "row-specific values", "lease conditions", "atomic increments", "execution order", "transaction boundaries", "intentional retries", "measure latency and RU"} {
 				if !strings.Contains(diagnostic.Suggestion, want) {
 					t.Errorf("suggestion = %q, want %q", diagnostic.Suggestion, want)
 				}

@@ -93,9 +93,11 @@ scopeとcoverageの条件は[操作単位のbaseline](workload-baselines_ja.md)�
 
 suppress可能なwarningであり、loop、異なるrow、一括化可能性、回帰の証明ではありません
 
-raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、batchは対象外です
+raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、1行の呼び出しと自動分割を含む `UpdateMany` は対象外です
 
 行ごとの値、lease条件、atomic increment、実行順、transaction境界、retryを確認してからoperationを変更してください
+
+`UpdateMany` はprimary keyで異なるrowを指し、rowごとの追加条件やapplicationが定めた更新順を要求しない場合の候補です
 
 schema、baseline、`--workload`、application codeの追加は不要です
 

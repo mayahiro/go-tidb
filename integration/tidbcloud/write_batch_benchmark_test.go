@@ -142,7 +142,7 @@ func (metrics *writeBenchmarkObservation) observe(event orm.StatementEvent) {
 		}
 		metrics.commits++
 		return
-	case orm.StatementInsert, orm.StatementUpsert:
+	case orm.StatementInsert, orm.StatementUpsert, orm.StatementUpdate:
 		if metrics.commits != 0 {
 			metrics.err = fmt.Errorf("unexpected DML after COMMIT in write benchmark")
 			return

@@ -41,6 +41,8 @@ It demonstrates the current struct-first foundation:
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
+- Row-specific `UpdateMany` for edge priorities, without replacing edge rows
+  or assigning their primary and relation keys
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
@@ -109,6 +111,10 @@ many-to-many `Preload("Roles")`, both without generated relation code.
 ordered by `ClipGenres.Priority` and target `ID` in one secondary SELECT.
 `ClipGenres` stays unloaded unless requested separately. Read or write the edge
 model directly when the application needs its payload or identity.
+`UpdateClipGenrePriorities` writes each edge's own `Priority` through its
+existing primary key using `UpdateMany`, accepting pointer slices and inheriting
+the supplied executor's transaction and observer settings. The input must
+identify distinct database rows; missing edges are not inserted.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
 `ListVideosWithDeleted` includes deleted root rows, and

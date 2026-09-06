@@ -188,8 +188,9 @@ fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
 ServerRU reads, plus statement observation spanning root and preload SELECTs
 
-It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
-current run. A pre-existing fixture table causes a failure and is not removed.
+The connected tests create fixed `tidbgo_it_*` fixture tables and drop only
+tables created by the current run. A pre-existing fixture table causes a
+failure and is not removed.
 Do not run multiple suites concurrently against the same database
 
 ## Write compiler benchmarks
@@ -214,6 +215,59 @@ The mutation plan caches field access and Valuer receiver selection, plus one
 default single-row upsert SQL per model. Bulk execution reuses equal-sized batch
 SQL within that execution; it retains no global cache keyed by batch size or
 selected fields. Each batch has its own argument slice.
+
+## Row-specific UPDATE verification and benchmarks
+
+The bulk UPDATE correctness test covers nullable values, JSON, application-selected
+DECIMAL values, composite and high-bit unsigned primary keys, soft deletion,
+restore, unique-key errors, missing rows, and transaction commit and rollback.
+It tests both settings of `interpolateParams` and `clientFoundRows` and removes
+only its three newly created `tidbgo_it_update_many*` tables:
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^TestTiDBCloudStarterUpdateMany$' -count=1 -v ./tidbcloud
+```
+
+Compare client-side compiler costs without a database, then profile the same
+input and selected fields through individual `Update` calls and `UpdateMany`:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^loop$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-loop.cpu -memprofile /tmp/tidbgo-update-loop.mem -o /tmp/tidbgo-update-loop.test
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^values$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-many.cpu -memprofile /tmp/tidbgo-update-many.mem -o /tmp/tidbgo-update-many.test
+go -C tools tool pprof -top /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.mem
+go -C tools tool pprof -top /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.mem
+```
+
+The offline workload uses warmed metadata, native scalars, pointers, byte
+slices, time values, and a custom Valuer that is never executed. It covers
+selected and all writable fields, value and pointer slices, and automatic
+splits. It measures compilation and argument preparation, not network or RU.
+CASE statements repeat key arguments, so fewer statements or allocations do
+not guarantee fewer allocated bytes for every projection.
+
+The connected comparison uses a newly created `tidbgo_it_update_shapes` table
+with 1,000 rows, refusing any pre-existing table. It compares Update loops,
+`UpdateMany`, and precompiled derived-table JOIN alternatives, including a
+hinted JOIN. Each sample updates 25, 100, or 500 rows in a transaction and rolls
+back afterward. Use fixed iteration counts to bound its cost:
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterUpdateMany$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+# SQL-only shape comparison, one warm-up and three samples per case:
+go -C integration test -run '^TestTiDBCloudStarterUpdateManySQLShapes$' -count=1 -v ./tidbcloud
+```
+
+`ns/op` times DML only. Setup, BEGIN, ROLLBACK, result verification, and the
+three separate same-session RU samples are excluded. `DML-ServerRU/op` is the
+sum of captured UPDATE RU, not billed RU or a committed transaction's total
+cost. `DML-statements/op` excludes transaction controls and RU probes. The
+fixture has no updated secondary indexes; remeasure the actual application's
+indexes, values, concurrency, batching, and commit path before generalizing.
+No test asserts a universal speed or RU threshold.
 
 ## Connected write baseline
 

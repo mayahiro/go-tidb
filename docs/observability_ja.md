@@ -315,6 +315,10 @@ query registryとschema snapshotは不要です
 
 raw SQL、Relation mutation、batch、soft-deleteの `Delete`／`DeleteWhere` はSQLがUPDATEでも除外しますが、`UpdateWhere` による明示的なrestoreは含みます
 
+`UpdateMany` は1行の呼び出しと自動分割を含めて対象外です
+
+RUN005はprimary keyで異なるrowを特定してrowごとの値を更新する場合に `UpdateMany` の検討を提案しますが、追加条件や更新順を破棄できるとは断定しません
+
 どちらのruleもcaptured attempt数、報告されたerror数、target durationの合計、取得済みstatement ServerRUとsample数およびcollection error数をevidenceに含みます
 
 RU未取得はゼロではなく `unavailable` と表示し、部分取得の合計は計測できたattemptだけを対象にします

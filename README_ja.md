@@ -337,6 +337,7 @@ affected, err = orm.Upsert(&user).Exec(ctx, db)
 affected, err = orm.UpsertMany(users).Exec(ctx, db)
 affected, err = orm.Update(&user).Exec(ctx, db)
 affected, err = orm.Update(&user, "Email").Exec(ctx, db)
+affected, err = orm.UpdateMany(users, "Email").Exec(ctx, db)
 affected, err = orm.UpdateWhere[JobLease](
     orm.Set("LockOwner", owner),
     orm.Set("LockUntil", lockUntil),
@@ -365,7 +366,7 @@ err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
 })
 ```
 
-`InsertMany(values)` と `UpsertMany(values)` は `[]Model` と `[]*Model` のどちらも受け取ります
+`InsertMany(values)`、`UpsertMany(values)`、`UpdateMany(values)` は `[]Model` と `[]*Model` のどちらも受け取ります
 
 `Exec` はTiDBの65535 placeholder上限で自動分割し、`Build` は1個の実行可能statementを表す契約を維持します
 
@@ -380,6 +381,10 @@ runtime captureが実際の分割を自動的に記録します
 empty predicate listからtyped DELETEを生成できません
 
 `*sql.DB`、`*sql.Conn`、`*sql.Tx` はmutation executor boundaryを実装します
+
+`UpdateMany(values, "Email")` は各modelの値を、それぞれのprimary keyで特定した既存rowへ書き込み、存在しないrowの追加や生成IDの代入は行いません
+
+入力はDB上で異なるrowを指す必要があり、複合primary key、NULL、`Update` と同じsoft-delete scopeに対応します
 
 pure many-to-many Relation mutationはcode generationなしでexported Relation field名とkey valueを使います
 

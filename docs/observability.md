@@ -295,6 +295,11 @@ baseline, `--workload`, or query registration. Raw SQL, relation mutations,
 batches, and soft-delete `Delete`/`DeleteWhere` are excluded even when their
 SQL is an UPDATE. An explicit restore through `UpdateWhere` is included.
 
+`UpdateMany` is excluded, including one-row calls and automatic splits. For
+distinct primary-key rows with row-specific values, RUN005 suggests reviewing
+`UpdateMany`; this does not prove that conditional checks or execution order
+can be discarded.
+
 Both rules include the captured attempt count, reported error count, summed
 target duration, and already-collected statement ServerRU with its sample and
 collection-error counts. Missing RU is shown as `unavailable`, not zero;

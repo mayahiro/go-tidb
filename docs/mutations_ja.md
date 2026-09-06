@@ -120,7 +120,7 @@ affected, err := orm.Update(&user, "Email").Exec(ctx, db)
 
 primary key、`auto_random`、`computed` fieldはupdate対象に指定できません
 
-soft-delete modelの `Update` と `UpdateWhere` はdefaultでactive rowだけにmatchします
+soft-delete modelの `Update`、`UpdateMany`、`UpdateWhere` はdefaultでactive rowだけにmatchします
 
 deletion fieldをclearしてrestoreする場合は `WithDeleted` を使います
 
@@ -183,7 +183,73 @@ Relation predicate、assignmentの重複、primary key、`auto_random`、`comput
 
 無条件のtyped updateはありません
 
-typed SQL expressionは `Increment` による同じcolumnへのadditionだけとし、他のexpressionやjoined updateには `RawExec` を使います
+callerが指定するtyped SQL expressionは `Increment` による同じcolumnへのadditionに対応し、他のexpressionやjoined updateには `RawExec` を使います
+
+### 行ごとの値を使う一括更新
+
+既存のprimary-key rowへそれぞれ異なる値を書き込む場合は `UpdateMany` を使います
+
+```go
+edges := []*ClipGenre{
+    {ID: firstEdgeID, Priority: 1},
+    {ID: secondEdgeID, Priority: 2},
+}
+affected, err := orm.UpdateMany(edges, "Priority").Exec(ctx, db)
+```
+
+`[]Model` と `[]*Model` のどちらも受け入れ、Go field名の選択は `Update` と同じ意味になります
+
+field名を省略するとzero valueを含む全てのmapped writable non-primary-key fieldを更新し、primary key、`auto_random`、`computed` fieldは変更できません
+
+通常のnil pointerはSQL `NULL`、applicationが選択した `driver.Valuer` 型はbind argumentになり、builderとcompilerは `Value` を実行しません
+
+全primary-key componentで既存rowだけを特定し、存在しないrowの追加、別UNIQUE keyの衝突をupsertとして解決する処理、入力modelの変更は行いません
+
+1行のbatchには通常のprimary-key UPDATEを使い、複数行にはfieldごとのCASE式とprimary-key IN predicateを使います
+
+複合主キーではrow-value INを使用し、派生tableとのJOINを行わず、全ての値をbind argumentとして維持します
+
+SQL仕様は[TiDBのUPDATE reference](https://docs.pingcap.com/tidbcloud/sql-statement-update/)を参照してください
+
+入力はDBのkey比較で異なるrowを指す必要があります
+
+nil pointer要素、nilのnative key component、完全一致するnative primary keyの重複は、batch境界をまたぐ場合も最初のstatement実行前に拒否します
+
+compilerはDBのcollationや時刻精度を把握せず、custom Valuer keyも評価しないため、それらの変換で異なる入力が同一DB rowを指さないことはcallerが保証します
+
+keyは複数のCASE分岐と最終predicateでbindするため、custom argumentの変換は安定した値を返す必要があります
+
+これは集合操作であり、順序付きのupdate loopではありません
+
+applicationが定義した更新順やrowごとのlease、versionなどの追加条件は扱わず、それらが必要な場合は `UpdateWhere` または明示的な更新列を維持します
+
+UNIQUE constraintのerrorはretryや無視を行わず返すため、更新順に依存するUNIQUE keyの入れ替えには使用しません
+
+`Exec` は65535 placeholderの上限で自動分割します
+
+primary-key component数を `k`、更新field数を `f` とすると、複数行のstatementは `rows * ((k + 1) * f + k)` 個をbindします
+
+1 statementの行数は `max(1, floor(65535 / ((k + 1) * f + k)))` となり、1行のstatementだけは `k + f` 個をbindして、その数も上限以下である必要があります
+
+追加の固定行数上限はなく、直前batchのSQLだけを保持し、各batchのargument sliceは独立させ、入力全体のnative key重複検査には入力key数に比例するmemoryを使います
+
+empty sliceはno-opで、`Build` は1 statementを返し、分割が必要な場合はerrorになります
+
+`Exec` はDBが報告したaffected rowsの合計を返し、未存在、同値、soft-delete済みのrowやdriverのmatched-row設定により、入力件数とは異なる場合があります
+
+後続batchが失敗すると完了済みstatementのaffected countと失敗batchのrow範囲を返すため、全batchのatomic性が必要なら `Transaction` またはcaller所有のtransactionを使います
+
+暗黙のtransactionやrowごとのretryは行いません
+
+defaultではsoft-delete済みrowを除外し、nilのpointer timestampまたはzeroのvalue-form timestampでrestoreする場合は `UpdateMany(values, "DeletedAt").WithDeleted()` を使います
+
+observer、logger、RuntimeCapture、opt-in ServerRU収集は既存のexecutorまたはcontext設定を継承し、試行した各batchをterminal `update_many` として自動記録します
+
+自動分割はRUN005の更新loopには含みません
+
+CASE式はprimary-key引数を反復するため、更新fieldが多い場合、allocation回数が減っても単行更新の反復より引数用memoryが増える場合があります
+
+statement数の削減は全workloadでのRUやlatency改善を保証せず、大きなCASE式、更新するindex、data量、transaction境界も影響するため、代表的な実dataで操作全体を計測してください
 
 ## Delete
 

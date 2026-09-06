@@ -332,6 +332,7 @@ affected, err = orm.Upsert(&user).Exec(ctx, db)
 affected, err = orm.UpsertMany(users).Exec(ctx, db)
 affected, err = orm.Update(&user).Exec(ctx, db)
 affected, err = orm.Update(&user, "Email").Exec(ctx, db)
+affected, err = orm.UpdateMany(users, "Email").Exec(ctx, db)
 affected, err = orm.UpdateWhere[JobLease](
     orm.Set("LockOwner", owner),
     orm.Set("LockUntil", lockUntil),
@@ -360,7 +361,7 @@ err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
 })
 ```
 
-`InsertMany(values)` and `UpsertMany(values)` accept either `[]Model` or
+`InsertMany(values)`, `UpsertMany(values)`, and `UpdateMany(values)` accept either `[]Model` or
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
 limit, while `Build` continues to represent one executable statement. Runtime
 capture records the actual split automatically.
@@ -369,6 +370,11 @@ when every batch must be atomic. `Transaction` uses default `database/sql`
 options and does not retry its callback. Every typed mutation supports offline
 `Build`. An empty predicate list cannot produce a typed DELETE. `*sql.DB`,
 `*sql.Conn`, and `*sql.Tx` implement the mutation executor boundary.
+
+`UpdateMany(values, "Email")` writes each model's own value to its existing
+primary-key row; it never inserts missing rows or assigns generated IDs.
+Inputs must identify distinct database rows. It supports composite primary
+keys, NULL values, and the same soft-delete scope as `Update`.
 
 Pure many-to-many relation mutations use the exported relation field name and
 key values without generated code. `AddRelation` emits one multi-row junction

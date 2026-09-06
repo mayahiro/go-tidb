@@ -99,9 +99,12 @@ query registration, and never rewrites writes or changes transaction boundaries
 the same fingerprint and terminal in one capture scope, with the same count,
 duration, and RU evidence. It is a suppressible warning, not proof of a loop,
 distinct rows, batchability, or a regression. Raw SQL, soft-delete
-`Delete`/`DeleteWhere`, relation mutations, and batches are excluded
+`Delete`/`DeleteWhere`, relation mutations, and `UpdateMany` calls (including
+one-row calls and automatic splits) are excluded
 Review row-specific values, lease conditions, atomic increments, ordering,
 transaction boundaries, and retries before changing the operation
+`UpdateMany` is a candidate only for distinct primary-key rows whose updates
+do not require additional per-row conditions or an application-defined order
 It needs no schema, baseline, `--workload`, or additional application code
 
 With `--schema`, captured `UpdateWhere` and `DeleteWhere` also receive a

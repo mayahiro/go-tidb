@@ -28,6 +28,7 @@ func TestObserveAppliesToMutationTerminals(t *testing.T) {
 		{"upsert", Upsert(&value).Exec},
 		{"upsert many", UpsertMany([]bulkMutationModel{value}).Exec},
 		{"update", Update(&value).Exec},
+		{"update many", UpdateMany([]bulkMutationModel{value}).Exec},
 		{"update where", UpdateWhere[bulkMutationModel](Set("Value", int64(11))).Where(Equal("ID", int64(7))).Exec},
 		{"delete", Delete(&value).Exec},
 		{"delete where", DeleteWhere[bulkMutationModel](Equal("ID", int64(7))).Exec},
