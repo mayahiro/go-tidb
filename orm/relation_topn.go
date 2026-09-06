@@ -45,9 +45,13 @@ type relationTopNMetadata struct {
 }
 
 type relationTopNJunctionMetadata struct {
-	tableName     string
-	sourceColumns []string
-	targetColumns []string
+	tableName        string
+	sourceColumns    []string
+	targetColumns    []string
+	uniquePair       bool
+	via              bool
+	softDeleteColumn string
+	nonNullColumns   []string
 }
 
 type relationTopNMetadataKey struct {
@@ -87,6 +91,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 
 	plan := analysis.plan
 	metadata := plan.metadata
+	via := metadata.junction != nil && metadata.junction.via
 	inline := inlinePreloadPlans(preloads)
 	if len(inline) != 0 {
 		nextAlias := 1
@@ -98,7 +103,13 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	if selection.pagination.offsetSet {
 		argumentCount++
 	}
-	sqlCapacity += len(base.sql) + len(relationTopNLeadingHint) + inlinePreloadSQLCapacity(inline) + 256
+	sqlCapacity += len(base.sql) + inlinePreloadSQLCapacity(inline) + 256
+	if via {
+		sqlCapacity += len("STRAIGHT_")
+	} else {
+		sqlCapacity += len(relationTopNLeadingHint)
+	}
+	sqlCapacity += relationTopNJunctionScopeCapacity(metadata.junction, relationTopNAssociationAlias)
 	associationTable := metadata.target.TableName()
 	associationColumns := metadata.targetColumns
 	predicateAlias := relationTopNAssociationAlias
@@ -114,7 +125,9 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	var query strings.Builder
 	query.Grow(sqlCapacity)
 	query.WriteString("SELECT ")
-	query.WriteString(relationTopNLeadingHint)
+	if !via {
+		query.WriteString(relationTopNLeadingHint)
+	}
 	writeRelationTopNColumns(&query, inlinePreloadRootAlias, base.scanPlan.columns)
 	writeInlinePreloadColumns(&query, inline)
 	query.WriteString(" FROM (SELECT ")
@@ -146,6 +159,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 		writePreloadSoftDeletePredicate(&query, predicateAlias, softDeleteField.ColumnName())
 		wroteWhere = true
 	}
+	wroteWhere = writeRelationTopNJunctionScope(&query, relationTopNAssociationAlias, metadata.junction, wroteWhere)
 	targetPredicates := predicateCompiler{
 		descriptor: metadata.target,
 		query:      &query,
@@ -179,7 +193,14 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	}
 	query.WriteString(") AS ")
 	writeQuotedIdentifier(&query, relationTopNKeyAlias)
-	query.WriteString(" JOIN ")
+	if via {
+		// TiDB can reject alias-based LEADING for a derived table of nullable
+		// edge keys. Constrain this inner pair directly, leaving the join
+		// algorithm and subsequent inline preloads to the optimizer.
+		query.WriteString(" STRAIGHT_JOIN ")
+	} else {
+		query.WriteString(" JOIN ")
+	}
 	writeQuotedIdentifier(&query, descriptor.TableName())
 	query.WriteString(" AS ")
 	writeQuotedIdentifier(&query, inlinePreloadRootAlias)
@@ -232,9 +253,6 @@ func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (
 		len(selection.predicates),
 		rootSoftDelete,
 	)
-	if outcome == relationtopn.OutcomeNeedsMetadata && candidate.relation.Via() != "" {
-		outcome = relationtopn.OutcomeReadThrough
-	}
 	if outcome != relationtopn.OutcomeNeedsMetadata {
 		decision := relationtopn.Decision(outcome, relationName)
 		return relationTopNAnalysis{
@@ -247,6 +265,9 @@ func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (
 	metadata, err := relationTopNMetadataFor(descriptor, candidate.relation)
 	if err != nil {
 		return relationTopNAnalysis{}, err
+	}
+	if metadata.junction != nil && !metadata.junction.uniquePair {
+		return relationTopNAnalysis{candidate: true, relationName: relationName, reason: relationtopn.ReasonEdgeUniqueness}, nil
 	}
 	outcome = relationtopn.DecideMetadata(
 		metadata.sourceIsRootPrimaryKey,
@@ -335,9 +356,86 @@ func compileRelationTopNMetadata(source *model.Descriptor, relation model.Relati
 			tableName:     junction.TableName(),
 			sourceColumns: junctionSourceColumns,
 			targetColumns: junctionTargetColumns,
+			uniquePair:    true,
+		}
+		if relation.Via() != "" {
+			metadata.junction.via = true
+			edge, err := relationEdgeDescriptor(source, relation)
+			if err != nil {
+				return nil, err
+			}
+			metadata.junction.uniquePair = relationTopNEdgePairUnique(edge, junctionSourceColumns, junctionTargetColumns)
+			if field, exists := edge.SoftDeleteField(); exists {
+				metadata.junction.softDeleteColumn = field.ColumnName()
+			}
+			// Unlike pure junctions, via edges can contain NULL keys. Remove
+			// them before LIMIT or COUNT even when no target lookup remains.
+			for _, columns := range [][]string{junctionSourceColumns, junctionTargetColumns} {
+				for _, column := range columns {
+					if !relationTopNFieldNameExists(metadata.junction.nonNullColumns, column) {
+						metadata.junction.nonNullColumns = append(metadata.junction.nonNullColumns, column)
+					}
+				}
+			}
 		}
 	}
 	return metadata, nil
+}
+
+func relationTopNEdgePairUnique(edge *model.Descriptor, sourceColumns, targetColumns []string) bool {
+	if relationtopn.KeyCoveredByPair(relationFieldColumns(edge.PrimaryKeyFields()), sourceColumns, targetColumns) {
+		return true
+	}
+	for _, key := range edge.UniqueKeys() {
+		if relationtopn.KeyCoveredByPair(relationFieldColumns(key.Fields()), sourceColumns, targetColumns) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeRelationTopNJunctionScope(query *strings.Builder, qualifier string, junction *relationTopNJunctionMetadata, wroteWhere bool) bool {
+	if junction == nil {
+		return wroteWhere
+	}
+	if junction.softDeleteColumn != "" {
+		writeRelationTopNWhereSeparator(query, wroteWhere)
+		writePreloadSoftDeletePredicate(query, qualifier, junction.softDeleteColumn)
+		wroteWhere = true
+	}
+	for _, column := range junction.nonNullColumns {
+		writeRelationTopNWhereSeparator(query, wroteWhere)
+		writeMaybeQualifiedIdentifier(query, qualifier, column)
+		query.WriteString(" IS NOT NULL")
+		wroteWhere = true
+	}
+	return wroteWhere
+}
+
+func relationTopNJunctionScopeCapacity(junction *relationTopNJunctionMetadata, qualifier string) int {
+	if junction == nil {
+		return 0
+	}
+	qualifierWidth := 0
+	if qualifier != "" {
+		qualifierWidth = len(qualifier) + len("``.")
+	}
+	capacity := 0
+	if junction.softDeleteColumn != "" {
+		capacity += len(" WHERE `` IS NULL") + qualifierWidth + len(junction.softDeleteColumn)
+	}
+	for _, column := range junction.nonNullColumns {
+		capacity += len(" WHERE `` IS NOT NULL") + qualifierWidth + len(column)
+	}
+	return capacity
+}
+
+func writeRelationTopNWhereSeparator(query *strings.Builder, wroteWhere bool) {
+	if wroteWhere {
+		query.WriteString(" AND ")
+	} else {
+		query.WriteString(" WHERE ")
+	}
 }
 
 func relationTopNUniqueGoNames(descriptor *model.Descriptor) [][]string {
@@ -369,8 +467,8 @@ func relationTopNUniquePerRoot(metadata *relationTopNMetadata, predicates []pred
 	fixedByRelation := metadata.targetKeyGoNames
 	if metadata.junction != nil {
 		// A many-to-many target key varies by root. One complete target unique
-		// key must therefore be fixed by Equal predicates; the pure-junction
-		// contract then makes the source-target pair unique.
+		// key must therefore be fixed by Equal predicates. The pure-junction
+		// contract or a declared via edge key proves source-target uniqueness.
 		fixedByRelation = nil
 	}
 	for _, key := range metadata.targetUniqueGoNames {

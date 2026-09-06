@@ -209,15 +209,16 @@ compilerは次の条件をmetadataから証明できるTopN shapeをさらに変
 - Relation source keyがroot primary key全体である
 - direct `has_many` ではtarget keyとconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全てcoverし、1 rootあたり最大1 target rowと証明できる
 - pure `many_to_many` ではconjunctiveな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique keyのいずれか1個を全て固定し、pure-junction contractによってsource-target pairが一意になる
+- `via` では同じtarget側の証明に加え、source-target pairがedgeのprimary keyまたは宣言済みcandidate unique keyの1個を完全にcoverする
 - `SeekAfter` とroot default soft-delete scopeがactiveではない
 
 このshapeではrelation-firstなderived query内で `LIMIT` を適用した後、対象keyだけをroot tableとinline to-one preloadへjoinします
 
-outer queryでは交換可能なderived keyとrootのinner join pairだけを `LEADING(tidbgo_k0, tidbgo_t0)` へ指定します
+directとpure many-to-manyではderived keyとrootのinner join pairへ `LEADING(tidbgo_k0, tidbgo_t0)` を指定します
 
-これによりLimit済みkey setをroot lookupのdriving sideとし、後続するinline `LEFT JOIN` preloadの順序は拘束しません
+viaではnullable edge keyに対するalias指定hintがTiDBで適用不能になる場合があるため、そのpairをbinary `STRAIGHT_JOIN` で指定します
 
-`LEADING` はjoin順を制御し、TiDBが適用可能なjoin algorithmを選択できるようにするため、compilerは `INL_JOIN` を自動付与しません
+どちらもLimit済みkeyをroot lookupの先行側とし、後続のinline `LEFT JOIN` preloadはそのpairの外に置きます。compilerは `INL_JOIN` を付与せず、join algorithmは固定しません
 
 direct `has_many` はtarget tableをfilterしてorderします
 
@@ -229,7 +230,15 @@ data sourceの近くへoperatorを移動する効果はTiDBの[TopN and Limit pu
 
 join順のsemanticsとhintが適用不能になる条件はTiDBの[`LEADING` documentation](https://docs.pingcap.com/tidb/stable/optimizer-hints/#leadingt1_name--tl_name-)を参照してください
 
+`STRAIGHT_JOIN` の仕様は[SELECT reference](https://docs.pingcap.com/tidb/stable/sql-statement-select/)を参照してください
+
 代表dataでは対象statementと同じconnection上で直後に `SHOW WARNINGS` を実行し、`ExplainAnalyze` も確認します
+
+証明済みのviaも同じedge-first方式を使い、edgeのdefault soft-delete scopeを維持し、NULLのsource／target keyをLimitより先に除外します
+
+targetにsoft-delete scopeや追加条件がある場合、そのlookupをLimitの内側に残します
+
+payloadや削除fieldが余分に含まれるkeyはpairの一意性を証明せず、`IS NULL` もunique-key componentをnon-NULL値へ固定する条件とは扱いません
 
 物理schemaにforeign keyがなくてもRelation mappingはdata integrity contractです
 
@@ -245,7 +254,9 @@ orphan sourceはroot joinより前にpage slotを消費する可能性があり�
 
 relation-only Countはroot joinを意図的に省略するため、orphan association rowを件数へ含める可能性があります
 
-duplicate direct edgeまたはpure-junction pairは件数を過大に数えるかroot resultを重複させる可能性があります
+最適化するvia edgeもnon-NULL keyの参照先sourceとtargetが存在し、宣言済みedge keyが物理constraintで保証されている必要があります
+
+duplicate direct edgeまたはjunction pairは件数を過大に数えるかroot resultを重複させる可能性があります
 
 workloadに応じてschema constraintまたはapplication writeでinvariantを維持してください
 
@@ -270,7 +281,9 @@ compilerは物理indexをofflineでinspectできません
 
 例えば `Equal("GenreID", ...)` と `OrderBy(Desc("ID"))` には `(genre_id, video_id)` が該当します
 
-pure `many_to_many` のjunctionには通常target columnの後にsource columnを置くindexが必要で、例えば `(role_id, user_id)` が該当します
+viaを含む `many_to_many` のjunctionには通常target columnの後にsource columnを置くindexが必要で、例えば `(role_id, user_id)` が該当します
+
+edgeのactiveなsoft-delete columnもequality prefixへ含め、例えば `(genre_id, deleted_at, video_id)` とします
 
 empty diagnostic listだけからplanを推定せず、実際のordered range scan、pushed Limit、RUを `ExplainAnalyze` で確認してください
 
@@ -402,7 +415,8 @@ compilerは次の条件を全て満たす場合にこの変換を適用します
 - default root soft-delete scopeがactiveではない
 - Relation source keyがroot primary key全体
 - Relation correlationとconjunctiveかつnon-nullな `Equal` predicateがtarget primary keyまたは宣言済みcandidate unique key全体をcoverし、rootごとのmatching association rowが最大1件であることを証明できる
-- pure `many_to_many` では全target predicateをjunctionのtarget key columnへ直接移せて、target soft-delete scopeがない
+- `many_to_many` では全target predicateをjunctionのtarget key columnへ直接移せて、target soft-delete scopeがない
+- `via` ではsource-target pairに含まれるedge keyの証明も必要とし、edgeのsoft-deleteとnon-NULL key条件を維持する
 
 例えば1つの `ClipGenre.GenreID` でfilterする `Clip` queryのCountは、relation-first TopN Listとは独立して次へcompileできます
 
@@ -639,11 +653,19 @@ rootの制約、key batch、nested target preloadには他のcollectionと同じ
 
 defaultではedgeとtarget両方のsoft-delete scopeを適用します。`PreloadWithDeleted()` はそのvia pathの両scopeを外しますが、nested pathや他のRelation pathには影響しません。各段を別々の削除条件で読む場合は明示的なedge queryを使います
 
-`Has("Genres", ...)` も両方のdefault scopeを適用し、条件を満たす場合は既存のsemi-join hintを付けた `EXISTS` を使います
+`Has("Genres", ...)` も両方のdefault scopeを適用します
 
-via Relationには現時点でrelation-first TopNとassociation-only Countのshortcutを適用しません。該当するordered Limit shapeではruntime解析とsource lintが理由付きの `QRY005` fallbackを返します
+例えばSQL schemaが対応するkeyを保証する場合、`ClipGenre.ClipID` と `ClipGenre.GenreID` に `unique=clip_genre` を宣言すると、`Has("Genres", Equal("ID", genreID))` から前述のedge-first TopNとassociation-only Countを使用でき、applicationがedge起点queryを書く必要はありません
 
-edge Relation自体を指定するqueryでは既存のcandidate-key最適化を維持します。最適なphysical planやRU削減を保証するものではないため、代表dataでRuntimeCaptureとEXPLAINを使って実測してください
+via mapping単独ではpairの一意性を宣言せず、重複排除も行いません
+
+証明できない場合は条件に応じたsemi-join hint付きEXISTSを維持し、ordered Limitの候補にはruntime解析とsource lintが具体的な `QRY005` fallback理由を返します
+
+schema snapshot付きindex検査ではedgeのsoft-delete columnもequality filterへ含めます
+
+edgeのprimary／candidate keyを含め、関係する全modelを `check.Schema` で検証し、Relation data integrity contractを維持してください
+
+最適なphysical planやRU削減を保証するものではないため、代表dataでRuntimeCaptureとEXPLAINを使って実測し、SQL fingerprintが変わった場合は確認してからRU baselineを更新してください
 
 ## 現在の境界
 

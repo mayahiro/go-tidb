@@ -162,7 +162,7 @@ func TestViaHasRetainsExistenceAndSoftDeleteChecks(t *testing.T) {
 		}
 	}
 	shape := queryShapeForTest(t, query)
-	if shape.Compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || shape.Compiler.Reason != relationtopn.ReasonReadThrough {
+	if shape.Compiler.Rewrite != queryshape.CompilerRewriteRelationTopNFallback || shape.Compiler.Reason != relationtopn.ReasonEdgeUniqueness {
 		t.Fatalf("compiler = %#v", shape.Compiler)
 	}
 	if shape.Predicates[0].Via != "Edges.Target" || shape.Predicates[0].JunctionSoftDeleteColumn != "deleted_at" {

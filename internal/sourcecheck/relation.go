@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mayahiro/go-tidb/internal/modelmeta"
+	"github.com/mayahiro/go-tidb/internal/relationtopn"
 )
 
 type sourceRelationKey struct {
@@ -26,7 +27,8 @@ type sourceResolvedRelation struct {
 	junctionTable         string
 	junctionSourceColumns []string
 	junctionTargetColumns []string
-	via                   string
+	junctionUniquePair    bool
+	junctionSoftDelete    string
 }
 
 func (relation sourceResolvedRelation) collection() bool {
@@ -90,6 +92,7 @@ func (analyzer *sourceAnalyzer) parseSourceRelation(modelKey sourceTypeKey, rela
 				relation.junctionTargetColumns = append(relation.junctionTargetColumns, pair.Left)
 			}
 			relation.junctionTable = declaration.Through
+			relation.junctionUniquePair = true
 			return relation, true
 		}
 		joins := declaration.Joins
@@ -122,11 +125,18 @@ func (analyzer *sourceAnalyzer) resolveSourceViaRelation(source sourceTypeKey, r
 	if !ok || second.kind != modelmeta.RelationBelongsTo || second.target != relation.target {
 		return sourceResolvedRelation{}, false
 	}
-	relation.via = via
 	relation.sourceFields = first.sourceFields
 	relation.targetFields = second.targetFields
+	edgeModel := analyzer.models[first.target]
+	relation.junctionUniquePair = relationtopn.KeyCoveredByPair(edgeModel.primaryFields, first.targetFields, second.sourceFields)
+	for _, key := range edgeModel.uniqueKeys {
+		if relationtopn.KeyCoveredByPair(key.fields, first.targetFields, second.sourceFields) {
+			relation.junctionUniquePair = true
+		}
+	}
 	if edge := analyzer.models[first.target].physical; edge != nil && !edge.ambiguous {
 		relation.junctionTable = edge.table
+		relation.junctionSoftDelete = edge.softDeleteColumn
 		for _, field := range first.targetFields {
 			relation.junctionSourceColumns = append(relation.junctionSourceColumns, edge.columns[field])
 		}

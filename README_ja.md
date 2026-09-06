@@ -257,11 +257,13 @@ admins, err := orm.Query[User]().
 
 通常は `EXISTS` を生成し、positive conjunctive contextのfiltered collection predicateにはTiDBの `SEMI_JOIN_REWRITE()` hintを追加します
 
-metadataから証明できる限定的な `has_many` またはpure `many_to_many`、root primary key order、positive Limitのshapeでは、Relation filterとLimitをroot rowのloadより先へ適用します
+metadataから証明できる限定的な `has_many` または `many_to_many`、root primary key order、positive Limitのshapeでは、Relation filterとLimitをroot rowのloadより先へ適用します
 
 1 rowの証明にはtarget primary key、またはRelationとconjunctiveな `Equal` predicateがfield全体を固定する明示的なcandidate unique keyを使用できます
 
-生成するouter queryは `LEADING(tidbgo_k0, tidbgo_t0)` でLimit済みderived keyをroot row lookupのdriving sideとし、join algorithm自体は固定しません
+payload付きviaではsource-target pairがedgeの宣言済みprimary keyまたはcandidate unique keyをcoverすることも必要です
+
+compilerはLimit済みkeyとrootのjoin順をdirectとpure many-to-manyでは `LEADING`、viaではbinary `STRAIGHT_JOIN` で指定し、join algorithm自体は固定しません
 
 orderedかつlimitedなcollection filterが `EXISTS` fallbackになる場合は、runtime shapeと静的に解決済みのsource terminalの両方で `QRY005` を出力します
 
@@ -269,7 +271,7 @@ schema-awareなruntime解析とsource解析はassociation index prefixの不足�
 
 unpaginatedな `Count` でdirectかつpositiveなcollection `Has` が1件、root predicateとactiveなroot soft-delete scopeがなく、同じ1 row性を証明できる場合はassociation tableを直接数えます
 
-pure many-to-many Countは全target predicateをjunctionのtarget key columnへ移せる場合だけjunctionを直接数え、それ以外のCount shapeはroot `EXISTS` を維持します
+証明済みviaを含むmany-to-many Countは全target predicateをjunctionのtarget key columnへ移せ、targetのsoft-delete scopeが不要な場合だけjunctionを直接数えます。viaの変換はedgeのsoft-delete scopeを維持してNULLのedge keyを除外し、それ以外のCount shapeはroot `EXISTS` を維持します
 
 このCount変換はrelation-first TopNと同じRelation data integrity contractを前提とします
 
@@ -663,7 +665,7 @@ application codeの実行、package load、DB接続、source変更は行いま�
 
 `--schema` を指定した場合、明示的なpositive `Limit`、同じ方向の `OrderBy`、conjunctiveな `Equal` filterだけを使う解決済みroot queryを物理index prefixと照合します
 
-条件を満たすdirect `has_many` とpure `many_to_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
+条件を満たすdirect `has_many` と証明済みviaを含む `many_to_many` のrelation-first TopN queryも同じ方法でassociation accessを照合します
 
 dynamicなRelation名、未解決のRelation metadata、range filter、mixed order、別statementで変更されたbuilderはuncertainとします
 
@@ -698,7 +700,7 @@ command helpは `tidbgo --help` で表示できます
 
 - scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
 - payload付きedgeを通る読み取り専用viaを含むdirectと `many_to_many` Relation predicateとpreloadはnested指定にも対応
-- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` とpure `many_to_many` pageはrelation-first TopN SQLを使う
+- filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` と証明済みviaを含む `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
 - source lintは関連するbuilder flowとRelation metadataを静的に解決できる場合だけ `QRY002` から `QRY005` を適用し、`--schema` を指定した高確度なrootとrelation-first ordered-limit shapeへ `QRY006` と `QRY007` を適用する

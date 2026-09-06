@@ -75,6 +75,36 @@ temporary fixture作成はtimer開始前に完了します
 
 5番目はpure many-to-many Relationとjunction metadataを解決し、同じcompiler decisionを適用して100個のjunction index accessを照合します
 
+## Via Relation compiler検証
+
+source-target candidate keyを宣言したpayload付きedgeの、metadata warm済みoffline SQL compileを計測します
+
+workloadはrelation-first List、association-only Count、root predicateによるfallbackです
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchmem -count=5
+via_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchtime=2s -cpuprofile "$via_profile_dir/cpu" -memprofile "$via_profile_dir/mem" -o "$via_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_profile_dir/orm.test" "$via_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_profile_dir/orm.test" "$via_profile_dir/mem"
+```
+
+DB実行とRUは含みません。変換後ListはEXISTSより大きいSQLになるため、compiler allocationとDB側の削減を分けて計測します
+
+後述する専用test DBを設定した後、次を実行します
+
+```sh
+go -C integration test -run '^TestTiDBCloudStarterVia(Compiler|Preload)$' -count=1 -v ./tidbcloud
+```
+
+compiler fixtureは200 parent、nullable edge key、surrogate edge primary key、source-target unique key、必須payload、soft-delete scopeを含みます
+
+reference EXISTS queryと結果、順序、件数を比較し、`SHOW WARNINGS` を確認し、`ExplainAnalyze` とhint付きEXISTS／rewriteの小規模な交互RU sampleを出力します
+
+latencyはstatement直後の同一connectionによるRU取得を含みません。testが作成した固定名tableだけを削除し、既存tableがあれば拒否します
+
+このtestはRUを消費します。小規模dataとoptimizer statisticsによる結果はproduction性能やRU regression gateの根拠とはせず、application側の実測とbaseline確認は別途行ってください
+
 ## Schema compatibility client benchmark
 
 CREATE TABLE parseとparse済みcatalogに対する1 model compatibility checkを計測します

@@ -235,7 +235,7 @@ func TestApplicationBuildsRelationFirstTopNQueryOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRecentClipsInGenreQuery() error = %v", err)
 	}
-	wantSQL := "SELECT /*+ LEADING(tidbgo_k0, tidbgo_t0) */ `tidbgo_t0`.`id`, `tidbgo_t0`.`title` FROM (SELECT `tidbgo_a0`.`clip_id` FROM `clip_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`clip_id` DESC LIMIT ?) AS `tidbgo_k0` JOIN `clips` AS `tidbgo_t0` ON (`tidbgo_k0`.`clip_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
+	wantSQL := "SELECT `tidbgo_t0`.`id`, `tidbgo_t0`.`title` FROM (SELECT `tidbgo_a0`.`clip_id` FROM `clip_genres` AS `tidbgo_a0` WHERE `tidbgo_a0`.`clip_id` IS NOT NULL AND `tidbgo_a0`.`genre_id` IS NOT NULL AND `tidbgo_a0`.`genre_id` = ? ORDER BY `tidbgo_a0`.`clip_id` DESC LIMIT ?) AS `tidbgo_k0` STRAIGHT_JOIN `clips` AS `tidbgo_t0` ON (`tidbgo_k0`.`clip_id` = `tidbgo_t0`.`id`) ORDER BY `tidbgo_t0`.`id` DESC"
 	if sqlText != wantSQL {
 		t.Fatalf("SQL = %q, want %q", sqlText, wantSQL)
 	}

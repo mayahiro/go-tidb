@@ -13,7 +13,7 @@ const (
 	ReasonSourceKey           = "the relation source key is not the complete root primary key"
 	ReasonOrder               = "ORDER BY does not exactly match the relation source key"
 	ReasonTargetUniqueness    = "no declared target primary or candidate unique key proves at most one matching row per root"
-	ReasonReadThrough         = "read-only via relations do not yet prove edge uniqueness and scope for relation-first TopN"
+	ReasonEdgeUniqueness      = "no declared edge primary or candidate unique key is covered by the via source-target pair"
 )
 
 // Facts contains facts extracted from either runtime query values or Go
@@ -55,7 +55,7 @@ const (
 	OutcomeSourceKey
 	OutcomeOrder
 	OutcomeTargetUniqueness
-	OutcomeReadThrough
+	OutcomeEdgeUniqueness
 )
 
 var outcomeReasons = [...]string{
@@ -67,7 +67,7 @@ var outcomeReasons = [...]string{
 	OutcomeSourceKey:           ReasonSourceKey,
 	OutcomeOrder:               ReasonOrder,
 	OutcomeTargetUniqueness:    ReasonTargetUniqueness,
-	OutcomeReadThrough:         ReasonReadThrough,
+	OutcomeEdgeUniqueness:      ReasonEdgeUniqueness,
 }
 
 // Decide applies relation-first TopN rules in compiler order.
@@ -125,6 +125,28 @@ func DecideMetadata(sourceIsRootPrimary, orderMatchesSourceKey, uniquePerRoot bo
 		return OutcomeTargetUniqueness
 	}
 	return OutcomeOptimized
+}
+
+// KeyCoveredByPair proves uniqueness for a non-NULL source-target pair when
+// its fields cover a complete declared key. Extra payload key components do
+// not count, including a soft-delete column constrained with IS NULL.
+func KeyCoveredByPair(key, source, target []string) bool {
+	if len(key) == 0 {
+		return false
+	}
+	for _, field := range key {
+		found := false
+		for _, part := range source {
+			found = found || part == field
+		}
+		for _, part := range target {
+			found = found || part == field
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // Decision converts one complete outcome to the neutral captured form.

@@ -147,7 +147,10 @@ fallback emits `QRY005`; an unresolved relation name, model, key, order, or
 builder flow remains uncertain instead of being guessed
 
 The source decision recognizes `unique=<group>` candidate keys in the same way
-as runtime model metadata. Source lint does not replace model-to-schema
+as runtime model metadata. For a read-only `via` mapping, it also checks that
+the edge source-target pair covers a complete declared primary or candidate
+key. An unproven pair remains a reasoned `QRY005` fallback, not an invalid
+relation. Source lint does not replace model-to-schema
 compatibility tests; use `check.Schema` to verify that every declaration is
 backed by an unconditional physical unique constraint
 
@@ -158,11 +161,12 @@ descriptor. It sends only resolved root shapes with a positive explicit
 same neutral index-prefix checker used by runtime analysis. A resolved
 relation-first TopN decision sends its association access to that checker as
 well. Direct `has_many` access checks target equality columns followed by the
-relation key. Pure `many_to_many` access checks junction target columns
-followed by junction source columns. The default active soft-delete column
+relation key. `many_to_many` access, including proven `via`, checks junction
+target columns followed by junction source columns. The default active soft-delete column
 participates in the equality prefix unless `WithDeleted` is resolved on the
 root query; a direct relation target soft-delete column participates in its
-association equality prefix
+association equality prefix. A via edge's active soft-delete column also
+participates in its junction equality prefix
 
 `index_patterns` counts ordered positive-limit candidates while
 `analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that

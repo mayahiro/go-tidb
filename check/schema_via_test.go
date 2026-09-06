@@ -77,3 +77,36 @@ func TestSchemaViaStillValidatesUsedColumnsAndIdentity(t *testing.T) {
 		}
 	}
 }
+
+type schemaViaUniqueParent struct {
+	model.Meta `tidbgo:"table=via_parents"`
+	ID         int64                 `tidbgo:",pk"`
+	Edges      []schemaViaUniqueEdge `tidbgo:"has_many,join=ID:ParentID"`
+	Targets    []schemaViaTarget     `tidbgo:"many_to_many,via=Edges.Target"`
+}
+
+type schemaViaUniqueEdge struct {
+	model.Meta `tidbgo:"table=via_edges"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	ParentID   int64 `tidbgo:",unique=pair"`
+	TargetID   int64 `tidbgo:",unique=pair"`
+	Priority   int
+	DeletedAt  *time.Time       `tidbgo:",soft_delete"`
+	Target     *schemaViaTarget `tidbgo:"belongs_to"`
+}
+
+func TestSchemaViaChecksEdgeCardinalityClaimsFromParent(t *testing.T) {
+	t.Parallel()
+	diagnostics := Schema[schemaViaUniqueParent](parseSchemaCheckCatalog(t, schemaViaSQL))
+	if len(diagnostics) != 1 || diagnostics[0].Code != codeCandidateKeyMismatch || diagnostics[0].Suppressible {
+		t.Fatalf("missing edge unique key: %#v", diagnostics)
+	}
+	valid := strings.Replace(schemaViaSQL, "KEY parent_position", "UNIQUE KEY pair_key (parent_id, target_id), KEY parent_position", 1)
+	if diagnostics := Schema[schemaViaUniqueParent](parseSchemaCheckCatalog(t, valid)); len(diagnostics) != 0 {
+		t.Fatalf("constrained edge: %#v", diagnostics)
+	}
+	invalidPK := strings.Replace(valid, "id BIGINT PRIMARY KEY AUTO_RANDOM", "id BIGINT NOT NULL AUTO_RANDOM, PRIMARY KEY (parent_id, target_id)", 1)
+	if codes := strings.Join(diagnosticCodes(Schema[schemaViaUniqueEdge](parseSchemaCheckCatalog(t, invalidPK))), ","); !strings.Contains(codes, codePrimaryKeyMismatch) {
+		t.Fatalf("missing primary-key mismatch: %s", codes)
+	}
+}

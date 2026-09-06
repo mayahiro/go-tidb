@@ -34,10 +34,10 @@ It demonstrates the current struct-first foundation:
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
-- Logical direct and pure many-to-many relation predicates, including TiDB
-  semi-join hints and relation-first TopN for eligible direct and pure
-  many-to-many collections, plus relation-only Count for eligible unpaginated
-  collection filters, without hydrating relations
+- Logical direct and many-to-many relation predicates, including TiDB
+  semi-join hints and relation-first TopN for eligible direct, pure
+  many-to-many, and payload-bearing `via` collections, plus relation-only Count
+  for eligible unpaginated collection filters, without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
@@ -84,14 +84,17 @@ and uncertainty counts even when no diagnostic is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
-`Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler uses the `ClipGenre` candidate key to prove one matching edge per
+`Clip`-rooted `Has("Genres", Equal("ID", ...))` syntax through its `via` relation
+while the compiler uses the `ClipGenre` candidate key to prove one matching edge per
 clip, then filters and limits `clip_genres` before loading root rows. Its outer
-`LEADING(tidbgo_k0, tidbgo_t0)` hint keeps that limited key set as the root
+binary `STRAIGHT_JOIN` keeps that limited key set as the root
 lookup's driving input. The edge keeps its surrogate primary key and required
 `Priority` payload. `CountClipsInGenre` starts from the same natural
 `Clip`-rooted relation predicate while the Count compiler reads only
 `clip_genres` when the candidate key proves one edge per Clip.
+The compiler excludes NULL edge keys before Limit or Count and preserves
+edge soft-delete scopes. Without a declared key proving pair uniqueness,
+the via relation remains valid but retains the EXISTS query.
 `BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
 many-to-many shape: fixing the complete Role primary key lets the compiler
 filter the junction directly and limit `(role_id, user_id)` access before

@@ -33,6 +33,7 @@ func compileRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 		sqlCapacity += len(softDeleteField.ColumnName()) + len("`` IS NULL")
 	}
 	sqlCapacity += len("SELECT COUNT(*) FROM `` WHERE ") + len(associationTable)
+	sqlCapacity += relationTopNJunctionScopeCapacity(metadata.junction, "")
 
 	var query strings.Builder
 	query.Grow(sqlCapacity)
@@ -55,6 +56,7 @@ func compileRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 		writePreloadSoftDeletePredicate(&query, "", softDeleteField.ColumnName())
 		wroteWhere = true
 	}
+	wroteWhere = writeRelationTopNJunctionScope(&query, "", metadata.junction, wroteWhere)
 	for index := range plan.predicate.children {
 		if wroteWhere {
 			query.WriteString(" AND ")
@@ -94,15 +96,14 @@ func analyzeRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 	if search.count != 1 || !search.first.direct || len(selection.predicates) != 1 {
 		return relationCountPlan{}, false, nil
 	}
-	if search.first.relation.Via() != "" {
-		return relationCountPlan{}, false, nil
-	}
-
 	metadata, err := relationTopNMetadataFor(descriptor, search.first.relation)
 	if err != nil {
 		return relationCountPlan{}, false, err
 	}
 	if !metadata.sourceIsRootPrimaryKey || !relationTopNUniquePerRoot(metadata, search.first.predicate.children) {
+		return relationCountPlan{}, false, nil
+	}
+	if metadata.junction != nil && !metadata.junction.uniquePair {
 		return relationCountPlan{}, false, nil
 	}
 

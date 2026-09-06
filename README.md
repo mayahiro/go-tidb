@@ -251,21 +251,25 @@ admins, err := orm.Query[User]().
 `Has` is a logical relation-existence predicate. The compiler normally emits
 `EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
 predicates in a positive conjunctive context. For a narrow, metadata-proven
-`has_many` or pure `many_to_many` + root-primary-key order + positive-limit
+`has_many` or `many_to_many` + root-primary-key order + positive-limit
 shape, it instead applies the relation filter and Limit before loading root
 rows. The one-row proof can use either the target primary key or an explicitly
 declared candidate unique key whose complete field set is fixed by the relation
-and conjunctive `Equal` predicates. The generated outer query uses
-`LEADING(tidbgo_k0, tidbgo_t0)` so the limited derived keys drive root-row
-lookups; it does not force a join algorithm. Runtime analysis emits
+and conjunctive `Equal` predicates. Payload-bearing `via` mappings additionally
+require a declared edge primary or candidate key covered by the source-target
+pair. The compiler orders the limited-key/root join with `LEADING` for direct
+and pure many-to-many paths, or binary `STRAIGHT_JOIN` for `via`; it does not
+force a join algorithm. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a
 missing association index prefix. An unpaginated `Count` with one direct
 positive collection `Has`, no root predicate or active root soft-delete scope,
-and the same one-row proof counts the association table directly. Pure
-many-to-many Count uses the junction directly only when every target predicate
-maps to its target-key columns. Other Count shapes retain the root `EXISTS`.
+and the same one-row proof counts the association table directly.
+Many-to-many Count, including proven `via` mappings, uses the junction directly
+only when every target predicate maps to its target-key columns and no target
+soft-delete scope is needed. Via rewrites preserve edge soft-delete scopes
+and exclude NULL edge keys. Other Count shapes retain the root `EXISTS`.
 The direct Count rewrite relies on the same documented relation-integrity
 contract as relation-first TopN. Pass target
 predicates to require a matching related row, or omit them for existence only.
@@ -639,8 +643,8 @@ use of an `All`, `First`, or `Only` result is understood within the same
 function. With `--schema`, resolved root queries using a positive explicit
 `Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
 checked for a matching physical index prefix. Eligible direct `has_many` and
-pure `many_to_many` relation-first TopN queries check the association access in
-the same way.
+`many_to_many` relation-first TopN queries, including proven `via` mappings,
+check the association access in the same way.
 Dynamic relation names, unresolved relation metadata, range filters, mixed
 ordering, and separately mutated builders remain uncertain. Projection
 analysis also leaves returned or passed results, aliases, and preloads
@@ -681,8 +685,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - Direct and `many_to_many` relation predicates and preloads may be nested,
   including read-only `via` mappings through payload-bearing edges.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,
-  and eligible ordered `has_many` and pure `many_to_many` pages use
-  relation-first TopN SQL.
+  and eligible ordered `has_many` and `many_to_many` pages, including proven
+  `via` mappings, use relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.

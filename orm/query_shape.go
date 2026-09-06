@@ -279,11 +279,16 @@ func buildQueryShapeIndexAccesses(
 			return nil
 		}
 		if analysis.plan.metadata.junction != nil {
+			junction := analysis.plan.metadata.junction
+			equalityColumns = append([]string(nil), junction.targetColumns...)
+			if junction.softDeleteColumn != "" {
+				equalityColumns = appendQueryShapeColumn(equalityColumns, junction.softDeleteColumn)
+			}
 			return []queryshape.IndexAccess{{
 				Kind:            queryshape.IndexAccessRelationTopN,
 				Table:           analysis.plan.metadata.junction.tableName,
 				Relation:        analysis.relationName,
-				EqualityColumns: append([]string(nil), analysis.plan.metadata.junction.targetColumns...),
+				EqualityColumns: equalityColumns,
 				OrderColumns:    append([]string(nil), analysis.plan.metadata.junction.sourceColumns...),
 			}}
 		}

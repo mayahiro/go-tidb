@@ -178,7 +178,7 @@ func BuildRecentUsersWithRoleQuery(roleID int64) (string, []any, error) {
 
 func clipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
-		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID)))
+		Where(orm.Has("Genres", orm.Equal("ID", genreID)))
 }
 
 func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
@@ -188,14 +188,14 @@ func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 		Limit(20)
 }
 
-// ListRecentClipsInGenre returns the newest clips having one matching
-// ClipGenre row through an explicitly supplied database/sql executor.
+// ListRecentClipsInGenre returns the newest clips in a genre through an
+// explicitly supplied executor. The compiler uses the via edge's unique key.
 func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
 	return recentClipsInGenreQuery(genreID).All(ctx, executor)
 }
 
-// CountClipsInGenre returns the total number of clips having one matching
-// ClipGenre row. The compiler can count the candidate-key-proven edge rows
+// CountClipsInGenre returns the total number of clips in a genre.
+// The compiler can count the candidate-key-proven via edge rows
 // directly without requiring a caller-authored junction query.
 func CountClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) (int64, error) {
 	return clipsInGenreQuery(genreID).Count(ctx, executor)

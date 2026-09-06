@@ -64,3 +64,24 @@ func TestDecideWaitsOnlyForMetadataFacts(t *testing.T) {
 		t.Fatalf("Decide() = %#v, want incomplete", result)
 	}
 }
+
+func TestKeyCoveredByPair(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		key    []string
+		source []string
+		target []string
+		want   bool
+	}{
+		{nil, []string{"P"}, []string{"T"}, false},
+		{[]string{"P", "T"}, []string{"P"}, []string{"T"}, true},
+		{[]string{"P"}, []string{"P"}, []string{"T"}, true},
+		{[]string{"Scope", "P", "T"}, []string{"Scope", "P"}, []string{"Scope", "T"}, true},
+		{[]string{"P", "T", "Payload"}, []string{"P"}, []string{"T"}, false},
+		{[]string{"P", "T", "DeletedAt"}, []string{"P"}, []string{"T"}, false},
+	} {
+		if got := KeyCoveredByPair(test.key, test.source, test.target); got != test.want {
+			t.Fatalf("key=%v pair=%v/%v got=%t want=%t", test.key, test.source, test.target, got, test.want)
+		}
+	}
+}

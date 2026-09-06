@@ -81,6 +81,40 @@ TopN compiler decision, and checks 100 association index accesses
 The fifth resolves pure many-to-many relation and junction metadata, applies
 the same compiler decision, and checks 100 junction index accesses
 
+## Via relation compiler verification
+
+Measure warmed offline SQL compilation for a payload-bearing edge with a
+declared source-target candidate key. The workloads cover relation-first
+List, association-only Count, and a root-predicate fallback:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchmem -count=5
+via_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchtime=2s -cpuprofile "$via_profile_dir/cpu" -memprofile "$via_profile_dir/mem" -o "$via_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_profile_dir/orm.test" "$via_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_profile_dir/orm.test" "$via_profile_dir/mem"
+```
+
+These measurements exclude database execution and RU. The rewritten List
+has a larger SQL shape than EXISTS, so measure compiler allocation separately
+from database savings.
+
+After configuring the dedicated test database as described below, run:
+
+```sh
+go -C integration test -run '^TestTiDBCloudStarterVia(Compiler|Preload)$' -count=1 -v ./tidbcloud
+```
+
+The compiler fixture has 200 parents, nullable edge keys, a surrogate edge
+primary key, a source-target unique key, required payload, and soft-delete
+scopes. It compares results, order, and counts with reference EXISTS queries,
+checks `SHOW WARNINGS`, and logs `ExplainAnalyze` plus a small alternating
+hinted-EXISTS/rewrite RU sample. Latency excludes the immediate same-connection
+RU probe. The test creates and removes only its own fixed-name tables and
+refuses pre-existing tables. It consumes RU; its small data set and optimizer
+statistics do not establish production performance or an RU regression gate.
+Keep application measurements and baseline review separate.
+
 ## Schema compatibility client benchmarks
 
 Measure CREATE TABLE parsing and one pre-parsed model compatibility check:
