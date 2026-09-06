@@ -117,7 +117,7 @@ affected, err := orm.Update(&user, "Email").Exec(ctx, db)
 Primary-key, `auto_random`, and `computed` fields cannot be selected for an
 update.
 
-For a soft-delete model, `Update` and `UpdateWhere` match active rows only by
+For a soft-delete model, `Update`, `UpdateMany`, and `UpdateWhere` match active rows only by
 default. Use `WithDeleted` to restore a row by clearing the deletion field:
 
 ```go
@@ -173,8 +173,81 @@ for official same-column arithmetic examples in `UPDATE` statements.
 `UpdateWhere` requires at least one assignment and one scalar predicate. It
 rejects relation predicates, repeated assignments, and changes to primary-key,
 `auto_random`, or `computed` fields. There is no unconditional typed update.
-The only typed SQL expression is same-column addition through `Increment`;
-use `RawExec` for other expressions or joined updates.
+For caller-specified expressions, the typed API supports same-column addition
+through `Increment`; use `RawExec` for other expressions or joined updates.
+
+### Row-specific bulk updates
+
+Use `UpdateMany` when each existing primary-key row needs its own new values:
+
+```go
+edges := []*ClipGenre{
+    {ID: firstEdgeID, Priority: 1},
+    {ID: secondEdgeID, Priority: 2},
+}
+affected, err := orm.UpdateMany(edges, "Priority").Exec(ctx, db)
+```
+
+Both `[]Model` and `[]*Model` are accepted. The selected Go fields follow
+`Update` semantics; omitting field names updates every writable mapped
+non-primary-key field, including zero values. Primary-key, `auto_random`, and
+`computed` fields cannot be updated. Ordinary nil pointers become SQL `NULL`,
+and application-selected `driver.Valuer` types remain bind arguments.
+No builder or compiler calls `Value`.
+
+The operation uses all primary-key components to update existing rows only.
+It never inserts a missing row, resolves a different unique-key conflict as an
+upsert, or changes the input models. A single-row batch uses the ordinary
+primary-key UPDATE. Multiple rows use per-field CASE expressions with a
+primary-key IN predicate, including row-value IN for composite keys. This
+avoids a derived-table join and leaves all values as bind arguments. See
+[TiDB's UPDATE reference](https://docs.pingcap.com/tidbcloud/sql-statement-update/).
+
+Inputs must identify distinct rows according to the database's key equality.
+Nil pointer elements, nil native key components, and exact duplicate native
+primary keys are rejected before the first statement, including duplicates
+across batch boundaries. The compiler does not know database collation or
+temporal precision and does not evaluate custom Valuer keys, so the caller
+must ensure that those conversions do not make different inputs identify the
+same database row. Custom argument conversions must be stable: a key is bound
+in multiple CASE arms and in the final predicate.
+
+This is a set operation, not an ordered update loop. It does not preserve an
+application-defined update order or provide per-row lease, version, or other
+conditional checks. Keep `UpdateWhere` or an explicit sequence when those
+conditions matter. Unique-constraint errors are returned without retrying or
+ignoring them; do not use the operation to perform order-dependent unique-key
+swaps.
+
+`Exec` automatically splits at the 65,535-placeholder limit. For `k` primary-key
+components and `f` updated fields, a multi-row statement binds
+`rows * ((k + 1) * f + k)` arguments. The rows per statement are therefore
+`max(1, floor(65535 / ((k + 1) * f + k)))`; a one-row statement binds only
+`k + f` arguments, which must also fit the limit. There is no additional fixed
+row-count cap. The compiler retains only the previous batch's SQL, keeps each
+batch's arguments independent, and checks native key uniqueness across the
+whole input using memory proportional to the number of input keys.
+
+An empty slice is a no-op. `Build` returns exactly one statement and fails when
+splitting is needed. `Exec` returns the sum of database-reported affected rows,
+which can differ from the input length because rows may be missing, unchanged,
+or soft-deleted, or because the driver reports matched rows. A later failure
+returns the completed statements' affected count and the failed batch's row
+range. Use `Transaction` or a caller-owned transaction for all-or-nothing
+batches; no transaction or per-row retry is implicit.
+
+Soft-deleted rows are excluded by default. Use
+`UpdateMany(values, "DeletedAt").WithDeleted()` to restore rows with nil
+pointer timestamps or zero value-form timestamps. Observer, logger,
+RuntimeCapture, and opt-in ServerRU collection work through the existing
+executor or context settings; every attempted batch is recorded automatically
+with terminal `update_many`. Automatic splits are not RUN005 update loops.
+
+Fewer statements do not guarantee lower RU or latency for every workload.
+CASE expressions repeat primary-key arguments, so updating many fields can
+allocate more argument memory than individual updates even with fewer allocations.
+Large CASE expressions, updated indexes, data size, and transaction boundaries
+still matter; measure the complete operation with representative data.
 
 ## Delete
 
@@ -266,6 +339,7 @@ affected, err := orm.AddRelation[User]("Groups", source, groups...).Exec(ctx, db
 All four operations support offline `Build`. An empty add or remove target
 slice is a no-op. A statement that would exceed TiDB's 65,535-placeholder
 limit is rejected instead of being split into partially successful writes.
+Read-only `via` relations are rejected by all three relation mutation APIs.
 Only payload-free pure junctions use this API; model a junction carrying
 application data as a normal edge model and use ordinary CRUD operations.
 
@@ -370,7 +444,7 @@ implicitly. Use `Transaction` when multiple operations must share a transaction
 with the default `database/sql` options:
 
 ```go
-err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err := orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Insert(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -381,15 +455,19 @@ err := orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 })
 ```
 
-`*sql.DB` and `*sql.Conn` implement `TransactionBeginner`. `Transaction`
+`Transaction` accepts an executor supporting `database/sql` `BeginTx`, including
+`*sql.DB`, `*sql.Conn`, and either configured with `Observe`. It
 commits after a nil callback result and rolls back after a callback error or
 panic. A panic is propagated. A callback error is returned unchanged when
 rollback succeeds; a rollback failure is joined to it. The callback receives a
-concrete `*sql.Tx`, owns the work inside the transaction, and must not commit or
-roll back that value itself. The helper never retries the callback and does not
+transaction-bound `orm.Executor` with inherited observer and capture settings,
+owns the work inside the transaction, and must not commit or roll back the
+transaction itself. Context overrides remain available inside the callback.
+The helper never retries the callback and does not
 support nested transactions.
 
 Use `BeginTx` directly when custom `sql.TxOptions` or manual lifecycle control
-is required. Connection configuration, ping, close, driver registration, DSN
+is required; use `Observe(tx, observer)` to configure that transaction's ORM
+statements. Connection configuration, ping, close, driver registration, DSN
 handling, TLS, retry policy, and transaction options remain application
 responsibilities.

@@ -189,3 +189,14 @@ func TestWriteBenchmarkObservationRejectsMissingRUAndInvalidOrder(t *testing.T) 
 		}
 	}
 }
+
+func TestWriteBenchmarkObservationAcceptsUpdate(t *testing.T) {
+	t.Parallel()
+	var metrics writeBenchmarkObservation
+	metrics.observe(orm.StatementEvent{Operation: orm.StatementBegin})
+	metrics.observe(orm.StatementEvent{Operation: orm.StatementUpdate, SQL: "UPDATE fixture", ArgumentCount: 5, ServerRU: &orm.ServerRUObservation{Known: true, Value: 2.55}})
+	metrics.observe(orm.StatementEvent{Operation: orm.StatementCommit, ServerRU: &orm.ServerRUObservation{Known: true, Value: 100}})
+	if err := metrics.validate(1, true); err != nil || metrics.ru != 2.55 || metrics.maxArguments != 5 {
+		t.Fatalf("UPDATE metrics=%+v error=%v", metrics, err)
+	}
+}

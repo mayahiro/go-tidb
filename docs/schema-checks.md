@@ -78,6 +78,10 @@ cardinality:
   the complete source-target pair
 - A pure junction cannot contain an additional `NOT NULL` column without a
   default or database generation because relation insertion supplies only keys
+- A read-only `many_to_many,via=Edges.Target` mapping does not impose the pure
+  pair-unique or insert-shape contract (`CMP012`/`CMP013`). Its mapped tables,
+  keys, target identity, edge soft-delete column, and source index are still
+  checked. Register the edge model itself to validate its payload fields
 - A `has_many` target or many-to-many junction without an index whose leading
   columns cover the complete source key is a warning
 
@@ -106,8 +110,8 @@ reports the unavailable primary-key mutation capability as `MOD005`.
 | `CMP009` | error | An ordinary writable model field maps to a generated column |
 | `CMP010` | warning | A required database-only column can make model inserts fail |
 | `CMP011` | error | A to-one or many-to-many target identity is not proven unique by the snapshot |
-| `CMP012` | error | A many-to-many junction has no exact unique source-target pair |
-| `CMP013` | error | A many-to-many junction requires insert data beyond its mapped keys |
+| `CMP012` | error | A pure many-to-many junction has no exact unique source-target pair |
+| `CMP013` | error | A pure many-to-many junction requires insert data beyond its mapped keys |
 | `CMP014` | warning | A collection relation has no index starting with its complete source key |
 | `CMP015` | error | A declared candidate unique key is not proven by an unconditional physical primary or unique key |
 

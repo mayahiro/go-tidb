@@ -34,6 +34,7 @@ func (q *SelectQuery[T]) one(ctx context.Context, executor QueryExecutor, only b
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return zero, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	limit := int64(1)
 	if only {
 		limit = 2

@@ -57,12 +57,17 @@ type preloadSoftDeletePlan struct {
 type preloadOrderTerm struct {
 	column    string
 	direction orderDirection
+	junction  bool
 }
 
 type preloadJunctionPlan struct {
-	tableName     string
-	sourceColumns []string
-	targetColumns []string
+	tableName        string
+	sourceColumns    []string
+	targetColumns    []string
+	via              string
+	edgeName         string
+	edge             *model.Descriptor
+	softDeleteColumn string
 }
 
 type preloadPlanKey struct {
@@ -178,12 +183,13 @@ func applyPreloadOptions(descriptor *model.Descriptor, request preloadRequest, n
 			if len(option.fields) == 0 {
 				return fmt.Errorf("orm: SELECT PreloadFields for %s path %q requires at least one field", descriptor.Name(), request.path)
 			}
-			node.projection = append([]string(nil), option.fields...)
+			// Options are immutable here; key augmentation copies on write.
+			node.projection = option.fields
 		case preloadOptionOrderBy:
 			if len(option.orderBy) == 0 {
 				return fmt.Errorf("orm: SELECT PreloadOrderBy for %s path %q requires at least one term", descriptor.Name(), request.path)
 			}
-			node.orderBy = append([]orderTerm(nil), option.orderBy...)
+			node.orderBy = option.orderBy
 		case preloadOptionWithDeleted:
 			node.withDeleted = true
 		default:
@@ -203,7 +209,7 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 	if err != nil {
 		return nil, fmt.Errorf("orm: describe SELECT preload target %s.%s: %w", source.Name(), node.name, err)
 	}
-	if node.withDeleted && plan.softDelete == nil {
+	if node.withDeleted && plan.softDelete == nil && (plan.junction == nil || plan.junction.softDeleteColumn == "") {
 		return nil, fmt.Errorf("orm: SELECT PreloadWithDeleted for %s.%s requires a soft-delete field on %s", source.Name(), node.name, target.Name())
 	}
 	plan.withDeleted = node.withDeleted
@@ -217,23 +223,25 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 	}
 	plan.inlineChildren = inlinePreloadPlans(plan.children)
 	projection := preloadTargetProjection(node.projection, &plan)
-	if projection != nil {
+	if projection != nil && !preloadProjectionMatchesScan(projection, base.targetStatement.scanPlan) {
 		statement, compileErr := compileSelectProjection(target, projection)
 		if compileErr != nil {
 			return nil, fmt.Errorf("orm: compile SELECT preload target %s.%s: %w", source.Name(), node.name, compileErr)
 		}
 		plan.targetStatement = statement
 	}
-	plan.orderBy, err = compilePreloadOrderBy(target, node.orderBy)
+	plan.orderBy, err = compilePreloadOrderBy(target, plan.junction, node.orderBy)
 	if err != nil {
 		return nil, fmt.Errorf("orm: compile SELECT preload target %s.%s: %w", source.Name(), node.name, err)
 	}
 	if plan.inline && len(plan.orderBy) != 0 {
 		return nil, fmt.Errorf("orm: SELECT PreloadOrderBy for %s.%s requires a collection relation", source.Name(), node.name)
 	}
-	plan.targetKeyScan, err = preloadTargetKeyScanIndexes(&plan)
-	if err != nil {
-		return nil, err
+	if plan.targetStatement != base.targetStatement {
+		plan.targetKeyScan, err = preloadTargetKeyScanIndexes(&plan)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !plan.inline {
 		rootAlias := inlinePreloadRootAlias
@@ -250,9 +258,14 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 	if projection == nil {
 		return nil
 	}
-	result := append([]string(nil), projection...)
+	result := projection
+	copied := false
 	for _, field := range plan.targetKey {
 		if !preloadProjectionContains(result, field.GoName()) {
+			if !copied {
+				result = append([]string(nil), result...)
+				copied = true
+			}
 			result = append(result, field.GoName())
 		}
 	}
@@ -262,6 +275,10 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 		}
 		for _, field := range child.sourceKey {
 			if !preloadProjectionContains(result, field.GoName()) {
+				if !copied {
+					result = append([]string(nil), result...)
+					copied = true
+				}
 				result = append(result, field.GoName())
 			}
 		}
@@ -269,9 +286,39 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 	return result
 }
 
-func compilePreloadOrderBy(descriptor *model.Descriptor, terms []orderTerm) ([]preloadOrderTerm, error) {
+func preloadProjectionMatchesScan(projection []string, plan *scanPlan) bool {
+	if len(projection) != len(plan.fields) {
+		return false
+	}
+	for index, name := range projection {
+		if name != plan.fields[index].goName {
+			return false
+		}
+	}
+	return true
+}
+
+func compilePreloadOrderBy(descriptor *model.Descriptor, junction *preloadJunctionPlan, terms []orderTerm) ([]preloadOrderTerm, error) {
 	result := make([]preloadOrderTerm, len(terms))
 	for index := range terms {
+		if prefix, name, qualified := strings.Cut(terms[index].field, "."); qualified {
+			if junction == nil || junction.edge == nil || prefix != junction.edgeName {
+				return nil, fmt.Errorf("orm: SELECT PreloadOrderBy field %q must use the via edge relation name", terms[index].field)
+			}
+			for previous := 0; previous < index; previous++ {
+				if terms[previous].field == terms[index].field {
+					return nil, fmt.Errorf("orm: SELECT PreloadOrderBy repeats field %q", terms[index].field)
+				}
+			}
+			term := terms[index]
+			term.field = name
+			field, err := resolveOrderField(junction.edge, []orderTerm{term}, 0)
+			if err != nil {
+				return nil, err
+			}
+			result[index] = preloadOrderTerm{column: field.ColumnName(), direction: term.direction, junction: true}
+			continue
+		}
 		field, err := resolveOrderField(descriptor, terms, index)
 		if err != nil {
 			return nil, err
@@ -352,6 +399,18 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 			sourceColumns: sourceColumns,
 			targetColumns: targetColumns,
 		}
+		if relation.Via() != "" {
+			edge, err := relationEdgeDescriptor(source, relation)
+			if err != nil {
+				return nil, err
+			}
+			junctionPlan.via = relation.Via()
+			junctionPlan.edgeName, _, _ = strings.Cut(relation.Via(), ".")
+			junctionPlan.edge = edge
+			if field, exists := edge.SoftDeleteField(); exists {
+				junctionPlan.softDeleteColumn = field.ColumnName()
+			}
+		}
 	}
 
 	target, err := model.DescribeType(relation.TargetType())
@@ -382,7 +441,7 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 	relationIndex := relation.Index()
 	relationField := source.Type().FieldByIndex(relationIndex)
 	retainTarget := relationField.Type.Kind() == reflect.Pointer || relationField.Type.Elem().Kind() == reflect.Pointer
-	return &preloadPlan{
+	plan := &preloadPlan{
 		sourceName:       source.Name(),
 		sourceType:       source.Type(),
 		relationName:     relation.GoName(),
@@ -401,7 +460,12 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 		retainTarget:     retainTarget,
 		inline:           inline,
 		softDelete:       softDelete,
-	}, nil
+	}
+	plan.targetKeyScan, err = preloadTargetKeyScanIndexes(plan)
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 func preloadProjection(projection []string, plans []*preloadPlan) []string {
@@ -609,8 +673,7 @@ func compileManyToManyPreloadBatch(plan *preloadPlan, keys []preloadKey) (string
 	query.Grow(len(junction.tableName) + len(plan.targetTable) + len(keys)*len(junction.sourceColumns)*4 + len(plan.targetStatement.sql) + 64)
 	writeManyToManyPreloadSelect(&query, plan)
 	query.WriteString(" WHERE ")
-	if plan.softDelete != nil && !plan.withDeleted {
-		writePreloadSoftDeletePredicate(&query, "t", plan.softDelete.column)
+	if writeManyToManyPreloadScope(&query, plan, "") {
 		query.WriteString(" AND ")
 	}
 	arguments := writePreloadKeyPredicate(&query, "j", junction.sourceColumns, keys)
@@ -623,12 +686,28 @@ func compileManyToManyPreloadAll(plan *preloadPlan) string {
 	var query strings.Builder
 	query.Grow(len(junction.tableName) + len(plan.targetTable) + len(plan.targetStatement.sql) + 64)
 	writeManyToManyPreloadSelect(&query, plan)
-	if plan.softDelete != nil && !plan.withDeleted {
-		query.WriteString(" WHERE ")
-		writePreloadSoftDeletePredicate(&query, "t", plan.softDelete.column)
-	}
+	writeManyToManyPreloadScope(&query, plan, " WHERE ")
 	writePreloadOrderBy(&query, "t", plan.orderBy)
 	return query.String()
+}
+
+func writeManyToManyPreloadScope(query *strings.Builder, plan *preloadPlan, prefix string) bool {
+	if plan.withDeleted {
+		return false
+	}
+	written := false
+	if plan.softDelete != nil {
+		query.WriteString(prefix)
+		writePreloadSoftDeletePredicate(query, "t", plan.softDelete.column)
+		prefix = " AND "
+		written = true
+	}
+	if plan.junction.softDeleteColumn != "" {
+		query.WriteString(prefix)
+		writePreloadSoftDeletePredicate(query, "j", plan.junction.softDeleteColumn)
+		written = true
+	}
+	return written
 }
 
 func writeManyToManyPreloadSelect(query *strings.Builder, plan *preloadPlan) {
@@ -671,7 +750,11 @@ func writePreloadOrderBy(query *strings.Builder, qualifier string, terms []prelo
 		if index != 0 {
 			query.WriteString(", ")
 		}
-		writeMaybeQualifiedIdentifier(query, qualifier, term.column)
+		termQualifier := qualifier
+		if term.junction {
+			termQualifier = "j"
+		}
+		writeMaybeQualifiedIdentifier(query, termQualifier, term.column)
 		if term.direction == orderDescending {
 			query.WriteString(" DESC")
 		} else {
@@ -802,17 +885,39 @@ type manyToManyPreloadDecoder struct {
 	plan         *preloadPlan
 	decoder      *rowDecoder
 	sourceFields []any
+	reusable     bool
+	bound        bool
 }
 
 func newManyToManyPreloadDecoder(plan *preloadPlan) *manyToManyPreloadDecoder {
+	reusable := !plan.retainTarget && len(plan.targetStatement.inlinePreloads) == 0
+	for _, index := range plan.sourceKeyIndex {
+		if len(index) != 1 {
+			reusable = false
+			break
+		}
+	}
+	for _, field := range plan.targetStatement.scanPlan.fields {
+		if len(field.index) != 1 {
+			reusable = false
+			break
+		}
+	}
 	return &manyToManyPreloadDecoder{
 		plan:         plan,
 		decoder:      plan.targetStatement.newDecoder(len(plan.sourceKey)),
 		sourceFields: make([]any, len(plan.sourceKey)),
+		reusable:     reusable,
 	}
 }
 
 func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.Value) error {
+	if d.bound {
+		if err := row.Scan(d.decoder.destinations...); err != nil {
+			return fmt.Errorf("orm: scan %s many-to-many row: %w", d.plan.targetType.Name(), err)
+		}
+		return nil
+	}
 	for index, field := range d.plan.sourceKey {
 		address, err := scanFieldAddress(source, d.plan.sourceKeyIndex[index])
 		if err != nil {
@@ -822,6 +927,20 @@ func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.V
 		d.sourceFields[index] = address.Interface()
 	}
 
+	// Only value collections reuse the same target. Source fields must also be
+	// direct slots so resetting the scratch parent cannot invalidate bindings.
+	if d.reusable {
+		var err error
+		d.bound, err = d.decoder.bindReusable(target.Addr().Interface(), d.sourceFields)
+		if err != nil {
+			clear(d.sourceFields)
+			return err
+		}
+		if d.bound {
+			clear(d.sourceFields)
+			return d.scan(row, source, target)
+		}
+	}
 	err := d.decoder.scanWithPrefix(row, target.Addr().Interface(), d.sourceFields)
 	clear(d.sourceFields)
 	if err != nil {
@@ -832,6 +951,7 @@ func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.V
 
 func hydrateManyToManyPreloadBatch(plan *preloadPlan, parents preloadParentSet, parentIndexes map[preloadLookupKey]preloadParentIndexes, rows resultRows) error {
 	decoder := newManyToManyPreloadDecoder(plan)
+	defer decoder.decoder.releaseReusable()
 	source := reflect.New(plan.sourceType).Elem()
 	var reusableTarget reflect.Value
 	if !plan.retainTarget {
@@ -891,16 +1011,21 @@ func assignPreloadedTarget(relation, target reflect.Value, copyPointer bool) {
 		}
 		relation.Set(target)
 	case reflect.Slice:
+		// The relation field is settable. Grow it in place instead of
+		// allocating a temporary slice header for every appended row.
+		index := relation.Len()
+		relation.Grow(1)
+		relation.SetLen(index + 1)
 		if relation.Type().Elem().Kind() == reflect.Pointer {
 			if copyPointer {
 				clone := reflect.New(target.Elem().Type())
 				clone.Elem().Set(target.Elem())
 				target = clone
 			}
-			relation.Set(reflect.Append(relation, target))
+			relation.Index(index).Set(target)
 			return
 		}
-		relation.Set(reflect.Append(relation, target.Elem()))
+		relation.Index(index).Set(target.Elem())
 	}
 }
 

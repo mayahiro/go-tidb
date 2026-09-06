@@ -89,6 +89,11 @@ func (e *fingerprintEncoder) predicates(values []Predicate) {
 		e.string(value.SoftDeleteColumn)
 		e.integer(value.ValueCount)
 		e.predicates(value.Children)
+		if value.Via != "" {
+			e.string("via")
+			e.string(value.Via)
+			e.string(value.JunctionSoftDeleteColumn)
+		}
 	}
 }
 
@@ -99,6 +104,9 @@ func (e *fingerprintEncoder) order(values []OrderTerm) {
 		e.string(value.Field)
 		e.string(value.Column)
 		e.string(string(value.Direction))
+		if value.Junction {
+			e.string("junction-order")
+		}
 	}
 }
 
@@ -123,5 +131,10 @@ func (e *fingerprintEncoder) preloads(values []Preload) {
 		e.boolean(value.WithDeleted)
 		e.string(value.SoftDeleteColumn)
 		e.preloads(value.Children)
+		if value.Via != "" {
+			e.string("via")
+			e.string(value.Via)
+			e.string(value.JunctionSoftDeleteColumn)
+		}
 	}
 }

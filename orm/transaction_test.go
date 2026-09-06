@@ -19,7 +19,7 @@ type transactionTestState struct {
 	rollbackCalls  int
 	execCalls      int
 	beginOptions   driver.TxOptions
-	callbackTxSeen *sql.Tx
+	callbackTxSeen Executor
 }
 
 type transactionTestConnector struct {
@@ -87,7 +87,7 @@ func (transaction *transactionTestTx) Rollback() error {
 	return transaction.state.rollbackErr
 }
 
-type nilTransactionBeginner struct{}
+type nilTransactionBeginner struct{ Executor }
 
 func (nilTransactionBeginner) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) {
 	return nil, nil
@@ -100,7 +100,7 @@ func TestTransactionCommitsSuccessfulCallback(t *testing.T) {
 	database := openTransactionTestDB(t, state)
 	ctx := context.Background()
 
-	err := Transaction(ctx, database, func(transaction *sql.Tx) error {
+	err := Transaction(ctx, database, func(transaction Executor) error {
 		state.callbackTxSeen = transaction
 		result, err := transaction.ExecContext(ctx, "UPDATE counters SET value = value + 1")
 		if err != nil {
@@ -150,7 +150,7 @@ func TestTransactionAcceptsSQLConn(t *testing.T) {
 		}
 	})
 
-	err = Transaction(context.Background(), connection, func(*sql.Tx) error {
+	err = Transaction(context.Background(), connection, func(Executor) error {
 		return nil
 	})
 	if err != nil {
@@ -173,7 +173,7 @@ func TestTransactionRollsBackCallbackError(t *testing.T) {
 	state := &transactionTestState{}
 	database := openTransactionTestDB(t, state)
 
-	err := Transaction(context.Background(), database, func(*sql.Tx) error {
+	err := Transaction(context.Background(), database, func(Executor) error {
 		return callbackErr
 	})
 	if err != callbackErr {
@@ -197,7 +197,7 @@ func TestTransactionJoinsCallbackAndRollbackErrors(t *testing.T) {
 	state := &transactionTestState{rollbackErr: rollbackErr}
 	database := openTransactionTestDB(t, state)
 
-	err := Transaction(context.Background(), database, func(*sql.Tx) error {
+	err := Transaction(context.Background(), database, func(Executor) error {
 		return callbackErr
 	})
 	if !errors.Is(err, callbackErr) || !errors.Is(err, rollbackErr) {
@@ -220,7 +220,7 @@ func TestTransactionReportsBeginAndCommitErrors(t *testing.T) {
 		database := openTransactionTestDB(t, state)
 		callbackCalls := 0
 
-		err := Transaction(context.Background(), database, func(*sql.Tx) error {
+		err := Transaction(context.Background(), database, func(Executor) error {
 			callbackCalls++
 			return nil
 		})
@@ -242,7 +242,7 @@ func TestTransactionReportsBeginAndCommitErrors(t *testing.T) {
 		state := &transactionTestState{commitErr: commitErr}
 		database := openTransactionTestDB(t, state)
 
-		err := Transaction(context.Background(), database, func(*sql.Tx) error {
+		err := Transaction(context.Background(), database, func(Executor) error {
 			return nil
 		})
 		if !errors.Is(err, commitErr) || !strings.Contains(err.Error(), "orm: commit transaction") {
@@ -267,7 +267,7 @@ func TestTransactionRollsBackAndPropagatesPanic(t *testing.T) {
 		defer func() {
 			recovered = recover()
 		}()
-		_ = Transaction(context.Background(), database, func(*sql.Tx) error {
+		_ = Transaction(context.Background(), database, func(Executor) error {
 			panic(panicValue)
 		})
 		returned = true
@@ -290,12 +290,12 @@ func TestTransactionValidatesInputsBeforeBeginning(t *testing.T) {
 	state := &transactionTestState{}
 	database := openTransactionTestDB(t, state)
 	var typedNilDatabase *sql.DB
-	validCallback := func(*sql.Tx) error { return nil }
+	validCallback := func(Executor) error { return nil }
 	tests := []struct {
 		name     string
 		ctx      context.Context
-		beginner TransactionBeginner
-		callback func(*sql.Tx) error
+		beginner Executor
+		callback func(Executor) error
 		want     string
 	}{
 		{name: "nil context", beginner: database, callback: validCallback, want: "nil context"},

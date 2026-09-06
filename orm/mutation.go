@@ -51,6 +51,7 @@ func (q *InsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return 0, err
@@ -149,6 +150,7 @@ func (q *InsertManyQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (i
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	plan, err := q.prepare()
 	if err != nil {
 		return 0, err
@@ -160,7 +162,7 @@ func (q *InsertManyQuery[T]) compile() (compiledMutation, error) {
 	if q == nil {
 		return compiledMutation{}, fmt.Errorf("orm: compile a nil bulk INSERT query")
 	}
-	descriptor, pointerElements, err := insertManyDescriptor[T]("bulk INSERT")
+	descriptor, pointerElements, err := bulkMutationDescriptor[T]("bulk INSERT")
 	if err != nil {
 		return compiledMutation{}, err
 	}
@@ -267,6 +269,7 @@ func (q *UpdateQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return 0, err
@@ -378,6 +381,7 @@ func (q *DeleteQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	if err := validateMutationExecution(ctx, executor); err != nil {
 		return 0, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return 0, err
@@ -468,7 +472,7 @@ func mutationDescriptor[T any](operation string) (*model.Descriptor, error) {
 	return descriptor, nil
 }
 
-func insertManyDescriptor[T any](operation string) (*model.Descriptor, bool, error) {
+func bulkMutationDescriptor[T any](operation string) (*model.Descriptor, bool, error) {
 	modelType := reflect.TypeFor[T]()
 	pointerElements := modelType != nil && modelType.Kind() == reflect.Pointer
 	if pointerElements {

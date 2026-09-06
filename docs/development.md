@@ -81,6 +81,40 @@ TopN compiler decision, and checks 100 association index accesses
 The fifth resolves pure many-to-many relation and junction metadata, applies
 the same compiler decision, and checks 100 junction index accesses
 
+## Via relation compiler verification
+
+Measure warmed offline SQL compilation for a payload-bearing edge with a
+declared source-target candidate key. The workloads cover relation-first
+List, association-only Count, and a root-predicate fallback:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchmem -count=5
+via_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaRelationCompiler$' -benchtime=2s -cpuprofile "$via_profile_dir/cpu" -memprofile "$via_profile_dir/mem" -o "$via_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_profile_dir/orm.test" "$via_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_profile_dir/orm.test" "$via_profile_dir/mem"
+```
+
+These measurements exclude database execution and RU. The rewritten List
+has a larger SQL shape than EXISTS, so measure compiler allocation separately
+from database savings.
+
+After configuring the dedicated test database as described below, run:
+
+```sh
+go -C integration test -run '^TestTiDBCloudStarterVia(Compiler|Preload)$' -count=1 -v ./tidbcloud
+```
+
+The compiler fixture has 200 parents, nullable edge keys, a surrogate edge
+primary key, a source-target unique key, required payload, and soft-delete
+scopes. It compares results, order, and counts with reference EXISTS queries,
+checks `SHOW WARNINGS`, and logs `ExplainAnalyze` plus a small alternating
+hinted-EXISTS/rewrite RU sample. Latency excludes the immediate same-connection
+RU probe. The test creates and removes only its own fixed-name tables and
+refuses pre-existing tables. It consumes RU; its small data set and optimizer
+statistics do not establish production performance or an RU regression gate.
+Keep application measurements and baseline review separate.
+
 ## Schema compatibility client benchmarks
 
 Measure CREATE TABLE parsing and one pre-parsed model compatibility check:
@@ -188,8 +222,9 @@ fields, relation predicates and preloads, CRUD, bulk insert and upsert,
 rollback paths, typed SELECT EXPLAIN and EXPLAIN ANALYZE, and same-session
 ServerRU reads, plus statement observation spanning root and preload SELECTs
 
-It creates 18 fixed `tidbgo_it_*` tables and drops only tables created by the
-current run. A pre-existing fixture table causes a failure and is not removed.
+The connected tests create fixed `tidbgo_it_*` fixture tables and drop only
+tables created by the current run. A pre-existing fixture table causes a
+failure and is not removed.
 Do not run multiple suites concurrently against the same database
 
 ## Write compiler benchmarks
@@ -214,6 +249,59 @@ The mutation plan caches field access and Valuer receiver selection, plus one
 default single-row upsert SQL per model. Bulk execution reuses equal-sized batch
 SQL within that execution; it retains no global cache keyed by batch size or
 selected fields. Each batch has its own argument slice.
+
+## Row-specific UPDATE verification and benchmarks
+
+The bulk UPDATE correctness test covers nullable values, JSON, application-selected
+DECIMAL values, composite and high-bit unsigned primary keys, soft deletion,
+restore, unique-key errors, missing rows, and transaction commit and rollback.
+It tests both settings of `interpolateParams` and `clientFoundRows` and removes
+only its three newly created `tidbgo_it_update_many*` tables:
+
+```sh
+# Set TIDBGO_TEST_DSN to the dedicated database described above.
+go -C integration test -run '^TestTiDBCloudStarterUpdateMany$' -count=1 -v ./tidbcloud
+```
+
+Compare client-side compiler costs without a database, then profile the same
+input and selected fields through individual `Update` calls and `UpdateMany`:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$' -benchmem -benchtime=200ms -count=5
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^loop$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-loop.cpu -memprofile /tmp/tidbgo-update-loop.mem -o /tmp/tidbgo-update-loop.test
+go test ./orm -run '^$' -bench '^BenchmarkUpdateMany$/^rows_1000$/^selected_true$/^values$' -benchtime=3s -cpuprofile /tmp/tidbgo-update-many.cpu -memprofile /tmp/tidbgo-update-many.mem -o /tmp/tidbgo-update-many.test
+go -C tools tool pprof -top /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-loop.test /tmp/tidbgo-update-loop.mem
+go -C tools tool pprof -top /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.cpu
+go -C tools tool pprof -top -alloc_space /tmp/tidbgo-update-many.test /tmp/tidbgo-update-many.mem
+```
+
+The offline workload uses warmed metadata, native scalars, pointers, byte
+slices, time values, and a custom Valuer that is never executed. It covers
+selected and all writable fields, value and pointer slices, and automatic
+splits. It measures compilation and argument preparation, not network or RU.
+CASE statements repeat key arguments, so fewer statements or allocations do
+not guarantee fewer allocated bytes for every projection.
+
+The connected comparison uses a newly created `tidbgo_it_update_shapes` table
+with 1,000 rows, refusing any pre-existing table. It compares Update loops,
+`UpdateMany`, and precompiled derived-table JOIN alternatives, including a
+hinted JOIN. Each sample updates 25, 100, or 500 rows in a transaction and rolls
+back afterward. Use fixed iteration counts to bound its cost:
+
+```sh
+go -C integration test -run '^$' -bench '^BenchmarkTiDBCloudStarterUpdateMany$' -benchmem -benchtime=3x -count=3 ./tidbcloud
+# SQL-only shape comparison, one warm-up and three samples per case:
+go -C integration test -run '^TestTiDBCloudStarterUpdateManySQLShapes$' -count=1 -v ./tidbcloud
+```
+
+`ns/op` times DML only. Setup, BEGIN, ROLLBACK, result verification, and the
+three separate same-session RU samples are excluded. `DML-ServerRU/op` is the
+sum of captured UPDATE RU, not billed RU or a committed transaction's total
+cost. `DML-statements/op` excludes transaction controls and RU probes. The
+fixture has no updated secondary indexes; remeasure the actual application's
+indexes, values, concurrency, batching, and commit path before generalizing.
+No test asserts a universal speed or RU threshold.
 
 ## Connected write baseline
 
@@ -389,6 +477,73 @@ Results include network and Starter variability and are not portable
 performance guarantees or billed-RU measurements
 
 ## Relation graph benchmark
+
+Measure client-side work separately, without a database:
+
+```sh
+go test ./orm -run '^$' -bench '^(BenchmarkSelectQueryBuildPreload.*|BenchmarkSelectQueryPreloadRelationGraphThreeStatements|BenchmarkSelectQueryPreloadHasMany100Parents300Children|BenchmarkSelectQueryPreloadManyToMany100Parents300Targets|BenchmarkSelectQueryPreloadNested100Parents300Children|BenchmarkViaPreload100Parents300Targets)$' -benchmem -count=5
+preload_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryBuildPreloadRelationGraph$' -benchtime=2s -cpuprofile "$preload_profile_dir/build.cpu" -memprofile "$preload_profile_dir/build.mem" -o "$preload_profile_dir/build.test"
+go test ./orm -run '^$' -bench '^BenchmarkViaPreload100Parents300Targets$/^via$' -benchtime=2s -cpuprofile "$preload_profile_dir/via.cpu" -memprofile "$preload_profile_dir/via.mem" -o "$preload_profile_dir/via.test"
+go -C tools tool pprof -top "$preload_profile_dir/build.test" "$preload_profile_dir/build.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/build.test" "$preload_profile_dir/build.mem"
+go -C tools tool pprof -top "$preload_profile_dir/via.test" "$preload_profile_dir/via.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/via.test" "$preload_profile_dir/via.mem"
+```
+
+`Build` workloads measure repeated offline plan and SQL construction.
+Execution workloads use a local `database/sql` test driver and include result
+decoding and relation hydration. They do not measure MySQL-driver work,
+network latency, or TiDB RU. Compare equivalent SQL, statement counts, and
+results before interpreting allocation or timing differences. Cached default
+target scan plans are reused only when projection order also matches; query
+aliases, scopes, and result slices remain independent.
+
+### Via preload cost isolation
+
+Compare value-target via loading with explicit edge loading and target extraction:
+
+```sh
+go test ./orm -run '^TestViaCostFixtureResults$|^TestManyToManyReusableScan' -count=1
+go test ./orm -run '^$' -bench '^(BenchmarkViaPreloadCost|BenchmarkViaPreloadPointerFallback|BenchmarkSelectQueryPreloadNested100Parents300Children)$' -benchmem -benchtime=200ms -count=5
+via_cost_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaPreloadCost$/^shared$/^via_true$' -benchtime=2s -cpuprofile "$via_cost_profile_dir/cpu" -memprofile "$via_cost_profile_dir/mem" -o "$via_cost_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/mem"
+```
+
+The offline matrix includes empty and single-edge inputs, 20 parents with 100
+edges sharing 12 targets, a narrow projection, distinct targets, and 2,000 edges.
+It includes column decoding and final target extraction, but not MySQL-driver
+or network work. The pointer and nested workloads cover paths that cannot reuse
+the same scan target. Value collections with direct fields and no inline target
+relations bind scan destinations once per batch; pointer collections and embedded
+field paths retain per-row binding. Result ownership and generated SQL are unchanged.
+
+For a connected diagnostic, first configure the dedicated test database above:
+
+```sh
+TIDBGO_TEST_VIA_COST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterViaCost$' -count=1 -v
+```
+
+This opt-in test creates and removes only its own `tidbgo_it_cost_*` fixtures,
+rejecting pre-existing tables. It compares three-statement edge and via queries
+with identical final results, and separately drains each variant's generated SQL
+through `database/sql`. Raw draining validates row counts but does not build the
+ORM result graph, so it is a SQL/driver diagnostic, not an equivalent repository
+implementation. After two warm-ups, six measured rounds alternate the order of
+four variants. Unobserved total latency, separate observed per-statement timings,
+three per-operation DML ServerRU samples, and representative relation plans are
+reported separately. RU probes, validation, setup and EXPLAIN ANALYZE are outside
+the unobserved latency interval. No latency or RU threshold is asserted.
+
+The neutral fixture is a reproduction aid, not a production-data replica. Keep
+raw samples and compare both favorable and unfavorable inputs before adopting a
+change; neither an isolated plan nor an allocation reduction proves lower
+end-to-end latency. Do not subtract separately measured raw and ORM medians to
+claim an exact ORM overhead.
+
+### Connected relation graph
 
 Measure the representative relation graph on the same dedicated database:
 

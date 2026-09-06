@@ -395,7 +395,7 @@ func appendJunctionDiagnostics(
 	pairColumns = append(pairColumns, sourceColumns...)
 	pairColumns = append(pairColumns, targetColumns...)
 	pairUnique, sourceIndexed := junctionIndexCoverage(table, pairColumns, sourceColumns)
-	if !pairUnique {
+	if !pairUnique && relation.Via() == "" {
 		diagnostics = append(diagnostics, Diagnostic{
 			Code:         codeJunctionPairNotUnique,
 			Severity:     SeverityError,
@@ -408,6 +408,18 @@ func appendJunctionDiagnostics(
 	}
 	if !sourceIndexed {
 		diagnostics = appendMissingRelationIndexDiagnostic(diagnostics, descriptor, relation, table, sourceColumns)
+	}
+	if relation.Via() != "" {
+		edgeName, _, _ := strings.Cut(relation.Via(), ".")
+		edgeRelation, _ := descriptor.RelationByName(edgeName)
+		edge, err := model.DescribeType(edgeRelation.TargetType())
+		if err != nil {
+			return appendModelValidationDiagnostics(diagnostics, err)
+		}
+		if field, exists := edge.SoftDeleteField(); exists {
+			diagnostics, _ = appendJunctionColumnDiagnostic(diagnostics, descriptor, relation, table, field.ColumnName(), edge, field)
+		}
+		return diagnostics
 	}
 	return appendRequiredJunctionColumnDiagnostics(diagnostics, descriptor, relation, table, pairColumns)
 }

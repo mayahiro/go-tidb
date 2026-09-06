@@ -93,9 +93,11 @@ scopeとcoverageの条件は[操作単位のbaseline](workload-baselines_ja.md)�
 
 suppress可能なwarningであり、loop、異なるrow、一括化可能性、回帰の証明ではありません
 
-raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、batchは対象外です
+raw SQL、soft-deleteの `Delete`／`DeleteWhere`、Relation mutation、1行の呼び出しと自動分割を含む `UpdateMany` は対象外です
 
 行ごとの値、lease条件、atomic increment、実行順、transaction境界、retryを確認してからoperationを変更してください
+
+`UpdateMany` はprimary keyで異なるrowを指し、rowごとの追加条件やapplicationが定めた更新順を要求しない場合の候補です
 
 schema、baseline、`--workload`、application codeの追加は不要です
 
@@ -135,6 +137,8 @@ orderedかつpositive Limitのroot `Has` では、runtime compilerと同じcolle
 
 source decisionはruntime model metadataと同じ規則で `unique=<group>` candidate keyを認識します
 
+読み取り専用viaではedgeのsource-target pairが宣言済みprimary keyまたはcandidate keyを完全にcoverすることも確認します。証明できないpairは無効なRelationとはせず、理由付き `QRY005` fallbackとして扱います
+
 source lintはmodel-to-schema compatibility testを置き換えないため、各宣言がunconditionalな物理unique constraintに裏付けられることは `check.Schema` で検証します
 
 `--schema` を指定するとsource解析はruntime model descriptorと同じ `tidbgo` metadataとdefault naming ruleから物理table名とcolumn名も導出します
@@ -143,9 +147,11 @@ source lintはmodel-to-schema compatibility testを置き換えないため、�
 
 解決済みのrelation-first TopN decisionがある場合はassociation accessも同じcheckerへ渡します
 
-direct `has_many` accessはtarget equality columnの後にRelation keyが続くindexを検査し、pure `many_to_many` accessはjunction target columnの後にjunction source columnが続くindexを検査します
+direct `has_many` accessはtarget equality columnの後にRelation keyが続くindexを検査し、証明済みviaを含む `many_to_many` accessはjunction target columnの後にjunction source columnが続くindexを検査します
 
 default active soft-delete columnはroot query上で `WithDeleted` を解決できない限りequality prefixへ含め、direct Relation targetのsoft-delete columnはassociation equality prefixへ含めます
+
+via edgeのactiveなsoft-delete columnもjunction equality prefixへ含めます
 
 `index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
 

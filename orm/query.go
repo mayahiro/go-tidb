@@ -36,9 +36,9 @@ func (q *SelectQuery[T]) Select(fields ...string) *SelectQuery[T] {
 	return q
 }
 
-// Preload appends one direct or pure many-to-many relation path to hydrate
+// Preload appends one direct or many-to-many relation path to hydrate
 // without lazy loading. Belongs-to and has-one relations use inline LEFT JOINs;
-// has-many and pure many-to-many relations use deterministic secondary
+// has-many and many-to-many relations use deterministic secondary
 // SELECTs. An unrestricted All loads each root collection source once, while
 // constrained and nested collection loads use bounded parameter batches.
 //
@@ -47,6 +47,8 @@ func (q *SelectQuery[T]) Select(fields ...string) *SelectQuery[T] {
 // joins. Keyed collection bind values depend on preceding rows and are built
 // during execution. Dot-separated paths request nested relations. Optional
 // projection applies to any relation; ordering applies only to collections.
+// Read-only via relations join the mapped edge to its target without hydrating
+// the edge, and PreloadOrderBy can reference the via edge's Go fields.
 func (q *SelectQuery[T]) Preload(path string, options ...PreloadOption) *SelectQuery[T] {
 	if q == nil {
 		return nil

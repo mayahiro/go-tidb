@@ -133,7 +133,7 @@ func relationSyncTargets(values []relationSyncEdge) []int64 {
 	return keys
 }
 
-func executeRelationSyncCandidate(ctx context.Context, tx *sql.Tx, values []relationSyncEdge, payload bool, strategy string) error {
+func executeRelationSyncCandidate(ctx context.Context, tx orm.Executor, values []relationSyncEdge, payload bool, strategy string) error {
 	if _, err := orm.Raw[relationSyncRoot]("SELECT id FROM tidbgo_it_sync_roots WHERE id = ? FOR UPDATE", int64(1)).Only(ctx, tx); err != nil {
 		return err
 	}
@@ -230,7 +230,7 @@ func relationSyncDiff(existing, desired []relationSyncEdge) ([]int64, []relation
 func benchmarkRelationSyncCase(b *testing.B, ctx context.Context, connection *sql.Conn, dsn string, count int, payload bool, change, strategy string) {
 	values := relationSyncValues(count, change)
 	execute := func(ctx context.Context) error {
-		return orm.Transaction(ctx, connection, func(tx *sql.Tx) error {
+		return orm.Transaction(ctx, connection, func(tx orm.Executor) error {
 			return executeRelationSyncCandidate(ctx, tx, values, payload, strategy)
 		})
 	}

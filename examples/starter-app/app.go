@@ -87,6 +87,7 @@ type Clip struct {
 	ID         int64 `tidbgo:",pk,auto_random"`
 	Title      string
 	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+	Genres     []Genre     `tidbgo:"many_to_many,via=ClipGenres.Genre"`
 }
 
 // ClipGenre is a payload-bearing edge model with a surrogate primary key and
@@ -97,6 +98,29 @@ type ClipGenre struct {
 	ClipID     int64 `tidbgo:",unique=clip_genre"`
 	GenreID    int64 `tidbgo:",unique=clip_genre"`
 	Priority   int64
+	Genre      *Genre `tidbgo:"belongs_to"`
+}
+
+// Genre is the target of Clip's read-only edge projection.
+type Genre struct {
+	model.Meta `tidbgo:"table=genres"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	Name       string
+}
+
+// ListClipsWithGenres loads targets in edge Priority order without hydrating
+// ClipGenres. The required edge payload remains managed through ordinary CRUD.
+func ListClipsWithGenres(ctx context.Context, executor orm.QueryExecutor) ([]Clip, error) {
+	return orm.Query[Clip]().Preload("Genres",
+		orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+	).All(ctx, executor)
+}
+
+// UpdateClipGenrePriorities updates each existing edge by its primary key,
+// preserving its identity, relation keys, and other payload fields. Supply a
+// transaction executor when all automatically split statements must be atomic.
+func UpdateClipGenrePriorities(ctx context.Context, executor orm.ExecExecutor, values []*ClipGenre) (int64, error) {
+	return orm.UpdateMany(values, "Priority").Exec(ctx, executor)
 }
 
 // JobLease is an application-owned conditional-update model.
@@ -154,7 +178,7 @@ func BuildRecentUsersWithRoleQuery(roleID int64) (string, []any, error) {
 
 func clipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 	return orm.Query[Clip]().
-		Where(orm.Has("ClipGenres", orm.Equal("GenreID", genreID)))
+		Where(orm.Has("Genres", orm.Equal("ID", genreID)))
 }
 
 func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
@@ -164,14 +188,14 @@ func recentClipsInGenreQuery(genreID int64) *orm.SelectQuery[Clip] {
 		Limit(20)
 }
 
-// ListRecentClipsInGenre returns the newest clips having one matching
-// ClipGenre row through an explicitly supplied database/sql executor.
+// ListRecentClipsInGenre returns the newest clips in a genre through an
+// explicitly supplied executor. The compiler uses the via edge's unique key.
 func ListRecentClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) ([]Clip, error) {
 	return recentClipsInGenreQuery(genreID).All(ctx, executor)
 }
 
-// CountClipsInGenre returns the total number of clips having one matching
-// ClipGenre row. The compiler can count the candidate-key-proven edge rows
+// CountClipsInGenre returns the total number of clips in a genre.
+// The compiler can count the candidate-key-proven via edge rows
 // directly without requiring a caller-authored junction query.
 func CountClipsInGenre(ctx context.Context, executor orm.QueryExecutor, genreID int64) (int64, error) {
 	return clipsInGenreQuery(genreID).Count(ctx, executor)
@@ -277,10 +301,10 @@ WHERE u.id = ?
 GROUP BY u.id, u.email`, userID).Only(ctx, executor)
 }
 
-// WithQueryLog enables context-scoped statement logging for this example.
+// WithQueryLog configures statement logging once on a shared executor.
 // Interactive terminal writers receive colored operation names automatically.
-func WithQueryLog(ctx context.Context, writer io.Writer) context.Context {
-	return orm.WithStatementObserver(ctx, orm.NewStatementLogger(writer))
+func WithQueryLog(executor orm.Executor, writer io.Writer) orm.Executor {
+	return orm.Observe(executor, orm.NewStatementLogger(writer))
 }
 
 // InsertUser inserts one user and writes its AUTO_RANDOM ID back to value.
@@ -314,11 +338,11 @@ func SaveUser(ctx context.Context, executor orm.ExecExecutor, value *User) (int6
 // transaction, including any automatically split order batches.
 func SaveUserAndInsertOrders(
 	ctx context.Context,
-	beginner orm.TransactionBeginner,
+	beginner orm.Executor,
 	value *User,
 	orders []*Order,
 ) error {
-	return orm.Transaction(ctx, beginner, func(transaction *sql.Tx) error {
+	return orm.Transaction(ctx, beginner, func(transaction orm.Executor) error {
 		if _, err := orm.Update(value).Exec(ctx, transaction); err != nil {
 			return err
 		}

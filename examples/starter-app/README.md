@@ -1,6 +1,6 @@
 # Struct-first starter app example
 
-This example defines `User`, `Order`, `Role`, `UserRole`, `Clip`, `ClipGenre`,
+This example defines `User`, `Order`, `Role`, `UserRole`, `Clip`, `ClipGenre`, `Genre`,
 `Video`, and `WatchLater` as ordinary, application-owned Go structs.
 
 It demonstrates the current struct-first foundation:
@@ -22,6 +22,8 @@ It demonstrates the current struct-first foundation:
 - Value-form soft deletion through `tidbgo:",soft_delete"` without a separate
   null-zero option
 - Ordinary pointers and slices for direct and many-to-many relations
+- Read-only `via=ClipGenres.Genre` target preloads ordered by edge `Priority`,
+  without removing payload or changing the edge's primary key
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
 - Executed query-shape and query-to-index diagnostics through RuntimeCapture
@@ -32,17 +34,19 @@ It demonstrates the current struct-first foundation:
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
-- Logical direct and pure many-to-many relation predicates, including TiDB
-  semi-join hints and relation-first TopN for eligible direct and pure
-  many-to-many collections, plus relation-only Count for eligible unpaginated
-  collection filters, without hydrating relations
+- Logical direct and many-to-many relation predicates, including TiDB
+  semi-join hints and relation-first TopN for eligible direct, pure
+  many-to-many, and payload-bearing `via` collections, plus relation-only Count
+  for eligible unpaginated collection filters, without hydrating relations
 - Single insert, automatically batched bulk insert and upsert from model
   pointer slices, full and partial update, physical delete, soft delete, and
   explicit restore operations
+- Row-specific `UpdateMany` for edge priorities, without replacing edge rows
+  or assigning their primary and relation keys
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
-- Context-scoped statement logging with automatic terminal colors and no bind
+- Shared-executor statement logging with automatic terminal colors and no bind
   argument values
 - Structured runtime capture of actual root, relation, and split-bulk
   statements without per-query wrappers
@@ -80,14 +84,17 @@ and uncertainty counts even when no diagnostic is emitted
 
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
-`Clip`-rooted `Has("ClipGenres", Equal("GenreID", ...))` syntax while the
-compiler uses the `ClipGenre` candidate key to prove one matching edge per
+`Clip`-rooted `Has("Genres", Equal("ID", ...))` syntax through its `via` relation
+while the compiler uses the `ClipGenre` candidate key to prove one matching edge per
 clip, then filters and limits `clip_genres` before loading root rows. Its outer
-`LEADING(tidbgo_k0, tidbgo_t0)` hint keeps that limited key set as the root
+binary `STRAIGHT_JOIN` keeps that limited key set as the root
 lookup's driving input. The edge keeps its surrogate primary key and required
 `Priority` payload. `CountClipsInGenre` starts from the same natural
 `Clip`-rooted relation predicate while the Count compiler reads only
 `clip_genres` when the candidate key proves one edge per Clip.
+The compiler excludes NULL edge keys before Limit or Count and preserves
+edge soft-delete scopes. Without a declared key proving pair uniqueness,
+the via relation remains valid but retains the EXISTS query.
 `BuildRecentUsersWithRoleQuery` demonstrates the corresponding pure
 many-to-many shape: fixing the complete Role primary key lets the compiler
 filter the junction directly and limit `(role_id, user_id)` access before
@@ -103,6 +110,14 @@ projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
 SELECT and joining each User into that statement.
 `ListUsersWithRoles` demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
+`ListClipsWithGenres` loads `Clip.Genres` directly through `ClipGenres.Genre`,
+ordered by `ClipGenres.Priority` and target `ID` in one secondary SELECT.
+`ClipGenres` stays unloaded unless requested separately. Read or write the edge
+model directly when the application needs its payload or identity.
+`UpdateClipGenrePriorities` writes each edge's own `Priority` through its
+existing primary key using `UpdateMany`, accepting pointer slices and inheriting
+the supplied executor's transaction and observer settings. The input must
+identify distinct database rows; missing edges are not inserted.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
 `ListVideosWithDeleted` includes deleted root rows, and
@@ -120,8 +135,11 @@ every automatically split insert batch atomic. `AddUserRoles`,
 pure-junction relation mutations.
 `LoadUserWithOrderCount` scans an aliased aggregate through
 `orm.Raw[User]`.
-`WithQueryLog` enables the built-in statement logger for selected operations
-without replacing the application-owned executor.
+`WithQueryLog` uses `orm.Observe` to configure the shared executor once.
+Pass the returned executor to the example functions; preloads and
+`SaveUserAndInsertOrders` inherit its logger without per-call context setup.
+The application retains ownership of the underlying pool. Use
+`orm.WithStatementObserver` only for temporary context overrides.
 Structured runtime capture is configured directly at a request or job boundary
 instead of adding a companion function for every repository operation:
 

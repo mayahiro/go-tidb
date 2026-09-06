@@ -221,6 +221,45 @@ func (d *rowDecoder) scanDestination(field scanField, address reflect.Value) (an
 	return scanner, nil
 }
 
+// bindReusable binds direct fields on a row-local reusable target once. Field
+// slots remain addressable across SetZero, including pointer and Scanner slots.
+// Embedded paths and inline relations keep the per-row binding path because
+// their destination addresses can change when an intermediate pointer changes.
+func (d *rowDecoder) bindReusable(target any, prefix []any) (bool, error) {
+	if len(d.inline) != 0 || len(prefix) != d.prefix {
+		return false, nil
+	}
+	for _, field := range d.plan.fields {
+		if len(field.index) != 1 {
+			return false, nil
+		}
+	}
+	root, err := d.plan.targetValue(target)
+	if err != nil {
+		return false, err
+	}
+	copy(d.destinations, prefix)
+	for index, field := range d.plan.fields {
+		address, err := scanFieldAddress(root, field.index)
+		if err != nil {
+			d.releaseReusable()
+			return false, fmt.Errorf("orm: bind field %s.%s: %w", d.plan.modelType.Name(), field.goName, err)
+		}
+		destination, err := d.scanDestination(field, address)
+		if err != nil {
+			d.releaseReusable()
+			return false, fmt.Errorf("orm: bind field %s.%s: %w", d.plan.modelType.Name(), field.goName, err)
+		}
+		d.destinations[d.prefix+index] = destination
+	}
+	return true, nil
+}
+
+func (d *rowDecoder) releaseReusable() {
+	clear(d.destinations)
+	d.clearSoftDeleteTargets()
+}
+
 func (d *rowDecoder) clearSoftDeleteTargets() {
 	for index := range d.softDelete {
 		d.softDelete[index].target = nil

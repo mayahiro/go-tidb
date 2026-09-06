@@ -34,6 +34,12 @@ CREATE TABLE clips (
   PRIMARY KEY (id)
 );
 
+CREATE TABLE genres (
+  id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
+  name VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id)
+);
+
 CREATE TABLE clip_genres (
   id BIGINT NOT NULL /*T![auto_rand] AUTO_RANDOM(5) */,
   clip_id BIGINT NOT NULL,

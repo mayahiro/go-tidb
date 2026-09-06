@@ -25,7 +25,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
-- Context-scoped statement observation with automatic terminal colors
+- Shared-executor statement observation with automatic terminal colors
 - Observer-only structured runtime capture of actual root, preload, and
   split-bulk statements, with offline N+1 analysis
 - SELECT-only TiDB execution-plan inspection through the typed query builder
@@ -150,8 +150,10 @@ Ordinary nullable columns continue to use pointers or `sql.Scanner` types.
 To-one relations use pointers, and to-many relations use slices of values or
 pointers. Direct relations infer the common single-primary-key mapping when it
 resolves unambiguously and accept explicit ordered `join=Source:Target`
-options otherwise. Many-to-many mappings explicitly name the junction table
-and both junction key mappings. Relation fields do not perform lazy loading or
+options otherwise. Pure many-to-many mappings explicitly name the junction table
+and both junction key mappings. Read-only `many_to_many,via=Edges.Target` mappings
+reuse an existing has-many edge and its belongs-to target, retaining required
+payload and surrogate edge IDs. Relation fields do not perform lazy loading or
 track separate loaded-state metadata.
 
 See the [struct model guide](docs/models.md) and the runnable
@@ -249,21 +251,25 @@ admins, err := orm.Query[User]().
 `Has` is a logical relation-existence predicate. The compiler normally emits
 `EXISTS` and adds TiDB's `SEMI_JOIN_REWRITE()` hint to filtered collection
 predicates in a positive conjunctive context. For a narrow, metadata-proven
-`has_many` or pure `many_to_many` + root-primary-key order + positive-limit
+`has_many` or `many_to_many` + root-primary-key order + positive-limit
 shape, it instead applies the relation filter and Limit before loading root
 rows. The one-row proof can use either the target primary key or an explicitly
 declared candidate unique key whose complete field set is fixed by the relation
-and conjunctive `Equal` predicates. The generated outer query uses
-`LEADING(tidbgo_k0, tidbgo_t0)` so the limited derived keys drive root-row
-lookups; it does not force a join algorithm. Runtime analysis emits
+and conjunctive `Equal` predicates. Payload-bearing `via` mappings additionally
+require a declared edge primary or candidate key covered by the source-target
+pair. The compiler orders the limited-key/root join with `LEADING` for direct
+and pure many-to-many paths, or binary `STRAIGHT_JOIN` for `via`; it does not
+force a join algorithm. Runtime analysis emits
 `QRY005` when an ordered, limited collection filter falls back to `EXISTS`.
 This applies both to executed runtime shapes and statically resolved source
 terminals. Schema-aware runtime and source analysis emit `QRY007` for a
 missing association index prefix. An unpaginated `Count` with one direct
 positive collection `Has`, no root predicate or active root soft-delete scope,
-and the same one-row proof counts the association table directly. Pure
-many-to-many Count uses the junction directly only when every target predicate
-maps to its target-key columns. Other Count shapes retain the root `EXISTS`.
+and the same one-row proof counts the association table directly.
+Many-to-many Count, including proven `via` mappings, uses the junction directly
+only when every target predicate maps to its target-key columns and no target
+soft-delete scope is needed. Via rewrites preserve edge soft-delete scopes
+and exclude NULL edge keys. Other Count shapes retain the root `EXISTS`.
 The direct Count rewrite relies on the same documented relation-integrity
 contract as relation-first TopN. Pass target
 predicates to require a matching related row, or omit them for existence only.
@@ -272,7 +278,7 @@ and compiles them entirely offline. See the [scalar query
 guide](docs/queries.md#relation-predicates) for the exact rewrite conditions,
 relation-integrity contract, and index guidance.
 
-Preload a direct or pure many-to-many relation by its exported Go field name:
+Preload a direct or many-to-many relation by its exported Go field name:
 
 ```go
 users, err := orm.Query[User]().
@@ -284,7 +290,7 @@ users, err := orm.Query[User]().
 
 `Preload` validates metadata offline and hydrates ordinary pointer or slice
 fields without lazy loading. `belongs_to` and `has_one` relations use
-deterministic inline `LEFT JOIN`s. `has_many` and pure `many_to_many` relations
+deterministic inline `LEFT JOIN`s. `has_many` and `many_to_many` relations
 use deterministic secondary SELECTs after the preceding rows close. An
 unrestricted `All` without an active root soft-delete scope loads each root
 collection source once without an `IN` list. A default-scoped soft-delete
@@ -301,9 +307,24 @@ and the Orders SELECT with User joined inline. `PreloadFields` limits any
 relation projection, and `PreloadOrderBy` defines collection order; required
 keys are added automatically. Use a caller-owned repeatable-read `*sql.Tx`
 when multiple statements must share one transaction snapshot, or use the
-`*sql.Tx` supplied to a `Transaction` callback.
+transaction-bound executor supplied to a `Transaction` callback.
 `PreloadWithDeleted` includes logically deleted targets for only the requested
 relation path. Arbitrary relation-specific predicates remain unavailable.
+
+For a payload-bearing edge, declare a read-only target collection such as
+`Genres []Genre` with `tidbgo:"many_to_many,via=ClipGenres.Genre"` and use:
+
+```go
+orm.Query[Clip]().Preload("Genres",
+    orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+)
+```
+
+This loads target values directly in edge order without loading `ClipGenres`.
+Repeated edges remain repeated targets. Both edge and target soft-delete scopes
+apply; `PreloadWithDeleted` removes both for that path. Edge writes remain ordinary
+CRUD, and pure relation mutation APIs reject `via` mappings. See
+[payload-bearing edge preloads](docs/queries.md#payload-bearing-edge-preloads).
 
 ## Mutations and raw SQL
 
@@ -315,6 +336,7 @@ affected, err = orm.Upsert(&user).Exec(ctx, db)
 affected, err = orm.UpsertMany(users).Exec(ctx, db)
 affected, err = orm.Update(&user).Exec(ctx, db)
 affected, err = orm.Update(&user, "Email").Exec(ctx, db)
+affected, err = orm.UpdateMany(users, "Email").Exec(ctx, db)
 affected, err = orm.UpdateWhere[JobLease](
     orm.Set("LockOwner", owner),
     orm.Set("LockUntil", lockUntil),
@@ -334,7 +356,7 @@ affected, err = orm.ClearRelation[User]("Roles", user.ID).Exec(ctx, db)
 Group application-defined operations with the explicit transaction helper:
 
 ```go
-err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
+err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
     if _, err := orm.Update(&user).Exec(ctx, tx); err != nil {
         return err
     }
@@ -343,15 +365,20 @@ err = orm.Transaction(ctx, db, func(tx *sql.Tx) error {
 })
 ```
 
-`InsertMany(values)` and `UpsertMany(values)` accept either `[]Model` or
+`InsertMany(values)`, `UpsertMany(values)`, and `UpdateMany(values)` accept either `[]Model` or
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
 limit, while `Build` continues to represent one executable statement. Runtime
 capture records the actual split automatically.
-Pass a `*sql.Tx`, created directly or supplied to a `Transaction` callback,
+Pass a caller-owned `*sql.Tx` or a `Transaction` callback's executor
 when every batch must be atomic. `Transaction` uses default `database/sql`
 options and does not retry its callback. Every typed mutation supports offline
 `Build`. An empty predicate list cannot produce a typed DELETE. `*sql.DB`,
 `*sql.Conn`, and `*sql.Tx` implement the mutation executor boundary.
+
+`UpdateMany(values, "Email")` writes each model's own value to its existing
+primary-key row; it never inserts missing rows or assigns generated IDs.
+Inputs must identify distinct database rows. It supports composite primary
+keys, NULL values, and the same soft-delete scope as `Update`.
 
 Pure many-to-many relation mutations use the exported relation field name and
 key values without generated code. `AddRelation` emits one multi-row junction
@@ -396,12 +423,16 @@ the caller. See Go's official [SQL injection guidance](https://go.dev/doc/databa
 
 ## Statement observation
 
-Enable a context-scoped execution log without replacing the caller-owned
-executor:
+Configure a shared executor once, then pass it to repositories and ORM terminals:
 
 ```go
-ctx = orm.WithStatementObserver(ctx, orm.NewStatementLogger(os.Stderr))
+executor := orm.Observe(db, orm.NewStatementLogger(os.Stderr))
+users, err := orm.Query[User]().All(ctx, executor)
 ```
+
+Preloads and `orm.Transaction` inherit the observer. The caller still owns the
+underlying `database/sql` pool. `WithStatementObserver` is an optional context
+override; ordinary logging needs no middleware or per-repository setup.
 
 By default, the logger records operation, duration, bind count, affected rows,
 SQL template, and errors without receiving argument values. Interactive
@@ -612,8 +643,8 @@ use of an `All`, `First`, or `Only` result is understood within the same
 function. With `--schema`, resolved root queries using a positive explicit
 `Limit`, uniform-direction `OrderBy`, and only conjunctive `Equal` filters are
 checked for a matching physical index prefix. Eligible direct `has_many` and
-pure `many_to_many` relation-first TopN queries check the association access in
-the same way.
+`many_to_many` relation-first TopN queries, including proven `via` mappings,
+check the association access in the same way.
 Dynamic relation names, unresolved relation metadata, range filters, mixed
 ordering, and separately mutated builders remain uncertain. Projection
 analysis also leaves returned or passed results, aliases, and preloads
@@ -651,10 +682,11 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
   `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
   yet.
-- Direct and pure `many_to_many` relation predicates and preloads may be nested.
+- Direct and `many_to_many` relation predicates and preloads may be nested,
+  including read-only `via` mappings through payload-bearing edges.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,
-  and eligible ordered `has_many` and pure `many_to_many` pages use
-  relation-first TopN SQL.
+  and eligible ordered `has_many` and `many_to_many` pages, including proven
+  `via` mappings, use relation-first TopN SQL.
   Preload projection, collection ordering, and relation-scoped inclusion of
   logically deleted targets are implemented; arbitrary target predicates are
   not.

@@ -13,13 +13,15 @@ type bulkMutationPlan struct {
 	descriptor      *model.Descriptor
 	insertFields    []mutationFieldPlan
 	updateFields    []mutationFieldPlan
+	primaryKey      []mutationFieldPlan
+	softDelete      *mutationFieldPlan
 	values          reflect.Value
 	pointerElements bool
 	noOp            bool
 }
 
 func prepareBulkMutation[T any](values []T, fieldNames []string, operation string, upsert bool) (bulkMutationPlan, error) {
-	descriptor, pointerElements, err := insertManyDescriptor[T](operation)
+	descriptor, pointerElements, err := bulkMutationDescriptor[T](operation)
 	if err != nil {
 		return bulkMutationPlan{}, err
 	}
@@ -62,6 +64,9 @@ func (plan bulkMutationPlan) compileSingle() (compiledMutation, error) {
 }
 
 func (plan bulkMutationPlan) compileRange(start, end int, statement string) (compiledMutation, error) {
+	if len(plan.primaryKey) != 0 {
+		return plan.compileUpdateRange(start, end, statement)
+	}
 	rowCount := end - start
 	arguments := make([]any, rowCount*len(plan.insertFields))
 	if err := fillInsertManyArguments(arguments, plan.values, plan.descriptor, plan.insertFields, plan.pointerElements, start, end, plan.operation); err != nil {
@@ -79,6 +84,15 @@ func (plan bulkMutationPlan) compileRange(start, end int, statement string) (com
 }
 
 func (plan bulkMutationPlan) rowsPerStatement() (int, error) {
+	if len(plan.primaryKey) != 0 {
+		// Each CASE arm repeats the complete key and adds one new value.
+		// The final IN predicate binds each complete key once more.
+		width := len(plan.primaryKey) + len(plan.updateFields)
+		if width > maxMutationParameters {
+			return 0, fmt.Errorf("orm: %s for %s requires %d placeholders for one row, exceeding TiDB's %d-placeholder statement limit", plan.operation, plan.descriptor.Name(), width, maxMutationParameters)
+		}
+		return max(1, maxMutationParameters/plan.updateParametersPerRow()), nil
+	}
 	fieldCount := len(plan.insertFields)
 	if fieldCount == 0 {
 		return min(plan.values.Len(), maxMutationParameters), nil
@@ -109,6 +123,11 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 	if err := plan.validatePointerElements(); err != nil {
 		return 0, err
 	}
+	if len(plan.primaryKey) != 0 {
+		if err := plan.validateUpdateKeys(); err != nil {
+			return 0, err
+		}
+	}
 	rowsPerStatement, err := plan.rowsPerStatement()
 	if err != nil {
 		return 0, err
@@ -117,7 +136,9 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 	var statementGroup uint64
 	var totalAffected int64
 	statementOperation := StatementInsert
-	if len(plan.updateFields) != 0 {
+	if len(plan.primaryKey) != 0 {
+		statementOperation = StatementUpdate
+	} else if len(plan.updateFields) != 0 {
 		statementOperation = StatementUpsert
 	}
 	// Retain only the previous batch's immutable SQL within this execution.
@@ -170,6 +191,8 @@ func (plan bulkMutationPlan) attachRuntimeCapture(observation *statementObservat
 	terminal := "insert_many"
 	if operation == StatementUpsert {
 		terminal = "upsert_many"
+	} else if operation == StatementUpdate {
+		terminal = "update_many"
 	}
 	metadata := runtimeTypedMutationMetadata(plan.descriptor.Name(), terminal)
 	metadata.batch = runtimeBatchMetadata(*statementGroup, statementIndex+1, statementCount, end-start, plan.values.Len())

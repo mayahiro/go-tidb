@@ -63,6 +63,7 @@ func (q *SelectQuery[T]) All(ctx context.Context, executor QueryExecutor) ([]T, 
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return nil, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compile()
 	if err != nil {
 		return nil, err

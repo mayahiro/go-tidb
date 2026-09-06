@@ -698,12 +698,12 @@ func testSelectExplainAnalyze(t *testing.T, ctx context.Context, database *sql.D
 func testServerRU(t *testing.T, ctx context.Context, database *sql.DB, dsn string) {
 	t.Helper()
 	var automaticEvent orm.StatementEvent
-	automaticContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+	automaticExecutor := orm.Observe(database, func(event orm.StatementEvent) {
 		automaticEvent = event
 	}, orm.CollectServerRU())
 	if _, err := orm.Query[starterOrder]().
 		Where(orm.Equal("ID", int64(11))).
-		Only(automaticContext, database); err != nil {
+		Only(ctx, automaticExecutor); err != nil {
 		fatalDatabaseError(t, dsn, "execute automatic ServerRU database query", err)
 	}
 	if automaticEvent.ServerRU == nil || !automaticEvent.ServerRU.Known || automaticEvent.ServerRU.Value <= 0 || automaticEvent.ServerRU.AuxiliaryStatements != 1 || automaticEvent.ServerRU.Error != nil {
@@ -1817,7 +1817,7 @@ WHERE u.id = ?`, int64(1)).Only(ctx, database)
 
 	rolledBack := starterGenerated{Name: "rolled-back", Score: 1, GroupID: 8}
 	rollbackSignal := errors.New("integration-requested rollback")
-	err = orm.Transaction(ctx, database, func(transaction *sql.Tx) error {
+	err = orm.Transaction(ctx, database, func(transaction orm.Executor) error {
 		affected, err := orm.Insert(&rolledBack).Exec(ctx, transaction)
 		if err != nil {
 			return err
@@ -1839,7 +1839,7 @@ WHERE u.id = ?`, int64(1)).Only(ctx, database)
 	}
 
 	committed := starterGenerated{Name: "committed", Score: 2, GroupID: 8}
-	err = orm.Transaction(ctx, database, func(transaction *sql.Tx) error {
+	err = orm.Transaction(ctx, database, func(transaction orm.Executor) error {
 		affected, err := orm.Insert(&committed).Exec(ctx, transaction)
 		if err != nil {
 			return err
@@ -1952,26 +1952,26 @@ func testStatementObservation(t *testing.T, ctx context.Context, database *sql.D
 	t.Helper()
 
 	var events []orm.StatementEvent
-	observedContext := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) {
+	executor := orm.Observe(database, func(event orm.StatementEvent) {
 		events = append(events, event)
 	}, orm.IncludeStatementArguments())
 	value := starterGenerated{Name: "statement-observed", Score: 1, GroupID: 11}
-	if _, err := orm.Insert(&value).Exec(observedContext, database); err != nil {
+	if _, err := orm.Insert(&value).Exec(ctx, executor); err != nil {
 		fatalDatabaseError(t, dsn, "insert a statement-observed model", err)
 	}
-	if _, err := orm.Query[starterGenerated]().Where(orm.Equal("Name", value.Name)).Only(observedContext, database); err != nil {
+	if _, err := orm.Query[starterGenerated]().Where(orm.Equal("Name", value.Name)).Only(ctx, executor); err != nil {
 		fatalDatabaseError(t, dsn, "load a statement-observed model", err)
 	}
-	if _, err := orm.RawExec(observedContext, database, "UPDATE tidbgo_it_generated SET score = score + 1 WHERE id = ?", value.ID); err != nil {
+	if _, err := orm.RawExec(ctx, executor, "UPDATE tidbgo_it_generated SET score = score + 1 WHERE id = ?", value.ID); err != nil {
 		fatalDatabaseError(t, dsn, "update a statement-observed model through raw SQL", err)
 	}
-	if err := orm.Transaction(observedContext, database, func(transaction *sql.Tx) error {
-		_, err := orm.Delete(&value).Exec(observedContext, transaction)
+	if err := orm.Transaction(ctx, executor, func(transaction orm.Executor) error {
+		_, err := orm.Delete(&value).Exec(ctx, transaction)
 		return err
 	}); err != nil {
 		fatalDatabaseError(t, dsn, "delete a statement-observed model in a transaction", err)
 	}
-	if _, err := orm.Query[starterGenerated]().Where(orm.Equal("Name", value.Name)).First(observedContext, database); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := orm.Query[starterGenerated]().Where(orm.Equal("Name", value.Name)).First(ctx, executor); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("load a deleted statement-observed model error = %v, want sql.ErrNoRows", err)
 	}
 

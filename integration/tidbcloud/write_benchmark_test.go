@@ -131,7 +131,7 @@ func benchmarkWriteCase(b *testing.B, ctx context.Context, connection *sql.Conn,
 			return executeWriteBenchmark(ctx, connection, pointers, test)
 		}
 		var affected int64
-		err := orm.Transaction(ctx, connection, func(tx *sql.Tx) error {
+		err := orm.Transaction(ctx, connection, func(tx orm.Executor) error {
 			var err error
 			affected, err = executeWriteBenchmark(ctx, tx, pointers, test)
 			return err

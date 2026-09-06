@@ -64,11 +64,15 @@ func (analyzer *sourceAnalyzer) sourceRelationTopNIndexAccess(
 			len(analysis.relation.junctionTargetColumns) == 0 {
 			return queryshape.IndexAccess{}, false
 		}
+		equalityColumns := append([]string(nil), analysis.relation.junctionTargetColumns...)
+		if analysis.relation.junctionSoftDelete != "" {
+			equalityColumns = appendSourceColumn(equalityColumns, analysis.relation.junctionSoftDelete)
+		}
 		return queryshape.IndexAccess{
 			Kind:            queryshape.IndexAccessRelationTopN,
 			Table:           analysis.relation.junctionTable,
 			Relation:        analysis.relation.name,
-			EqualityColumns: append([]string(nil), analysis.relation.junctionTargetColumns...),
+			EqualityColumns: equalityColumns,
 			OrderColumns:    append([]string(nil), analysis.relation.junctionSourceColumns...),
 		}, true
 	}

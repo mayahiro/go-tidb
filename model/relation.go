@@ -21,6 +21,8 @@ const (
 // A direct mapping is also a data-integrity contract: mapped non-NULL key
 // values identify an existing row on the other side. go-tidb does not enforce
 // a physical foreign key, but query optimizations may rely on this invariant.
+// A non-empty Via denotes a read-only projection through two direct relations;
+// it does not declare a unique source-target pair or permit junction mutations.
 type Relation struct {
 	goName     string
 	kind       RelationKind
@@ -29,6 +31,7 @@ type Relation struct {
 	sourceKey  []Field
 	targetKey  []Field
 	junction   *Junction
+	via        string
 }
 
 // GoName returns the exported Go relation field name.
@@ -36,6 +39,10 @@ func (r Relation) GoName() string { return r.goName }
 
 // Kind returns the declared relation cardinality.
 func (r Relation) Kind() RelationKind { return r.kind }
+
+// Via returns the has-many and belongs-to field path for a read-only edge
+// projection, or an empty string for direct relations and pure junctions.
+func (r Relation) Via() string { return r.via }
 
 // TargetType returns the non-pointer named target struct type.
 func (r Relation) TargetType() reflect.Type { return r.targetType }

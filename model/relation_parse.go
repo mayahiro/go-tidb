@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
@@ -20,6 +21,7 @@ type relationDeclaration struct {
 	targetType  reflect.Type
 	joins       []relationPair
 	through     string
+	via         string
 	sourcePairs []relationPair
 	targetPairs []relationPair
 }
@@ -82,6 +84,7 @@ func parseRelationTag(value string, collection bool) (relationDeclaration, error
 	declaration := relationDeclaration{
 		kind:    kind,
 		through: parsed.Through,
+		via:     parsed.Via,
 	}
 	for _, pair := range parsed.Joins {
 		declaration.joins = append(declaration.joins, relationPair{left: pair.Left, right: pair.Right})
@@ -124,21 +127,27 @@ func (p *descriptorParser) resolveRelations(sourceType reflect.Type) {
 		}
 
 		if declaration.kind == RelationManyToMany {
-			p.resolveManyToMany(declaration, target)
+			if declaration.via != "" {
+				p.resolveViaRelation(sourceType, declaration, target)
+			} else {
+				p.resolveManyToMany(declaration, target)
+			}
 			continue
 		}
-		p.resolveDirectRelation(sourceType, declaration, target)
+		if relation, ok := p.resolveDirectRelation(sourceType, declaration, target); ok {
+			p.relations = append(p.relations, relation)
+		}
 	}
 }
 
-func (p *descriptorParser) resolveDirectRelation(sourceType reflect.Type, declaration relationDeclaration, target *descriptorParser) {
+func (p *descriptorParser) resolveDirectRelation(sourceType reflect.Type, declaration relationDeclaration, target *descriptorParser) (Relation, bool) {
 	joins := declaration.joins
 	if len(joins) == 0 {
 		var err error
 		joins, err = inferredDirectJoins(sourceType, declaration, p.fields, target.fields)
 		if err != nil {
 			p.add(declaration.path, err.Error())
-			return
+			return Relation{}, false
 		}
 	}
 
@@ -179,9 +188,63 @@ func (p *descriptorParser) resolveDirectRelation(sourceType reflect.Type, declar
 		relation.sourceKey = append(relation.sourceKey, source)
 		relation.targetKey = append(relation.targetKey, targetField)
 	}
-	if valid {
-		p.relations = append(p.relations, relation)
+	return relation, valid
+}
+
+func (p *descriptorParser) resolveViaRelation(sourceType reflect.Type, declaration relationDeclaration, target *descriptorParser) {
+	edgeName, targetName, _ := strings.Cut(declaration.via, ".")
+	edgeDeclaration, ok := p.relationDeclarationByName(edgeName)
+	if !ok || edgeDeclaration.kind != RelationHasMany {
+		p.add(declaration.path, fmt.Sprintf("via field %q must be a mapped has_many relation", edgeName))
+		return
 	}
+	edge := parseModelShape(edgeDeclaration.targetType)
+	if len(edge.issues) != 0 {
+		p.add(declaration.path, fmt.Sprintf("via edge model %s is invalid: %s", edgeDeclaration.targetType, edge.issues[0].Message))
+		return
+	}
+	targetDeclaration, ok := edge.relationDeclarationByName(targetName)
+	if !ok || targetDeclaration.kind != RelationBelongsTo || targetDeclaration.targetType != declaration.targetType {
+		p.add(declaration.path, fmt.Sprintf("via field %q must be a belongs_to relation targeting %s", declaration.via, declaration.targetType))
+		return
+	}
+	sourceRelation, sourceOK := p.resolveDirectRelation(sourceType, edgeDeclaration, edge)
+	targetRelation, targetOK := edge.resolveDirectRelation(edgeDeclaration.targetType, targetDeclaration, target)
+	if !targetOK {
+		p.add(declaration.path, fmt.Sprintf("via relation %q is invalid: %s", declaration.via, edge.issues[0].Message))
+	}
+	if !sourceOK || !targetOK {
+		return
+	}
+	junction := &Junction{tableName: edge.tableName}
+	for _, field := range sourceRelation.targetKey {
+		if field.IsComputed() {
+			p.add(declaration.path, fmt.Sprintf("via edge key %q cannot be computed", field.GoName()))
+			return
+		}
+		junction.sourceColumns = append(junction.sourceColumns, field.ColumnName())
+	}
+	for _, field := range targetRelation.sourceKey {
+		if field.IsComputed() {
+			p.add(declaration.path, fmt.Sprintf("via edge key %q cannot be computed", field.GoName()))
+			return
+		}
+		junction.targetColumns = append(junction.targetColumns, field.ColumnName())
+	}
+	p.relations = append(p.relations, Relation{
+		goName: declaration.goName, kind: RelationManyToMany, targetType: declaration.targetType,
+		index: append([]int(nil), declaration.index...), via: declaration.via,
+		sourceKey: sourceRelation.sourceKey, targetKey: targetRelation.targetKey, junction: junction,
+	})
+}
+
+func (p *descriptorParser) relationDeclarationByName(name string) (relationDeclaration, bool) {
+	for _, declaration := range p.declarations {
+		if declaration.goName == name {
+			return declaration, true
+		}
+	}
+	return relationDeclaration{}, false
 }
 
 func (p *descriptorParser) resolveManyToMany(declaration relationDeclaration, target *descriptorParser) {

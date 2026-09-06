@@ -97,7 +97,7 @@ func repeatedUpdateDiagnostic(group repeatedWriteGroup) check.Diagnostic {
 		Title:        "Repeated UPDATE warrants application review",
 		Message:      "One runtime scope attempted the same typed UPDATE statement " + strconv.Itoa(group.count) + " times; repetition does not prove that the calls can be combined",
 		Evidence:     repeatedWriteEvidence(group),
-		Suggestion:   "Review whether assignments and predicates allow fewer statements; preserve row-specific values, lease conditions, atomic increments, execution order, and transaction boundaries, check intentional retries, and measure latency and RU before changing the operation",
+		Suggestion:   "Review whether assignments and predicates allow fewer statements; consider UpdateMany for distinct primary-key rows with row-specific values, preserve lease conditions, atomic increments, execution order, and transaction boundaries, check intentional retries, and measure latency and RU before changing the operation",
 		Suppressible: true,
 	}
 }

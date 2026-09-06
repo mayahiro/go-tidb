@@ -5,17 +5,20 @@
 // I/O only through an explicitly supplied database/sql executor. Has compiles
 // relation existence conditions without implicit loading.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
-// has-one relations use inline LEFT JOINs; has-many and pure many-to-many
+// has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
 // collections loaded once and constrained collections loaded in bounded
-// parameter batches. Insert, automatically bounded InsertMany, Upsert,
-// UpsertMany, Update, UpdateWhere, Delete, and DeleteWhere provide typed model
+// parameter batches. Read-only via relations reuse payload-bearing edge
+// mappings and support edge-field ordering without hydrating the edge.
+// Insert, automatically bounded InsertMany, Upsert,
+// UpsertMany, Update, UpdateMany, UpdateWhere, Delete, and DeleteWhere provide typed model
 // writes. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many
 // junction writes. Transaction groups application-defined work using a
-// concrete *sql.Tx without retrying it. Raw provides model-aware result
-// scanning for explicit SQL. WithStatementObserver adds context-scoped
-// execution events, and NewStatementLogger provides automatic terminal colors
+// transaction-bound Executor without retrying it. Raw provides model-aware
+// result scanning for explicit SQL. Observe configures a shared executor once,
+// while WithStatementObserver supplies optional context overrides.
+// NewStatementLogger provides automatic terminal colors
 // with bind values excluded unless explicitly enabled. RuntimeCapture records
 // actual typed queries, preloads, and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an

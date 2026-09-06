@@ -29,6 +29,7 @@ func (q *SelectQuery[T]) Exists(ctx context.Context, executor QueryExecutor) (bo
 	if err := validateQueryExecution(ctx, executor); err != nil {
 		return false, err
 	}
+	ctx = executorStatementContext(ctx, executor)
 	compiled, err := q.compileExists()
 	if err != nil {
 		return false, err

@@ -61,20 +61,22 @@ const (
 // Predicate is one bind-value-free query predicate. Table and Column are set
 // for scalar predicates, while Relation and Table identify relation targets.
 type Predicate struct {
-	Operator              PredicateOperator `json:"operator"`
-	Table                 string            `json:"table,omitempty"`
-	Field                 string            `json:"field,omitempty"`
-	Column                string            `json:"column,omitempty"`
-	Relation              string            `json:"relation,omitempty"`
-	RelationKind          string            `json:"relation_kind,omitempty"`
-	RelationSourceColumns []string          `json:"relation_source_columns,omitempty"`
-	RelationTargetColumns []string          `json:"relation_target_columns,omitempty"`
-	JunctionTable         string            `json:"junction_table,omitempty"`
-	JunctionSourceColumns []string          `json:"junction_source_columns,omitempty"`
-	JunctionTargetColumns []string          `json:"junction_target_columns,omitempty"`
-	SoftDeleteColumn      string            `json:"soft_delete_column,omitempty"`
-	ValueCount            int               `json:"value_count,omitempty"`
-	Children              []Predicate       `json:"children,omitempty"`
+	Operator                 PredicateOperator `json:"operator"`
+	Table                    string            `json:"table,omitempty"`
+	Field                    string            `json:"field,omitempty"`
+	Column                   string            `json:"column,omitempty"`
+	Relation                 string            `json:"relation,omitempty"`
+	RelationKind             string            `json:"relation_kind,omitempty"`
+	RelationSourceColumns    []string          `json:"relation_source_columns,omitempty"`
+	RelationTargetColumns    []string          `json:"relation_target_columns,omitempty"`
+	JunctionTable            string            `json:"junction_table,omitempty"`
+	JunctionSourceColumns    []string          `json:"junction_source_columns,omitempty"`
+	JunctionTargetColumns    []string          `json:"junction_target_columns,omitempty"`
+	Via                      string            `json:"via,omitempty"`
+	JunctionSoftDeleteColumn string            `json:"junction_soft_delete_column,omitempty"`
+	SoftDeleteColumn         string            `json:"soft_delete_column,omitempty"`
+	ValueCount               int               `json:"value_count,omitempty"`
+	Children                 []Predicate       `json:"children,omitempty"`
 }
 
 // OrderDirection identifies one query ordering direction.
@@ -90,27 +92,30 @@ type OrderTerm struct {
 	Field     string         `json:"field,omitempty"`
 	Column    string         `json:"column"`
 	Direction OrderDirection `json:"direction"`
+	Junction  bool           `json:"junction,omitempty"`
 }
 
 // Preload describes one compiled Relation load without runtime parent keys.
 type Preload struct {
-	Path                  string      `json:"path"`
-	Relation              string      `json:"relation"`
-	Kind                  string      `json:"kind"`
-	Table                 string      `json:"table"`
-	SourceColumns         []string    `json:"source_columns"`
-	TargetColumns         []string    `json:"target_columns"`
-	JunctionTable         string      `json:"junction_table,omitempty"`
-	JunctionSourceColumns []string    `json:"junction_source_columns,omitempty"`
-	JunctionTargetColumns []string    `json:"junction_target_columns,omitempty"`
-	Projection            []string    `json:"projection"`
-	Order                 []OrderTerm `json:"order"`
-	Inline                bool        `json:"inline"`
-	LoadAllSources        bool        `json:"load_all_sources"`
-	BatchSize             int         `json:"batch_size"`
-	WithDeleted           bool        `json:"with_deleted"`
-	SoftDeleteColumn      string      `json:"soft_delete_column,omitempty"`
-	Children              []Preload   `json:"children"`
+	Path                     string      `json:"path"`
+	Relation                 string      `json:"relation"`
+	Kind                     string      `json:"kind"`
+	Table                    string      `json:"table"`
+	SourceColumns            []string    `json:"source_columns"`
+	TargetColumns            []string    `json:"target_columns"`
+	JunctionTable            string      `json:"junction_table,omitempty"`
+	JunctionSourceColumns    []string    `json:"junction_source_columns,omitempty"`
+	JunctionTargetColumns    []string    `json:"junction_target_columns,omitempty"`
+	Via                      string      `json:"via,omitempty"`
+	JunctionSoftDeleteColumn string      `json:"junction_soft_delete_column,omitempty"`
+	Projection               []string    `json:"projection"`
+	Order                    []OrderTerm `json:"order"`
+	Inline                   bool        `json:"inline"`
+	LoadAllSources           bool        `json:"load_all_sources"`
+	BatchSize                int         `json:"batch_size"`
+	WithDeleted              bool        `json:"with_deleted"`
+	SoftDeleteColumn         string      `json:"soft_delete_column,omitempty"`
+	Children                 []Preload   `json:"children"`
 }
 
 // CompilerRewrite identifies a query compiler decision that changes the SQL

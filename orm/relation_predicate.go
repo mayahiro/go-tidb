@@ -34,9 +34,10 @@ type relationPredicatePlan struct {
 }
 
 type relationPredicateJunction struct {
-	tableName     string
-	sourceColumns []string
-	targetColumns []string
+	tableName        string
+	sourceColumns    []string
+	targetColumns    []string
+	softDeleteColumn string
 }
 
 type relationPredicatePlanResult struct {
@@ -138,7 +139,29 @@ func compileRelationPredicatePlan(source *model.Descriptor, relation model.Relat
 		sourceColumns: sourceColumns,
 		targetColumns: targetColumns,
 	}
+	if relation.Via() != "" {
+		edge, err := relationEdgeDescriptor(source, relation)
+		if err != nil {
+			return nil, err
+		}
+		if field, exists := edge.SoftDeleteField(); exists {
+			plan.junction.softDeleteColumn = field.ColumnName()
+		}
+	}
 	return plan, nil
+}
+
+func relationEdgeDescriptor(source *model.Descriptor, relation model.Relation) (*model.Descriptor, error) {
+	edgeName, _, _ := strings.Cut(relation.Via(), ".")
+	edge, ok := source.RelationByName(edgeName)
+	if !ok {
+		return nil, fmt.Errorf("orm: relation %s.%s has no mapped via edge %q", source.Name(), relation.GoName(), edgeName)
+	}
+	descriptor, err := model.DescribeType(edge.TargetType())
+	if err != nil {
+		return nil, fmt.Errorf("orm: describe via edge %s.%s: %w", source.Name(), edgeName, err)
+	}
+	return descriptor, nil
 }
 
 func relationFieldColumns(fields []model.Field) []string {
@@ -192,6 +215,10 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	if plan.softDeleteColumn != "" {
 		c.query.WriteString(" AND ")
 		writePreloadSoftDeletePredicate(c.query, targetAlias, plan.softDeleteColumn)
+	}
+	if plan.junction != nil && plan.junction.softDeleteColumn != "" {
+		c.query.WriteString(" AND ")
+		writePreloadSoftDeletePredicate(c.query, relationJunctionAlias(aliasIndex), plan.junction.softDeleteColumn)
 	}
 
 	if len(current.children) != 0 {
