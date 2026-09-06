@@ -494,6 +494,45 @@ allocationや時間の差を評価する前に、SQL、statement数、結果が�
 
 cached default target scan planはprojectionの順序も一致する場合だけ再利用し、queryのalias、scope、result sliceは独立させます
 
+### Via Preloadのcost切り分け
+
+value targetを直接読むviaと、edgeを取得してtargetを取り出す方式を比較します
+
+```sh
+go test ./orm -run '^TestViaCostFixtureResults$|^TestManyToManyReusableScan' -count=1
+go test ./orm -run '^$' -bench '^(BenchmarkViaPreloadCost|BenchmarkViaPreloadPointerFallback|BenchmarkSelectQueryPreloadNested100Parents300Children)$' -benchmem -benchtime=200ms -count=5
+via_cost_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaPreloadCost$/^shared$/^via_true$' -benchtime=2s -cpuprofile "$via_cost_profile_dir/cpu" -memprofile "$via_cost_profile_dir/mem" -o "$via_cost_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/mem"
+```
+
+offline matrixは空／1 edge、20 parent・100 edgeで12 targetを共有する入力、狭いprojection、共有のないtarget、2,000 edgeを含みます
+
+column decodeと最終targetの取り出しを含み、MySQL driverとnetworkの処理は含みません。pointerとnested workloadは同じscan targetを再利用できない経路を確認します
+
+直接fieldを持ち、targetのinline Relationがないvalue collectionではbatchごとにscan先を一度だけ設定します。pointer collectionと埋め込みfieldの経路は行ごとの設定を維持します。返却値の所有権と生成SQLは変わりません
+
+接続ありの診断では、先に上記の専用test databaseを設定します
+
+```sh
+TIDBGO_TEST_VIA_COST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterViaCost$' -count=1 -v
+```
+
+このopt-in testは自分で作成した `tidbgo_it_cost_*` fixtureだけを削除し、既存tableがある場合は拒否します
+
+最終結果が同じ3 statementのedge／via queryを比較し、別途それぞれの生成SQLをdatabase/sqlで全行読み取ります。rawの読取では行数を検証しますがORMの結果graphは組み立てないため、SQL／driverの診断であり同等のrepository実装ではありません
+
+2回のwarm-up後、4方式の順番を交互にして6回測定します。観測なしの全体latency、別試行のstatement別観測時間、操作ごとのDML ServerRUを3 sample、代表Relation planを分けて出力します
+
+RU probe、結果検証、setup、EXPLAIN ANALYZEは観測なしlatencyの計測区間外です。latencyやRUの閾値によるassertは行いません
+
+neutralなfixtureは再現の補助でありproduction dataの複製ではありません。生sampleを保存し、有利／不利な入力を比較してから変更を採用してください。別実行のplanやallocation削減だけではend-to-end latencyの改善は証明できません
+
+別々に測ったrawとORMの中央値を引き算して、正確なORM overheadとしないでください
+
+### 接続ありのRelation graph
+
 同じ専用databaseで代表Relation graphを計測します
 
 ```sh

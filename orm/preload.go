@@ -885,17 +885,39 @@ type manyToManyPreloadDecoder struct {
 	plan         *preloadPlan
 	decoder      *rowDecoder
 	sourceFields []any
+	reusable     bool
+	bound        bool
 }
 
 func newManyToManyPreloadDecoder(plan *preloadPlan) *manyToManyPreloadDecoder {
+	reusable := !plan.retainTarget && len(plan.targetStatement.inlinePreloads) == 0
+	for _, index := range plan.sourceKeyIndex {
+		if len(index) != 1 {
+			reusable = false
+			break
+		}
+	}
+	for _, field := range plan.targetStatement.scanPlan.fields {
+		if len(field.index) != 1 {
+			reusable = false
+			break
+		}
+	}
 	return &manyToManyPreloadDecoder{
 		plan:         plan,
 		decoder:      plan.targetStatement.newDecoder(len(plan.sourceKey)),
 		sourceFields: make([]any, len(plan.sourceKey)),
+		reusable:     reusable,
 	}
 }
 
 func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.Value) error {
+	if d.bound {
+		if err := row.Scan(d.decoder.destinations...); err != nil {
+			return fmt.Errorf("orm: scan %s many-to-many row: %w", d.plan.targetType.Name(), err)
+		}
+		return nil
+	}
 	for index, field := range d.plan.sourceKey {
 		address, err := scanFieldAddress(source, d.plan.sourceKeyIndex[index])
 		if err != nil {
@@ -905,6 +927,20 @@ func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.V
 		d.sourceFields[index] = address.Interface()
 	}
 
+	// Only value collections reuse the same target. Source fields must also be
+	// direct slots so resetting the scratch parent cannot invalidate bindings.
+	if d.reusable {
+		var err error
+		d.bound, err = d.decoder.bindReusable(target.Addr().Interface(), d.sourceFields)
+		if err != nil {
+			clear(d.sourceFields)
+			return err
+		}
+		if d.bound {
+			clear(d.sourceFields)
+			return d.scan(row, source, target)
+		}
+	}
 	err := d.decoder.scanWithPrefix(row, target.Addr().Interface(), d.sourceFields)
 	clear(d.sourceFields)
 	if err != nil {
@@ -915,6 +951,7 @@ func (d *manyToManyPreloadDecoder) scan(row rowScanner, source, target reflect.V
 
 func hydrateManyToManyPreloadBatch(plan *preloadPlan, parents preloadParentSet, parentIndexes map[preloadLookupKey]preloadParentIndexes, rows resultRows) error {
 	decoder := newManyToManyPreloadDecoder(plan)
+	defer decoder.decoder.releaseReusable()
 	source := reflect.New(plan.sourceType).Elem()
 	var reusableTarget reflect.Value
 	if !plan.retainTarget {

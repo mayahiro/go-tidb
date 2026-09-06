@@ -499,6 +499,52 @@ results before interpreting allocation or timing differences. Cached default
 target scan plans are reused only when projection order also matches; query
 aliases, scopes, and result slices remain independent.
 
+### Via preload cost isolation
+
+Compare value-target via loading with explicit edge loading and target extraction:
+
+```sh
+go test ./orm -run '^TestViaCostFixtureResults$|^TestManyToManyReusableScan' -count=1
+go test ./orm -run '^$' -bench '^(BenchmarkViaPreloadCost|BenchmarkViaPreloadPointerFallback|BenchmarkSelectQueryPreloadNested100Parents300Children)$' -benchmem -benchtime=200ms -count=5
+via_cost_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkViaPreloadCost$/^shared$/^via_true$' -benchtime=2s -cpuprofile "$via_cost_profile_dir/cpu" -memprofile "$via_cost_profile_dir/mem" -o "$via_cost_profile_dir/orm.test"
+go -C tools tool pprof -top "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$via_cost_profile_dir/orm.test" "$via_cost_profile_dir/mem"
+```
+
+The offline matrix includes empty and single-edge inputs, 20 parents with 100
+edges sharing 12 targets, a narrow projection, distinct targets, and 2,000 edges.
+It includes column decoding and final target extraction, but not MySQL-driver
+or network work. The pointer and nested workloads cover paths that cannot reuse
+the same scan target. Value collections with direct fields and no inline target
+relations bind scan destinations once per batch; pointer collections and embedded
+field paths retain per-row binding. Result ownership and generated SQL are unchanged.
+
+For a connected diagnostic, first configure the dedicated test database above:
+
+```sh
+TIDBGO_TEST_VIA_COST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterViaCost$' -count=1 -v
+```
+
+This opt-in test creates and removes only its own `tidbgo_it_cost_*` fixtures,
+rejecting pre-existing tables. It compares three-statement edge and via queries
+with identical final results, and separately drains each variant's generated SQL
+through `database/sql`. Raw draining validates row counts but does not build the
+ORM result graph, so it is a SQL/driver diagnostic, not an equivalent repository
+implementation. After two warm-ups, six measured rounds alternate the order of
+four variants. Unobserved total latency, separate observed per-statement timings,
+three per-operation DML ServerRU samples, and representative relation plans are
+reported separately. RU probes, validation, setup and EXPLAIN ANALYZE are outside
+the unobserved latency interval. No latency or RU threshold is asserted.
+
+The neutral fixture is a reproduction aid, not a production-data replica. Keep
+raw samples and compare both favorable and unfavorable inputs before adopting a
+change; neither an isolated plan nor an allocation reduction proves lower
+end-to-end latency. Do not subtract separately measured raw and ORM medians to
+claim an exact ORM overhead.
+
+### Connected relation graph
+
 Measure the representative relation graph on the same dedicated database:
 
 ```sh
