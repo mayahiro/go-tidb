@@ -478,6 +478,27 @@ performance guarantees or billed-RU measurements
 
 ## Relation graph benchmark
 
+Measure client-side work separately, without a database:
+
+```sh
+go test ./orm -run '^$' -bench '^(BenchmarkSelectQueryBuildPreload.*|BenchmarkSelectQueryPreloadRelationGraphThreeStatements|BenchmarkSelectQueryPreloadHasMany100Parents300Children|BenchmarkSelectQueryPreloadManyToMany100Parents300Targets|BenchmarkSelectQueryPreloadNested100Parents300Children|BenchmarkViaPreload100Parents300Targets)$' -benchmem -count=5
+preload_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryBuildPreloadRelationGraph$' -benchtime=2s -cpuprofile "$preload_profile_dir/build.cpu" -memprofile "$preload_profile_dir/build.mem" -o "$preload_profile_dir/build.test"
+go test ./orm -run '^$' -bench '^BenchmarkViaPreload100Parents300Targets$/^via$' -benchtime=2s -cpuprofile "$preload_profile_dir/via.cpu" -memprofile "$preload_profile_dir/via.mem" -o "$preload_profile_dir/via.test"
+go -C tools tool pprof -top "$preload_profile_dir/build.test" "$preload_profile_dir/build.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/build.test" "$preload_profile_dir/build.mem"
+go -C tools tool pprof -top "$preload_profile_dir/via.test" "$preload_profile_dir/via.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/via.test" "$preload_profile_dir/via.mem"
+```
+
+`Build` workloads measure repeated offline plan and SQL construction.
+Execution workloads use a local `database/sql` test driver and include result
+decoding and relation hydration. They do not measure MySQL-driver work,
+network latency, or TiDB RU. Compare equivalent SQL, statement counts, and
+results before interpreting allocation or timing differences. Cached default
+target scan plans are reused only when projection order also matches; query
+aliases, scopes, and result slices remain independent.
+
 Measure the representative relation graph on the same dedicated database:
 
 ```sh

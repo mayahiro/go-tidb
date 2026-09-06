@@ -183,12 +183,13 @@ func applyPreloadOptions(descriptor *model.Descriptor, request preloadRequest, n
 			if len(option.fields) == 0 {
 				return fmt.Errorf("orm: SELECT PreloadFields for %s path %q requires at least one field", descriptor.Name(), request.path)
 			}
-			node.projection = append([]string(nil), option.fields...)
+			// Options are immutable here; key augmentation copies on write.
+			node.projection = option.fields
 		case preloadOptionOrderBy:
 			if len(option.orderBy) == 0 {
 				return fmt.Errorf("orm: SELECT PreloadOrderBy for %s path %q requires at least one term", descriptor.Name(), request.path)
 			}
-			node.orderBy = append([]orderTerm(nil), option.orderBy...)
+			node.orderBy = option.orderBy
 		case preloadOptionWithDeleted:
 			node.withDeleted = true
 		default:
@@ -222,7 +223,7 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 	}
 	plan.inlineChildren = inlinePreloadPlans(plan.children)
 	projection := preloadTargetProjection(node.projection, &plan)
-	if projection != nil {
+	if projection != nil && !preloadProjectionMatchesScan(projection, base.targetStatement.scanPlan) {
 		statement, compileErr := compileSelectProjection(target, projection)
 		if compileErr != nil {
 			return nil, fmt.Errorf("orm: compile SELECT preload target %s.%s: %w", source.Name(), node.name, compileErr)
@@ -236,9 +237,11 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 	if plan.inline && len(plan.orderBy) != 0 {
 		return nil, fmt.Errorf("orm: SELECT PreloadOrderBy for %s.%s requires a collection relation", source.Name(), node.name)
 	}
-	plan.targetKeyScan, err = preloadTargetKeyScanIndexes(&plan)
-	if err != nil {
-		return nil, err
+	if plan.targetStatement != base.targetStatement {
+		plan.targetKeyScan, err = preloadTargetKeyScanIndexes(&plan)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !plan.inline {
 		rootAlias := inlinePreloadRootAlias
@@ -255,9 +258,14 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 	if projection == nil {
 		return nil
 	}
-	result := append([]string(nil), projection...)
+	result := projection
+	copied := false
 	for _, field := range plan.targetKey {
 		if !preloadProjectionContains(result, field.GoName()) {
+			if !copied {
+				result = append([]string(nil), result...)
+				copied = true
+			}
 			result = append(result, field.GoName())
 		}
 	}
@@ -267,11 +275,27 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 		}
 		for _, field := range child.sourceKey {
 			if !preloadProjectionContains(result, field.GoName()) {
+				if !copied {
+					result = append([]string(nil), result...)
+					copied = true
+				}
 				result = append(result, field.GoName())
 			}
 		}
 	}
 	return result
+}
+
+func preloadProjectionMatchesScan(projection []string, plan *scanPlan) bool {
+	if len(projection) != len(plan.fields) {
+		return false
+	}
+	for index, name := range projection {
+		if name != plan.fields[index].goName {
+			return false
+		}
+	}
+	return true
 }
 
 func compilePreloadOrderBy(descriptor *model.Descriptor, junction *preloadJunctionPlan, terms []orderTerm) ([]preloadOrderTerm, error) {
@@ -417,7 +441,7 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 	relationIndex := relation.Index()
 	relationField := source.Type().FieldByIndex(relationIndex)
 	retainTarget := relationField.Type.Kind() == reflect.Pointer || relationField.Type.Elem().Kind() == reflect.Pointer
-	return &preloadPlan{
+	plan := &preloadPlan{
 		sourceName:       source.Name(),
 		sourceType:       source.Type(),
 		relationName:     relation.GoName(),
@@ -436,7 +460,12 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 		retainTarget:     retainTarget,
 		inline:           inline,
 		softDelete:       softDelete,
-	}, nil
+	}
+	plan.targetKeyScan, err = preloadTargetKeyScanIndexes(plan)
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 func preloadProjection(projection []string, plans []*preloadPlan) []string {
@@ -945,16 +974,21 @@ func assignPreloadedTarget(relation, target reflect.Value, copyPointer bool) {
 		}
 		relation.Set(target)
 	case reflect.Slice:
+		// The relation field is settable. Grow it in place instead of
+		// allocating a temporary slice header for every appended row.
+		index := relation.Len()
+		relation.Grow(1)
+		relation.SetLen(index + 1)
 		if relation.Type().Elem().Kind() == reflect.Pointer {
 			if copyPointer {
 				clone := reflect.New(target.Elem().Type())
 				clone.Elem().Set(target.Elem())
 				target = clone
 			}
-			relation.Set(reflect.Append(relation, target))
+			relation.Index(index).Set(target)
 			return
 		}
-		relation.Set(reflect.Append(relation, target.Elem()))
+		relation.Index(index).Set(target.Elem())
 	}
 }
 

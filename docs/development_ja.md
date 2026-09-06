@@ -473,6 +473,27 @@ latency、Go allocation、timer外の `@@tidb_last_query_info.ru_consumption` sa
 
 ## Relation graph benchmark
 
+DBを使わずclient側の処理を分けて計測します
+
+```sh
+go test ./orm -run '^$' -bench '^(BenchmarkSelectQueryBuildPreload.*|BenchmarkSelectQueryPreloadRelationGraphThreeStatements|BenchmarkSelectQueryPreloadHasMany100Parents300Children|BenchmarkSelectQueryPreloadManyToMany100Parents300Targets|BenchmarkSelectQueryPreloadNested100Parents300Children|BenchmarkViaPreload100Parents300Targets)$' -benchmem -count=5
+preload_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkSelectQueryBuildPreloadRelationGraph$' -benchtime=2s -cpuprofile "$preload_profile_dir/build.cpu" -memprofile "$preload_profile_dir/build.mem" -o "$preload_profile_dir/build.test"
+go test ./orm -run '^$' -bench '^BenchmarkViaPreload100Parents300Targets$/^via$' -benchtime=2s -cpuprofile "$preload_profile_dir/via.cpu" -memprofile "$preload_profile_dir/via.mem" -o "$preload_profile_dir/via.test"
+go -C tools tool pprof -top "$preload_profile_dir/build.test" "$preload_profile_dir/build.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/build.test" "$preload_profile_dir/build.mem"
+go -C tools tool pprof -top "$preload_profile_dir/via.test" "$preload_profile_dir/via.cpu"
+go -C tools tool pprof -top -alloc_space "$preload_profile_dir/via.test" "$preload_profile_dir/via.mem"
+```
+
+Build workloadはofflineのplanとSQL構築を反復します
+
+実行workloadはlocal database/sql test driverを使い、result decodeとRelation hydrationを含みます。MySQL driverの処理、network latency、TiDBのRUは計測しません
+
+allocationや時間の差を評価する前に、SQL、statement数、結果が等価であることを確認してください
+
+cached default target scan planはprojectionの順序も一致する場合だけ再利用し、queryのalias、scope、result sliceは独立させます
+
 同じ専用databaseで代表Relation graphを計測します
 
 ```sh
