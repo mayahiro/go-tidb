@@ -275,7 +275,7 @@ func compileRelationMutationPlan(sourceType reflect.Type, relationName string) (
 		return nil, fmt.Errorf("orm: relation mutation field %s.%s is not a mapped relation", descriptor.Name(), relationName)
 	}
 	path := descriptor.Name() + "." + relation.GoName()
-	if relation.Kind() != model.RelationManyToMany {
+	if relation.Kind() != model.RelationManyToMany || relation.Via() != "" {
 		return nil, fmt.Errorf("orm: relation mutation %s must be a pure many-to-many relation", path)
 	}
 	junction, exists := relation.Junction()

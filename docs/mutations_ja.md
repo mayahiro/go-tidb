@@ -282,6 +282,8 @@ TiDBの65535 placeholder上限を超えるstatementはpartial successになり�
 
 このAPIはpayloadのないpure junctionだけを対象とし、application dataを持つjunctionは通常のedge modelとしてCRUDします
 
+読み取り専用via Relationは3種類のRelation mutation API全てでrejectします
+
 ## Offline Build
 
 全typed mutationは `Build` に対応します

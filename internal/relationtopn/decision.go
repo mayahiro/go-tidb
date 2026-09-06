@@ -13,6 +13,7 @@ const (
 	ReasonSourceKey           = "the relation source key is not the complete root primary key"
 	ReasonOrder               = "ORDER BY does not exactly match the relation source key"
 	ReasonTargetUniqueness    = "no declared target primary or candidate unique key proves at most one matching row per root"
+	ReasonReadThrough         = "read-only via relations do not yet prove edge uniqueness and scope for relation-first TopN"
 )
 
 // Facts contains facts extracted from either runtime query values or Go
@@ -54,6 +55,7 @@ const (
 	OutcomeSourceKey
 	OutcomeOrder
 	OutcomeTargetUniqueness
+	OutcomeReadThrough
 )
 
 var outcomeReasons = [...]string{
@@ -65,6 +67,7 @@ var outcomeReasons = [...]string{
 	OutcomeSourceKey:           ReasonSourceKey,
 	OutcomeOrder:               ReasonOrder,
 	OutcomeTargetUniqueness:    ReasonTargetUniqueness,
+	OutcomeReadThrough:         ReasonReadThrough,
 }
 
 // Decide applies relation-first TopN rules in compiler order.

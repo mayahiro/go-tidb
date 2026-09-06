@@ -22,7 +22,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
-- terminalの自動色付きcontext-scoped statement observation
+- terminalの自動色付きshared-executor statement observation
 - actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析
 - typed query builderによるSELECT限定のTiDB execution plan取得
 - 明示的なSELECT実行によるTiDB actual runtime plan取得と返されたrowのdiagnostic
@@ -151,7 +151,9 @@ to-one Relationにはpointer、to-many Relationにはvalueまたはpointerのsli
 
 direct Relationは一意に解決できる一般的なsingle primary key mappingを推定し、それ以外ではordered `join=Source:Target` optionを明示します
 
-many-to-manyではjunction tableと両側のjunction key mappingを明示します
+pure many-to-manyではjunction tableと両側のjunction key mappingを明示します
+
+読み取り専用の `many_to_many,via=Edges.Target` は既存のhas-many edgeとbelongs-to targetを再利用し、必須payloadやsurrogate edge IDを維持します
 
 Relation fieldはlazy loadを行わず、独立したloaded-state metadataも保持しません
 
@@ -277,7 +279,7 @@ Relation名とtarget field名にはexported Go field名を使い、`Build` はDB
 
 正確な変換条件、Relation data integrity contract、index guidanceは[Scalar query guide](docs/queries_ja.md#relation-predicate)を参照してください
 
-exported Go field名でdirectまたはpure many-to-many Relationをpreloadします
+exported Go field名でdirectまたはmany-to-many Relationをpreloadします
 
 ```go
 users, err := orm.Query[User]().
@@ -291,7 +293,7 @@ users, err := orm.Query[User]().
 
 `belongs_to` と `has_one` は決定的なinline `LEFT JOIN` を使います
 
-`has_many` とpure `many_to_many` はpreceding rowsをcloseした後、決定的なsecondary SELECTで処理します
+`has_many` と `many_to_many` はpreceding rowsをcloseした後、決定的なsecondary SELECTで処理します
 
 predicate、seek、limit、offset、activeなroot soft-delete scopeがない無制限の `All` はroot collection sourceを `IN` なしの1 statementで読みます
 
@@ -305,11 +307,25 @@ collection配下のto-oneはcollection statementへinline joinするため、`Pr
 
 `PreloadFields` は任意のRelation projectionを限定し、`PreloadOrderBy` はcollection orderを指定し、必要なRelation keyは自動追加します
 
-複数statementで同じtransaction snapshotが必要な場合はcallerが直接作成したrepeatable-read `*sql.Tx` または `Transaction` callbackから受け取った `*sql.Tx` を渡します
+複数statementで同じtransaction snapshotが必要な場合はcallerが直接作成したrepeatable-read `*sql.Tx` または `Transaction` callbackから受け取ったtransaction-bound executorを渡します
 
 `PreloadWithDeleted` は指定したRelation pathだけでlogical deleted targetを含めます
 
 任意のRelation固有predicateには現在未対応です
+
+payload付きedgeでは `Genres []Genre` を `tidbgo:"many_to_many,via=ClipGenres.Genre"` と宣言し、次のように指定できます
+
+```go
+orm.Query[Clip]().Preload("Genres",
+    orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+)
+```
+
+`ClipGenres` を読み込まずtargetをedge順で直接取得します。複数edgeが同じtargetを指す場合も重複を保持します
+
+edgeとtarget両方のsoft-delete scopeが適用され、`PreloadWithDeleted` はそのpathの両scopeを外します。edgeの更新は通常CRUDで行い、pure Relation mutation APIはvia mappingをrejectします
+
+詳細は[payload付きedgeのpreload](docs/queries_ja.md#payload付きedgeのpreload)を参照してください
 
 ## Mutationとraw SQL
 
@@ -355,7 +371,7 @@ err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
 
 runtime captureが実際の分割を自動的に記録します
 
-全batchをatomicにする場合は直接作成した `*sql.Tx` または `Transaction` callbackから受け取った `*sql.Tx` を使います
+全batchをatomicにする場合は直接作成した `*sql.Tx` または `Transaction` callbackから受け取ったexecutorを使います
 
 `Transaction` はdefaultの `database/sql` optionを使い、callbackをretryしません
 
@@ -676,7 +692,7 @@ command helpは `tidbgo --help` で表示できます
 ## 現在の制限
 
 - scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
-- directとpure `many_to_many` Relation predicateとpreloadはnested指定にも対応
+- payload付きedgeを通る読み取り専用viaを含むdirectと `many_to_many` Relation predicateとpreloadはnested指定にも対応
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` とpure `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする

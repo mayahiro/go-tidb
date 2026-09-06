@@ -23,6 +23,9 @@ func PreloadFields(fields ...string) PreloadOption {
 }
 
 // PreloadOrderBy orders a relation collection by target-model Go fields.
+// For a via=Edges.Target relation, Edges.Field orders by a mapped edge field;
+// unqualified names still refer to target fields. Add a unique tie-breaker
+// when deterministic ordering among equal edge values is required.
 func PreloadOrderBy(terms ...OrderTerm) PreloadOption {
 	values := make([]orderTerm, len(terms))
 	for index := range terms {
@@ -33,6 +36,7 @@ func PreloadOrderBy(terms ...OrderTerm) PreloadOption {
 
 // PreloadWithDeleted includes logically deleted rows for one requested
 // relation path. Other relation paths remain independently filtered.
+// A via relation includes deleted rows on both its edge and target hops.
 func PreloadWithDeleted() PreloadOption {
 	return PreloadOption{kind: preloadOptionWithDeleted}
 }

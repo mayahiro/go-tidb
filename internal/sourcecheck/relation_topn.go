@@ -58,6 +58,9 @@ func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySum
 		pattern.rootPredicateCount,
 		model.softDelete && pattern.withDeleted != sourceTogglePresent,
 	)
+	if outcome == relationtopn.OutcomeNeedsMetadata && analysis.relation.via != "" {
+		outcome = relationtopn.OutcomeReadThrough
+	}
 	if outcome != relationtopn.OutcomeNeedsMetadata {
 		analysis.exact = true
 		analysis.decision = relationtopn.Decision(outcome, analysis.relation.name)

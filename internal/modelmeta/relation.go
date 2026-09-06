@@ -3,6 +3,7 @@ package modelmeta
 import (
 	"errors"
 	"fmt"
+	"go/token"
 	"strings"
 )
 
@@ -27,6 +28,7 @@ type RelationTag struct {
 	Kind        RelationKind
 	Joins       []RelationPair
 	Through     string
+	Via         string
 	SourcePairs []RelationPair
 	TargetPairs []RelationPair
 }
@@ -48,6 +50,15 @@ func ParseRelation(value string, collection bool) (RelationTag, error) {
 			return RelationTag{}, fmt.Errorf("tidbgo relation option %q is not supported", option)
 		}
 		switch key {
+		case "via":
+			if result.Via != "" {
+				return RelationTag{}, errors.New("via option must not be repeated")
+			}
+			edge, target, ok := strings.Cut(current, ".")
+			if !ok || !token.IsIdentifier(edge) || !token.IsExported(edge) || !token.IsIdentifier(target) || !token.IsExported(target) {
+				return RelationTag{}, errors.New("via must name two exported relation fields as Edges.Target")
+			}
+			result.Via = current
 		case "join":
 			pair, err := parseRelationPair(current)
 			if err != nil {
@@ -92,12 +103,18 @@ func ParseRelation(value string, collection bool) (RelationTag, error) {
 		if len(result.Joins) != 0 {
 			return RelationTag{}, errors.New("many_to_many does not support join options")
 		}
+		if result.Via != "" {
+			if result.Through != "" || len(result.SourcePairs) != 0 || len(result.TargetPairs) != 0 {
+				return RelationTag{}, errors.New("via must not be combined with through, source, or target options")
+			}
+			return result, nil
+		}
 		if result.Through == "" || len(result.SourcePairs) == 0 || len(result.TargetPairs) == 0 {
 			return RelationTag{}, errors.New("many_to_many requires through, source, and target options")
 		}
 		return result, nil
 	}
-	if result.Through != "" || len(result.SourcePairs) != 0 || len(result.TargetPairs) != 0 {
+	if result.Via != "" || result.Through != "" || len(result.SourcePairs) != 0 || len(result.TargetPairs) != 0 {
 		return RelationTag{}, errors.New("direct relations support join options only")
 	}
 	return result, nil

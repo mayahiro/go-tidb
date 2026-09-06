@@ -232,6 +232,9 @@ func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (
 		len(selection.predicates),
 		rootSoftDelete,
 	)
+	if outcome == relationtopn.OutcomeNeedsMetadata && candidate.relation.Via() != "" {
+		outcome = relationtopn.OutcomeReadThrough
+	}
 	if outcome != relationtopn.OutcomeNeedsMetadata {
 		decision := relationtopn.Decision(outcome, relationName)
 		return relationTopNAnalysis{

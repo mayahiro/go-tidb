@@ -89,6 +89,7 @@ func buildQueryShapePredicate(descriptor *model.Descriptor, current predicate) (
 		result.Field = ""
 		result.Relation = relation.GoName()
 		result.RelationKind = string(relation.Kind())
+		result.Via = relation.Via()
 		result.RelationSourceColumns = relationFieldColumns(relation.SourceKey())
 		result.RelationTargetColumns = relationFieldColumns(relation.TargetKey())
 		result.Table = target.TableName()
@@ -99,6 +100,13 @@ func buildQueryShapePredicate(descriptor *model.Descriptor, current predicate) (
 		}
 		if softDeleteField, exists := target.SoftDeleteField(); exists {
 			result.SoftDeleteColumn = softDeleteField.ColumnName()
+		}
+		if relation.Via() != "" {
+			plan, planErr := relationPredicatePlanFor(descriptor, relation.GoName())
+			if planErr != nil {
+				return queryshape.Predicate{}, planErr
+			}
+			result.JunctionSoftDeleteColumn = plan.junction.softDeleteColumn
 		}
 		result.Children, err = buildQueryShapePredicates(target, current.children)
 		return result, err
@@ -204,6 +212,7 @@ func buildQueryShapePreloads(plans []*preloadPlan, parentPath string) []querysha
 			order[orderIndex] = queryshape.OrderTerm{
 				Column:    plan.orderBy[orderIndex].column,
 				Direction: direction,
+				Junction:  plan.orderBy[orderIndex].junction,
 			}
 		}
 		result[index] = queryshape.Preload{
@@ -225,6 +234,10 @@ func buildQueryShapePreloads(plans []*preloadPlan, parentPath string) []querysha
 			result[index].SoftDeleteColumn = plan.softDelete.column
 		}
 		if plan.junction != nil {
+			result[index].Via = plan.junction.via
+			if !plan.withDeleted {
+				result[index].JunctionSoftDeleteColumn = plan.junction.softDeleteColumn
+			}
 			result[index].JunctionTable = plan.junction.tableName
 			result[index].JunctionSourceColumns = append([]string(nil), plan.junction.sourceColumns...)
 			result[index].JunctionTargetColumns = append([]string(nil), plan.junction.targetColumns...)

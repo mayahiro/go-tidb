@@ -62,6 +62,11 @@ func TestApplicationModelsCanBeDescribedOffline(t *testing.T) {
 		t.Fatalf("Clip.ClipGenres metadata = %#v, exists = %t", clipGenres, exists)
 	}
 	clipGenre := requireDescription[ClipGenre](t, "clip_genres", []string{"id"})
+	genres, exists := clip.RelationByName("Genres")
+	if !exists || genres.Via() != "ClipGenres.Genre" {
+		t.Fatalf("Clip.Genres metadata = %#v", genres)
+	}
+	requireDescription[Genre](t, "genres", []string{"id"})
 	uniqueKeys := clipGenre.UniqueKeys()
 	if len(uniqueKeys) != 1 || uniqueKeys[0].Name() != "clip_genre" ||
 		!reflect.DeepEqual(columnsFromFields(uniqueKeys[0].Fields()), []string{"clip_id", "genre_id"}) {
@@ -89,6 +94,7 @@ func TestApplicationModelsPassOfflineChecks(t *testing.T) {
 		check.Model[UserRole](),
 		check.Model[Clip](),
 		check.Model[ClipGenre](),
+		check.Model[Genre](),
 		check.Model[JobLease](),
 		check.Model[Video](),
 		check.Model[WatchLater](),
@@ -154,6 +160,7 @@ func TestPublishedSchemaSnapshotMatchesApplicationModels(t *testing.T) {
 		check.Schema[UserRole](catalog),
 		check.Schema[Clip](catalog),
 		check.Schema[ClipGenre](catalog),
+		check.Schema[Genre](catalog),
 		check.Schema[JobLease](catalog),
 		check.Schema[Video](catalog),
 		check.Schema[WatchLater](catalog),

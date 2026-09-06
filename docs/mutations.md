@@ -266,6 +266,7 @@ affected, err := orm.AddRelation[User]("Groups", source, groups...).Exec(ctx, db
 All four operations support offline `Build`. An empty add or remove target
 slice is a no-op. A statement that would exceed TiDB's 65,535-placeholder
 limit is rejected instead of being split into partially successful writes.
+Read-only `via` relations are rejected by all three relation mutation APIs.
 Only payload-free pure junctions use this API; model a junction carrying
 application data as a normal edge model and use ordinary CRUD operations.
 

@@ -25,7 +25,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
-- Context-scoped statement observation with automatic terminal colors
+- Shared-executor statement observation with automatic terminal colors
 - Observer-only structured runtime capture of actual root, preload, and
   split-bulk statements, with offline N+1 analysis
 - SELECT-only TiDB execution-plan inspection through the typed query builder
@@ -150,8 +150,10 @@ Ordinary nullable columns continue to use pointers or `sql.Scanner` types.
 To-one relations use pointers, and to-many relations use slices of values or
 pointers. Direct relations infer the common single-primary-key mapping when it
 resolves unambiguously and accept explicit ordered `join=Source:Target`
-options otherwise. Many-to-many mappings explicitly name the junction table
-and both junction key mappings. Relation fields do not perform lazy loading or
+options otherwise. Pure many-to-many mappings explicitly name the junction table
+and both junction key mappings. Read-only `many_to_many,via=Edges.Target` mappings
+reuse an existing has-many edge and its belongs-to target, retaining required
+payload and surrogate edge IDs. Relation fields do not perform lazy loading or
 track separate loaded-state metadata.
 
 See the [struct model guide](docs/models.md) and the runnable
@@ -272,7 +274,7 @@ and compiles them entirely offline. See the [scalar query
 guide](docs/queries.md#relation-predicates) for the exact rewrite conditions,
 relation-integrity contract, and index guidance.
 
-Preload a direct or pure many-to-many relation by its exported Go field name:
+Preload a direct or many-to-many relation by its exported Go field name:
 
 ```go
 users, err := orm.Query[User]().
@@ -284,7 +286,7 @@ users, err := orm.Query[User]().
 
 `Preload` validates metadata offline and hydrates ordinary pointer or slice
 fields without lazy loading. `belongs_to` and `has_one` relations use
-deterministic inline `LEFT JOIN`s. `has_many` and pure `many_to_many` relations
+deterministic inline `LEFT JOIN`s. `has_many` and `many_to_many` relations
 use deterministic secondary SELECTs after the preceding rows close. An
 unrestricted `All` without an active root soft-delete scope loads each root
 collection source once without an `IN` list. A default-scoped soft-delete
@@ -301,9 +303,24 @@ and the Orders SELECT with User joined inline. `PreloadFields` limits any
 relation projection, and `PreloadOrderBy` defines collection order; required
 keys are added automatically. Use a caller-owned repeatable-read `*sql.Tx`
 when multiple statements must share one transaction snapshot, or use the
-`*sql.Tx` supplied to a `Transaction` callback.
+transaction-bound executor supplied to a `Transaction` callback.
 `PreloadWithDeleted` includes logically deleted targets for only the requested
 relation path. Arbitrary relation-specific predicates remain unavailable.
+
+For a payload-bearing edge, declare a read-only target collection such as
+`Genres []Genre` with `tidbgo:"many_to_many,via=ClipGenres.Genre"` and use:
+
+```go
+orm.Query[Clip]().Preload("Genres",
+    orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+)
+```
+
+This loads target values directly in edge order without loading `ClipGenres`.
+Repeated edges remain repeated targets. Both edge and target soft-delete scopes
+apply; `PreloadWithDeleted` removes both for that path. Edge writes remain ordinary
+CRUD, and pure relation mutation APIs reject `via` mappings. See
+[payload-bearing edge preloads](docs/queries.md#payload-bearing-edge-preloads).
 
 ## Mutations and raw SQL
 
@@ -347,7 +364,7 @@ err = orm.Transaction(ctx, db, func(tx orm.Executor) error {
 `[]*Model`. `Exec` automatically splits them at TiDB's 65,535-placeholder
 limit, while `Build` continues to represent one executable statement. Runtime
 capture records the actual split automatically.
-Pass a `*sql.Tx`, created directly or supplied to a `Transaction` callback,
+Pass a caller-owned `*sql.Tx` or a `Transaction` callback's executor
 when every batch must be atomic. `Transaction` uses default `database/sql`
 options and does not retry its callback. Every typed mutation supports offline
 `Build`. An empty predicate list cannot produce a typed DELETE. `*sql.DB`,
@@ -655,7 +672,8 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 - The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
   `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
   yet.
-- Direct and pure `many_to_many` relation predicates and preloads may be nested.
+- Direct and `many_to_many` relation predicates and preloads may be nested,
+  including read-only `via` mappings through payload-bearing edges.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,
   and eligible ordered `has_many` and pure `many_to_many` pages use
   relation-first TopN SQL.

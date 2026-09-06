@@ -145,7 +145,7 @@ If either side differs or uses a composite key, declare ordered joins:
 Records []Record `tidbgo:"has_many,join=TenantID:TenantID,join=ID:ParentID"`
 ```
 
-Many-to-many mappings always name the physical junction mapping explicitly:
+Pure many-to-many mappings name the physical junction mapping explicitly:
 
 ```go
 Roles []Role `tidbgo:"many_to_many,through=user_roles,source=ID:user_id,target=role_id:ID"`
@@ -155,6 +155,44 @@ Each `source` option maps a source Go field to a junction column. Each
 `target` option maps a junction column to a target Go field. Repeating either
 option preserves composite-key order. A relation kind must be the first tag
 value. Relation fields are excluded from the scalar field list.
+
+For a payload-bearing edge, reuse its existing relations for a read-only target
+collection instead of repeating physical column mappings:
+
+```go
+type Clip struct {
+    ID         int64       `tidbgo:",pk"`
+    ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+    Genres     []Genre     `tidbgo:"many_to_many,via=ClipGenres.Genre"`
+}
+
+type ClipGenre struct {
+    ID       int64 `tidbgo:",pk,auto_random"`
+    ClipID   int64
+    GenreID  int64
+    Priority int
+    Genre    *Genre `tidbgo:"belongs_to"`
+}
+
+type Genre struct {
+    ID   int64 `tidbgo:",pk"`
+    Name string
+}
+```
+
+`via` names exactly one `has_many` followed by one `belongs_to`, using exported
+Go relation fields. The final target type must match the collection element.
+Both hops retain their existing inferred or explicit joins, including composite
+keys. Declaration order does not matter. `via` cannot be combined with `join`,
+`through`, `source`, or `target` options. `Relation.Via()` exposes the path, and
+`Relation.Junction()` exposes the derived physical mapping.
+
+This is a read-only projection, not the pure-junction contract: required payload,
+surrogate IDs, and repeated source-target pairs are allowed. Read or update the
+edge model through ordinary queries and mutations. `AddRelation`,
+`RemoveRelation`, and `ClearRelation` reject a `via` relation. See the
+[edge preload guide](queries.md#payload-bearing-edge-preloads) for ordering and
+soft-delete behavior.
 
 Relation values are ordinary Go values and can be assigned and inspected
 directly:
@@ -279,7 +317,7 @@ those facts from a SQL snapshot without changing the model. The query runtime
 can compile SELECT and mutation statements offline and execute them through an
 explicitly supplied `database/sql` executor. `belongs_to` and `has_one`
 preloads use deterministic inline
-`LEFT JOIN`s, while `has_many` and pure `many_to_many` preloads use
+`LEFT JOIN`s, while `has_many` and `many_to_many` preloads use
 deterministic secondary queries. They populate ordinary relation fields and
 support dot-separated nested paths, target projection, and collection
 ordering.

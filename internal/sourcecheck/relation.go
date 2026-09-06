@@ -2,6 +2,7 @@ package sourcecheck
 
 import (
 	"go/ast"
+	"strings"
 
 	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
@@ -25,6 +26,7 @@ type sourceResolvedRelation struct {
 	junctionTable         string
 	junctionSourceColumns []string
 	junctionTargetColumns []string
+	via                   string
 }
 
 func (relation sourceResolvedRelation) collection() bool {
@@ -36,10 +38,12 @@ func (analyzer *sourceAnalyzer) resolveSourceRelation(modelKey sourceTypeKey, re
 	if cached, exists := analyzer.relationCache[key]; exists {
 		return cached.relation, cached.resolved
 	}
-	relation, resolved := analyzer.parseSourceRelation(modelKey, relationName)
 	if analyzer.relationCache == nil {
 		analyzer.relationCache = make(map[sourceRelationKey]sourceRelationResult)
 	}
+	// A malformed via cycle must remain unresolved instead of recursing.
+	analyzer.relationCache[key] = sourceRelationResult{}
+	relation, resolved := analyzer.parseSourceRelation(modelKey, relationName)
 	analyzer.relationCache[key] = sourceRelationResult{relation: relation, resolved: resolved}
 	return relation, resolved
 }
@@ -71,6 +75,9 @@ func (analyzer *sourceAnalyzer) parseSourceRelation(modelKey sourceTypeKey, rela
 		}
 		relation := sourceResolvedRelation{name: relationName, kind: declaration.Kind, target: targetKey}
 		if declaration.Kind == modelmeta.RelationManyToMany {
+			if declaration.Via != "" {
+				return analyzer.resolveSourceViaRelation(modelKey, relation, declaration.Via)
+			}
 			if !validateSourceManyToManyRelation(source, target, declaration) {
 				return sourceResolvedRelation{}, false
 			}
@@ -103,6 +110,31 @@ func (analyzer *sourceAnalyzer) parseSourceRelation(modelKey sourceTypeKey, rela
 		return relation, true
 	}
 	return sourceResolvedRelation{}, false
+}
+
+func (analyzer *sourceAnalyzer) resolveSourceViaRelation(source sourceTypeKey, relation sourceResolvedRelation, via string) (sourceResolvedRelation, bool) {
+	edgeName, targetName, _ := strings.Cut(via, ".")
+	first, ok := analyzer.resolveSourceRelation(source, edgeName)
+	if !ok || first.kind != modelmeta.RelationHasMany {
+		return sourceResolvedRelation{}, false
+	}
+	second, ok := analyzer.resolveSourceRelation(first.target, targetName)
+	if !ok || second.kind != modelmeta.RelationBelongsTo || second.target != relation.target {
+		return sourceResolvedRelation{}, false
+	}
+	relation.via = via
+	relation.sourceFields = first.sourceFields
+	relation.targetFields = second.targetFields
+	if edge := analyzer.models[first.target].physical; edge != nil && !edge.ambiguous {
+		relation.junctionTable = edge.table
+		for _, field := range first.targetFields {
+			relation.junctionSourceColumns = append(relation.junctionSourceColumns, edge.columns[field])
+		}
+		for _, field := range second.sourceFields {
+			relation.junctionTargetColumns = append(relation.junctionTargetColumns, edge.columns[field])
+		}
+	}
+	return relation, true
 }
 
 func sourceRelationFieldShape(file *sourceFile, expression ast.Expr) (sourceTypeKey, bool, bool) {

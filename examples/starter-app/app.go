@@ -87,6 +87,7 @@ type Clip struct {
 	ID         int64 `tidbgo:",pk,auto_random"`
 	Title      string
 	ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+	Genres     []Genre     `tidbgo:"many_to_many,via=ClipGenres.Genre"`
 }
 
 // ClipGenre is a payload-bearing edge model with a surrogate primary key and
@@ -97,6 +98,22 @@ type ClipGenre struct {
 	ClipID     int64 `tidbgo:",unique=clip_genre"`
 	GenreID    int64 `tidbgo:",unique=clip_genre"`
 	Priority   int64
+	Genre      *Genre `tidbgo:"belongs_to"`
+}
+
+// Genre is the target of Clip's read-only edge projection.
+type Genre struct {
+	model.Meta `tidbgo:"table=genres"`
+	ID         int64 `tidbgo:",pk,auto_random"`
+	Name       string
+}
+
+// ListClipsWithGenres loads targets in edge Priority order without hydrating
+// ClipGenres. The required edge payload remains managed through ordinary CRUD.
+func ListClipsWithGenres(ctx context.Context, executor orm.QueryExecutor) ([]Clip, error) {
+	return orm.Query[Clip]().Preload("Genres",
+		orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+	).All(ctx, executor)
 }
 
 // JobLease is an application-owned conditional-update model.

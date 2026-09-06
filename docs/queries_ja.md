@@ -457,7 +457,7 @@ users, err := orm.Query[User]().
     All(ctx, db)
 ```
 
-`belongs_to`、`has_one`、`has_many`、pure `many_to_many` に対応します
+`belongs_to`、`has_one`、`has_many`、読み取り専用viaを含む `many_to_many` に対応します
 
 dot区切りのpathでnested Relationをrequestできます
 
@@ -471,7 +471,7 @@ users, err := orm.Query[User]().
 
 - `belongs_to` と `has_one` はinline `LEFT JOIN`
 - `has_many` はtarget tableへのsecondary SELECT
-- pure `many_to_many` は固定のjunction-to-target JOINを1つ含むsecondary SELECT
+- viaを含む `many_to_many` は固定のjunction-to-target JOINを1つ含むsecondary SELECT
 
 collection配下のto-oneはcollection statementへinline joinします
 
@@ -584,9 +584,9 @@ targetのsoft-delete filterは独自の `WHERE` conditionを追加する場合�
 
 junction-to-target JOINは宣言されたtarget key componentを全て使います
 
-返されたjunction rowごとにtarget valueを1件appendし、source-target pairのunique性はdatabase schemaが保証します
+返されたjunction rowごとにtarget valueを1件appendします。pure mappingではsource-target pairのunique性をdatabase schemaが保証する必要があります
 
-junction payloadがapplication behaviorに含まれる場合は通常のedge modelとdirect Relationを使います
+読み取り専用via mappingでは、後述のとおりpayload付きedgeを使用できます
 
 生成するpreload statementは明示したmapped fieldを選択し、`SELECT *` を使いません
 
@@ -608,15 +608,46 @@ collection orderはdatabase resultに従い、`PreloadOrderBy` を指定した�
 
 全statementで同じtransaction snapshotが必要な場合はTiDBのrepeatable-read snapshot isolationを使う `*sql.Tx` を渡します
 
-`*sql.Tx` は直接作成するか `Transaction` callbackから受け取れます
+`*sql.Tx` は直接作成するか、代わりに `Transaction` callbackから受け取ったtransaction-bound executorを渡せます
 
 query methodが暗黙にtransactionを開始することはありません
 
 inline to-one Relationだけを含むpreloadは1 statementで実行するため、cross-statement snapshotを必要としません
 
+### Payload付きedgeのpreload
+
+`Genres []Genre` を `tidbgo:"many_to_many,via=ClipGenres.Genre"` と宣言すると、edge順でtargetを直接取得できます
+
+```go
+clips, err := orm.Query[Clip]().
+    Preload("Genres",
+        orm.PreloadFields("ID", "Name"),
+        orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+    ).
+    All(ctx, db)
+```
+
+`ClipGenres.Priority` はedgeのGo field、非修飾の `ID` はtargetのfieldを指します。両方のtermを混在でき、同じPriorityの順序も固定する場合はuniqueなtie-breakerを追加します
+
+`PreloadFields` はtarget fieldだけを選択し、必要なtarget keyは自動追加します
+
+1個のsecondary SELECTでedgeとtargetをjoinし、targetへ直接scanします。`ClipGenres` のhydrate、中間edge modelの確保、targetごとの追加lookup queryは行いません
+
+rootの制約、key batch、nested target preloadには他のcollectionと同じ規則を適用します。結果にpayloadやedge IDが必要な場合はedgeを明示的に取得してください
+
+一致したedgeごとにtargetを1件追加し、同一pairを重複排除しません。NULL foreign keyと存在しないtargetはinner joinで除外します
+
+defaultではedgeとtarget両方のsoft-delete scopeを適用します。`PreloadWithDeleted()` はそのvia pathの両scopeを外しますが、nested pathや他のRelation pathには影響しません。各段を別々の削除条件で読む場合は明示的なedge queryを使います
+
+`Has("Genres", ...)` も両方のdefault scopeを適用し、条件を満たす場合は既存のsemi-join hintを付けた `EXISTS` を使います
+
+via Relationには現時点でrelation-first TopNとassociation-only Countのshortcutを適用しません。該当するordered Limit shapeではruntime解析とsource lintが理由付きの `QRY005` fallbackを返します
+
+edge Relation自体を指定するqueryでは既存のcandidate-key最適化を維持します。最適なphysical planやRU削減を保証するものではないため、代表dataでRuntimeCaptureとEXPLAINを使って実測してください
+
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはpure many-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはpure many-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはmany-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはmany-to-many `Preload` に対応しています
 
 `IDs` は延期しています
 

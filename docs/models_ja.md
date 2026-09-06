@@ -152,7 +152,7 @@ direct Relationに関連するprimary keyが1 fieldの場合、`join` optionを�
 Records []Record `tidbgo:"has_many,join=TenantID:TenantID,join=ID:ParentID"`
 ```
 
-many-to-many mappingでは物理junction mappingを必ず明示します
+pure many-to-many mappingでは物理junction mappingを明示します
 
 ```go
 Roles []Role `tidbgo:"many_to_many,through=user_roles,source=ID:user_id,target=role_id:ID"`
@@ -167,6 +167,41 @@ optionを繰り返した順序をcomposite key orderとして保持します
 Relation kindはtagの第1要素に指定します
 
 Relation fieldはscalar field listから除外します
+
+payload付きedgeからtarget collectionを読み取る場合は、物理column mappingを繰り返さず既存のRelationを再利用できます
+
+```go
+type Clip struct {
+    ID         int64       `tidbgo:",pk"`
+    ClipGenres []ClipGenre `tidbgo:"has_many,join=ID:ClipID"`
+    Genres     []Genre     `tidbgo:"many_to_many,via=ClipGenres.Genre"`
+}
+
+type ClipGenre struct {
+    ID       int64 `tidbgo:",pk,auto_random"`
+    ClipID   int64
+    GenreID  int64
+    Priority int
+    Genre    *Genre `tidbgo:"belongs_to"`
+}
+
+type Genre struct {
+    ID   int64 `tidbgo:",pk"`
+    Name string
+}
+```
+
+`via` はexported Go relation field名で `has_many`、`belongs_to` の2段を指定します
+
+最終target typeはcollection elementと一致する必要があります。各段の既存の推定または明示joinをcomposite keyも含めて再利用し、fieldの宣言順には依存しません
+
+`via` は `join`、`through`、`source`、`target` と併用できません。`Relation.Via()` でpath、`Relation.Junction()` で導出した物理mappingを参照できます
+
+これはpure-junction contractではなく読み取り専用のprojectionなので、必須payload、surrogate ID、同じsource-target pairの複数edgeを許容します
+
+edge自体の読み書きには通常のqueryとmutationを使います。`AddRelation`、`RemoveRelation`、`ClearRelation` はvia Relationをrejectします
+
+orderingとsoft-deleteの挙動は[edge preload guide](queries_ja.md#payload付きedgeのpreload)を参照してください
 
 Relation valueは通常のGo valueとして直接代入、参照できます
 
@@ -298,7 +333,7 @@ model metadataはSQL column type、index、physical constraintを意図的に重
 
 query runtimeはSELECTとmutationをofflineでcompileし、明示的に渡した `database/sql` executorで実行できます
 
-`belongs_to` と `has_one` preloadは決定的なinline `LEFT JOIN`、`has_many` とpure `many_to_many` preloadは決定的なsecondary queryを使います
+`belongs_to` と `has_one` preloadは決定的なinline `LEFT JOIN`、`has_many` と `many_to_many` preloadは決定的なsecondary queryを使います
 
 通常のRelation fieldをpopulateし、dot区切りのnested path、target projection、collection orderに対応します
 

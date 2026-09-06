@@ -94,6 +94,9 @@ func analyzeRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 	if search.count != 1 || !search.first.direct || len(selection.predicates) != 1 {
 		return relationCountPlan{}, false, nil
 	}
+	if search.first.relation.Via() != "" {
+		return relationCountPlan{}, false, nil
+	}
 
 	metadata, err := relationTopNMetadataFor(descriptor, search.first.relation)
 	if err != nil {

@@ -5,10 +5,12 @@
 // I/O only through an explicitly supplied database/sql executor. Has compiles
 // relation existence conditions without implicit loading.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
-// has-one relations use inline LEFT JOINs; has-many and pure many-to-many
+// has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
 // collections loaded once and constrained collections loaded in bounded
-// parameter batches. Insert, automatically bounded InsertMany, Upsert,
+// parameter batches. Read-only via relations reuse payload-bearing edge
+// mappings and support edge-field ordering without hydrating the edge.
+// Insert, automatically bounded InsertMany, Upsert,
 // UpsertMany, Update, UpdateWhere, Delete, and DeleteWhere provide typed model
 // writes. Set and Increment provide safe conditional-update assignments.
 // AddRelation, RemoveRelation, and ClearRelation provide pure many-to-many

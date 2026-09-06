@@ -57,12 +57,17 @@ type preloadSoftDeletePlan struct {
 type preloadOrderTerm struct {
 	column    string
 	direction orderDirection
+	junction  bool
 }
 
 type preloadJunctionPlan struct {
-	tableName     string
-	sourceColumns []string
-	targetColumns []string
+	tableName        string
+	sourceColumns    []string
+	targetColumns    []string
+	via              string
+	edgeName         string
+	edge             *model.Descriptor
+	softDeleteColumn string
 }
 
 type preloadPlanKey struct {
@@ -203,7 +208,7 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 	if err != nil {
 		return nil, fmt.Errorf("orm: describe SELECT preload target %s.%s: %w", source.Name(), node.name, err)
 	}
-	if node.withDeleted && plan.softDelete == nil {
+	if node.withDeleted && plan.softDelete == nil && (plan.junction == nil || plan.junction.softDeleteColumn == "") {
 		return nil, fmt.Errorf("orm: SELECT PreloadWithDeleted for %s.%s requires a soft-delete field on %s", source.Name(), node.name, target.Name())
 	}
 	plan.withDeleted = node.withDeleted
@@ -224,7 +229,7 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 		}
 		plan.targetStatement = statement
 	}
-	plan.orderBy, err = compilePreloadOrderBy(target, node.orderBy)
+	plan.orderBy, err = compilePreloadOrderBy(target, plan.junction, node.orderBy)
 	if err != nil {
 		return nil, fmt.Errorf("orm: compile SELECT preload target %s.%s: %w", source.Name(), node.name, err)
 	}
@@ -269,9 +274,27 @@ func preloadTargetProjection(projection []string, plan *preloadPlan) []string {
 	return result
 }
 
-func compilePreloadOrderBy(descriptor *model.Descriptor, terms []orderTerm) ([]preloadOrderTerm, error) {
+func compilePreloadOrderBy(descriptor *model.Descriptor, junction *preloadJunctionPlan, terms []orderTerm) ([]preloadOrderTerm, error) {
 	result := make([]preloadOrderTerm, len(terms))
 	for index := range terms {
+		if prefix, name, qualified := strings.Cut(terms[index].field, "."); qualified {
+			if junction == nil || junction.edge == nil || prefix != junction.edgeName {
+				return nil, fmt.Errorf("orm: SELECT PreloadOrderBy field %q must use the via edge relation name", terms[index].field)
+			}
+			for previous := 0; previous < index; previous++ {
+				if terms[previous].field == terms[index].field {
+					return nil, fmt.Errorf("orm: SELECT PreloadOrderBy repeats field %q", terms[index].field)
+				}
+			}
+			term := terms[index]
+			term.field = name
+			field, err := resolveOrderField(junction.edge, []orderTerm{term}, 0)
+			if err != nil {
+				return nil, err
+			}
+			result[index] = preloadOrderTerm{column: field.ColumnName(), direction: term.direction, junction: true}
+			continue
+		}
 		field, err := resolveOrderField(descriptor, terms, index)
 		if err != nil {
 			return nil, err
@@ -351,6 +374,18 @@ func compilePreloadPlan(source *model.Descriptor, relation model.Relation) (*pre
 			tableName:     junction.TableName(),
 			sourceColumns: sourceColumns,
 			targetColumns: targetColumns,
+		}
+		if relation.Via() != "" {
+			edge, err := relationEdgeDescriptor(source, relation)
+			if err != nil {
+				return nil, err
+			}
+			junctionPlan.via = relation.Via()
+			junctionPlan.edgeName, _, _ = strings.Cut(relation.Via(), ".")
+			junctionPlan.edge = edge
+			if field, exists := edge.SoftDeleteField(); exists {
+				junctionPlan.softDeleteColumn = field.ColumnName()
+			}
 		}
 	}
 
@@ -609,8 +644,7 @@ func compileManyToManyPreloadBatch(plan *preloadPlan, keys []preloadKey) (string
 	query.Grow(len(junction.tableName) + len(plan.targetTable) + len(keys)*len(junction.sourceColumns)*4 + len(plan.targetStatement.sql) + 64)
 	writeManyToManyPreloadSelect(&query, plan)
 	query.WriteString(" WHERE ")
-	if plan.softDelete != nil && !plan.withDeleted {
-		writePreloadSoftDeletePredicate(&query, "t", plan.softDelete.column)
+	if writeManyToManyPreloadScope(&query, plan, "") {
 		query.WriteString(" AND ")
 	}
 	arguments := writePreloadKeyPredicate(&query, "j", junction.sourceColumns, keys)
@@ -623,12 +657,28 @@ func compileManyToManyPreloadAll(plan *preloadPlan) string {
 	var query strings.Builder
 	query.Grow(len(junction.tableName) + len(plan.targetTable) + len(plan.targetStatement.sql) + 64)
 	writeManyToManyPreloadSelect(&query, plan)
-	if plan.softDelete != nil && !plan.withDeleted {
-		query.WriteString(" WHERE ")
-		writePreloadSoftDeletePredicate(&query, "t", plan.softDelete.column)
-	}
+	writeManyToManyPreloadScope(&query, plan, " WHERE ")
 	writePreloadOrderBy(&query, "t", plan.orderBy)
 	return query.String()
+}
+
+func writeManyToManyPreloadScope(query *strings.Builder, plan *preloadPlan, prefix string) bool {
+	if plan.withDeleted {
+		return false
+	}
+	written := false
+	if plan.softDelete != nil {
+		query.WriteString(prefix)
+		writePreloadSoftDeletePredicate(query, "t", plan.softDelete.column)
+		prefix = " AND "
+		written = true
+	}
+	if plan.junction.softDeleteColumn != "" {
+		query.WriteString(prefix)
+		writePreloadSoftDeletePredicate(query, "j", plan.junction.softDeleteColumn)
+		written = true
+	}
+	return written
 }
 
 func writeManyToManyPreloadSelect(query *strings.Builder, plan *preloadPlan) {
@@ -671,7 +721,11 @@ func writePreloadOrderBy(query *strings.Builder, qualifier string, terms []prelo
 		if index != 0 {
 			query.WriteString(", ")
 		}
-		writeMaybeQualifiedIdentifier(query, qualifier, term.column)
+		termQualifier := qualifier
+		if term.junction {
+			termQualifier = "j"
+		}
+		writeMaybeQualifiedIdentifier(query, termQualifier, term.column)
 		if term.direction == orderDescending {
 			query.WriteString(" DESC")
 		} else {

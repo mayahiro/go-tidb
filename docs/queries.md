@@ -441,8 +441,8 @@ users, err := orm.Query[User]().
     All(ctx, db)
 ```
 
-The current slice supports `belongs_to`, `has_one`, `has_many`, and pure
-`many_to_many` relations. Dot-separated paths request nested relations:
+Preload supports `belongs_to`, `has_one`, `has_many`, and `many_to_many`
+relations, including read-only `via` mappings. Dot-separated paths request nested relations:
 
 ```go
 users, err := orm.Query[User]().
@@ -455,7 +455,7 @@ kind and parent query shape:
 
 - `belongs_to` and `has_one` use inline `LEFT JOIN`s
 - `has_many` uses a target-table secondary SELECT
-- Pure `many_to_many` uses a secondary SELECT with one fixed
+- `many_to_many`, including `via`, uses a secondary SELECT with one fixed
   junction-to-target JOIN
 
 A to-one relation nested below a collection is joined into that collection's
@@ -559,10 +559,9 @@ key `WHERE` clause or bind arguments. Target soft-delete filtering may still
 add its own `WHERE` condition.
 
 The junction-to-target JOIN uses every declared target-key component. Each
-returned junction row appends one target value. The database schema remains
-responsible for enforcing a unique source-target pair. Use an ordinary edge
-model with direct relations when junction payload is part of application
-behavior.
+returned junction row appends one target value. For a pure mapping, the database
+schema must enforce a unique source-target pair. A read-only `via` mapping can
+instead use a payload-bearing edge as described below.
 
 Generated preload statements select explicit mapped fields and never use
 `SELECT *`. To-many fields remain nil when no target row matches. An inline
@@ -579,16 +578,55 @@ Collection order follows the database result. It is defined by
 
 A single `*sql.DB` operation can use different connections for the parent and
 collection statements. Pass a `*sql.Tx` using TiDB's repeatable-read snapshot
-isolation when every statement must share one snapshot. It can be created
-directly or supplied to a `Transaction` callback. Query methods do not begin a
+isolation when every statement must share one snapshot, or use the
+transaction-bound executor supplied to a `Transaction` callback. Query methods do not begin a
 transaction implicitly. A preload containing only inline to-one relations
 executes as one statement and does not need a cross-statement snapshot.
+
+### Payload-bearing edge preloads
+
+For `Genres []Genre` declared with `tidbgo:"many_to_many,via=ClipGenres.Genre"`,
+load targets directly in edge order:
+
+```go
+clips, err := orm.Query[Clip]().
+    Preload("Genres",
+        orm.PreloadFields("ID", "Name"),
+        orm.PreloadOrderBy(orm.Asc("ClipGenres.Priority"), orm.Asc("ID")),
+    ).
+    All(ctx, db)
+```
+
+`ClipGenres.Priority` resolves the edge's Go field; unqualified `ID` resolves
+the target field. Edge and target terms may be mixed. Add a unique tie-breaker
+when equal priorities must have deterministic order. `PreloadFields` selects
+target fields only, with required target keys added automatically.
+
+One secondary SELECT joins the edge to its target and scans targets directly.
+It does not hydrate `ClipGenres`, allocate intermediate edge models, or issue
+another query to look up each target. Root restrictions, key batching, and
+nested target preloads follow the same rules as other collections. Read the
+edge explicitly when its payload or identity is needed in the result.
+
+Each matching edge contributes one target; repeated pairs are not deduplicated.
+NULL foreign keys and missing targets are excluded by the inner join. By default,
+both edge and target soft-delete scopes apply. `PreloadWithDeleted()` removes
+both scopes for this via path, but not those of nested or other relation paths.
+Use explicit edge queries for independent per-hop deletion policies.
+
+`Has("Genres", ...)` also supports this mapping and applies both default scopes.
+It retains an `EXISTS` lookup, with the existing semi-join hint where eligible.
+Via relations do not currently use relation-first TopN or association-only Count
+shortcuts; eligible ordered limited shapes report the explicit `QRY005` fallback
+in runtime analysis and source lint. Querying the edge relation itself retains
+its existing candidate-key optimizations. No optimal physical plan or RU reduction
+is guaranteed; measure representative data with RuntimeCapture and EXPLAIN.
 
 ## Current boundary
 
 The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
-`Count`, `Explain`, `ExplainAnalyze`, direct and pure
-many-to-many relation predicates, and nested direct or pure many-to-many
+`Count`, `Explain`, `ExplainAnalyze`, direct and
+many-to-many relation predicates, and nested direct or many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.
 `IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and

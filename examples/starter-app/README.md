@@ -1,6 +1,6 @@
 # Struct-first starter app example
 
-This example defines `User`, `Order`, `Role`, `UserRole`, `Clip`, `ClipGenre`,
+This example defines `User`, `Order`, `Role`, `UserRole`, `Clip`, `ClipGenre`, `Genre`,
 `Video`, and `WatchLater` as ordinary, application-owned Go structs.
 
 It demonstrates the current struct-first foundation:
@@ -22,6 +22,8 @@ It demonstrates the current struct-first foundation:
 - Value-form soft deletion through `tidbgo:",soft_delete"` without a separate
   null-zero option
 - Ordinary pointers and slices for direct and many-to-many relations
+- Read-only `via=ClipGenres.Genre` target preloads ordered by edge `Priority`,
+  without removing payload or changing the edge's primary key
 - An application-selected decimal type using `sql.Scanner` and `driver.Valuer`
 - Offline scalar SQL construction with predicates and keyset pagination
 - Executed query-shape and query-to-index diagnostics through RuntimeCapture
@@ -42,7 +44,7 @@ It demonstrates the current struct-first foundation:
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
-- Context-scoped statement logging with automatic terminal colors and no bind
+- Shared-executor statement logging with automatic terminal colors and no bind
   argument values
 - Structured runtime capture of actual root, relation, and split-bulk
   statements without per-query wrappers
@@ -103,6 +105,10 @@ projected and ordered `Preload("Orders.User")`, loading Orders in one secondary
 SELECT and joining each User into that statement.
 `ListUsersWithRoles` demonstrates a pure
 many-to-many `Preload("Roles")`, both without generated relation code.
+`ListClipsWithGenres` loads `Clip.Genres` directly through `ClipGenres.Genre`,
+ordered by `ClipGenres.Priority` and target `ID` in one secondary SELECT.
+`ClipGenres` stays unloaded unless requested separately. Read or write the edge
+model directly when the application needs its payload or identity.
 `ListUsersInRole` filters through `Has("Roles", ...)` without preloading
 the matching roles. `ListVideos` uses the default active-row scope,
 `ListVideosWithDeleted` includes deleted root rows, and

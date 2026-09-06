@@ -68,6 +68,7 @@ modelのread、write、Relation cardinalityへ影響し得る次の事実を診�
 - pure many-to-many junctionにsource-target pair全体だけを対象とするprimary keyまたはunique keyがあること
 - Relation insertはkeyだけを渡すため、pure junctionにdefaultまたはdatabase generationのない追加の `NOT NULL` columnがないこと
 - `has_many` targetまたはmany-to-many junctionにsource key全体をleading columnとして含むindexがない場合はwarning
+- 読み取り専用の `many_to_many,via=Edges.Target` はpure pair uniqueとinsert shapeの契約 (`CMP012` / `CMP013`) を要求しない。ただしmappingされたtable、key、target identity、edgeのsoft-delete column、source indexは検査し、payload fieldの検査にはedge model自体も登録する
 
 databaseにだけ存在するcolumnは、structが省略したという理由だけではerrorになりません
 
@@ -96,8 +97,8 @@ primary-key mutation capabilityを使用できないことは `check.Model` が 
 | `CMP009` | error | 通常のwritable model fieldをgenerated columnへmappingしている |
 | `CMP010` | warning | databaseだけに存在する必須columnによりmodel insertが失敗し得る |
 | `CMP011` | error | to-oneまたはmany-to-many target identityのunique性をsnapshotから証明できない |
-| `CMP012` | error | many-to-many junctionにsource-target pair全体だけのunique constraintがない |
-| `CMP013` | error | many-to-many junctionへのinsertにmappingしたkey以外の値が必要 |
+| `CMP012` | error | pure many-to-many junctionにsource-target pair全体だけのunique constraintがない |
+| `CMP013` | error | pure many-to-many junctionへのinsertにmappingしたkey以外の値が必要 |
 | `CMP014` | warning | collection Relationにsource key全体から始まるindexがない |
 | `CMP015` | error | 宣言したcandidate unique keyをunconditionalな物理primary keyまたはunique keyから証明できない |
 
