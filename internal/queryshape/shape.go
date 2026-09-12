@@ -124,6 +124,7 @@ type CompilerRewrite string
 
 const (
 	CompilerRewriteNone                 CompilerRewrite = "none"
+	CompilerRewriteRootPage             CompilerRewrite = "root_page"
 	CompilerRewriteRelationTopN         CompilerRewrite = "relation_topn"
 	CompilerRewriteRelationTopNFallback CompilerRewrite = "relation_topn_fallback"
 )

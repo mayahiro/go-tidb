@@ -224,6 +224,45 @@ scalar terminal、slice predicate、application-selected DECIMAL type、temporal
 
 同じdatabaseに対する複数suiteを同時実行しません
 
+## 一覧SQLの比較
+
+上記の専用テストDBを設定してから、比較を明示的に有効にします
+
+```sh
+TIDBGO_TEST_ORDERED_LIST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterOrderedListSQLShapes$' -count=1 -v
+```
+
+専用tableへ12,000件のlinkと600件のtargetを作成し、既存tableがある場合は拒否し、今回作成したtableだけを削除します
+
+既定SELECT、`FORCE INDEX`、derived tableでIDを先に絞る方式を `Raw[T]` で実行し、通常の `Query` / `Preload` / `All` のcompiler経路も比較します
+
+10・50・100件の先頭ページ、昇順、深いOFFSET、大きいLIMIT、少数件または0件、非index filterを含みます。最後の条件では今回作成したfixtureのordered indexをDROPして、indexがない場合も検証します
+
+fixtureから計算したID、順序、値、参照先なしと削除済みtargetの扱いを確認したうえで、各方式の結果を比較します
+
+各方式のwarmupを1回行い、実行順を入れ替えた3 sampleについて、同じ固定connectionから直後にServerRUを読みます
+
+logには各sample、中央値、runtime plan、hint warningの確認結果を残します
+
+所要時間はclientのscanと、compiler経路では比較用にhydrate済みresultを平坦化する処理も含み、RU probeを含みません。setup、cleanup、EXPLAINは報告するSELECTのRUへ含めません。ORM単体のoverheadを切り分ける計測ではありません
+
+この比較は明示的に有効にする実験であり、RU regression gateではありません
+
+applicationのstatisticsを再現するものではなく、特定のoptimizer判断や普遍的なRU改善を保証しません
+
+適用対象のページ、fallback shape、scalar queryのoffline compileを、DB側の効果と分けて比較できます
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRootPageCompiler$' -benchmem -benchtime=200ms -count=3
+ordered_list_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkRootPageCompiler/page$' -benchtime=1s -cpuprofile "$ordered_list_profile_dir/cpu" -memprofile "$ordered_list_profile_dir/mem" -o "$ordered_list_profile_dir/orm.test"
+go -C tools tool pprof -top "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/mem"
+rm -rf "$ordered_list_profile_dir"
+```
+
+benchmarkはmodel metadataを再利用して `Build` を計測し、driver、network、RUを含みません。compiler変更の前後でCPUとallocationのprofileを比較します。SQL templateが長くてもallocation量が増えるとは限りません
+
 ## Write compiler benchmark
 
 単行CRUD、field指定更新、valueとpointerのbulk writeを計測します

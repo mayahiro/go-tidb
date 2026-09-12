@@ -290,7 +290,11 @@ users, err := orm.Query[User]().
 
 `Preload` validates metadata offline and hydrates ordinary pointer or slice
 fields without lazy loading. `belongs_to` and `has_one` relations use
-deterministic inline `LEFT JOIN`s. `has_many` and `many_to_many` relations
+deterministic inline `LEFT JOIN`s. Eligible ordered first pages with LIMIT
+1 through 100 automatically select root keys before fetching rows and to-one
+preloads, allowing a narrow index access without naming an index. See the
+[conditions and limitations](docs/queries.md#automatic-optimization-of-small-first-pages).
+`has_many` and `many_to_many` relations
 use deterministic secondary SELECTs after the preceding rows close. An
 unrestricted `All` without an active root soft-delete scope loads each root
 collection source once without an `IN` list. A default-scoped soft-delete

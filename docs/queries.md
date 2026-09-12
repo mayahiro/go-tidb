@@ -117,6 +117,75 @@ multiple collection predicates, or `SeekAfter`. It never includes target
 predicate values. The fallback remains a valid relation existence query; use
 `Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
 
+## Automatic optimization of small first pages
+
+An index that matches the filter and ordering can still lose TiDB's
+cost comparison to a table scan. `QRY007` checks the snapshot for a suitable
+prefix; an empty diagnostic list does not establish that TiDB uses it or that
+the query has low RU. See TiDB's [index selection
+rules](https://docs.pingcap.com/tidb/stable/choose-index/).
+
+For eligible ordered lists with to-one preloads, the compiler selects only
+the page's root primary keys in a derived table before looking up full root
+rows and joining the related rows. A narrow key selection can use an existing
+covering index even when the original joined SELECT chooses a table scan.
+The ordinary API is sufficient:
+
+```go
+items, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
+    Limit(50).
+    Preload("Target").
+    All(ctx, db)
+```
+
+The root and target models must declare their keys, and those declarations
+must match the database constraints. The rewrite applies when all of these
+conditions hold:
+
+- LIMIT is between 1 and 100, OFFSET is absent or zero, and there is no `SeekAfter`
+- Root filters contain only scalar `Equal` predicates, optionally grouped with
+  `And`, and do not completely bind a primary or candidate unique key
+- Ordering uses one direction throughout and includes a non-primary field
+  that is not fixed by equality
+- The root has a primary key, and fetching projected fields or an inline join
+  key needs a column beyond the primary key, equality, ordering, and active
+  soft-delete columns
+- At least one to-one preload is inline, and every inline join, including
+  nested joins, targets a declared primary or candidate unique key
+
+The compiler preserves projection, filter values, ordering, soft-delete
+scopes, and missing targets. Composite root primary keys are supported.
+The root page and inline preloads still execute as one statement; collection
+preloads retain their normal secondary statements. `Count` and `Exists` keep
+their independent compilation. Larger limits, positive offsets, range or
+relation predicates, mixed ordering, and unproven join uniqueness retain the
+ordinary SELECT. `First` and `Only` use their effective terminal limit.
+
+`Build` remains offline and does not inspect indexes or statistics. The
+compiler uses `STRAIGHT_JOIN` only between the limited keys and their root
+lookup; it does not name an index or fix the join algorithm. See TiDB's
+[SELECT syntax](https://docs.pingcap.com/tidb/stable/sql-statement-select/)
+and [TopN/Limit pushdown](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/).
+An index covering the equality fields, ordered fields, and root primary key
+can make this access efficient. Additional soft-delete conditions also need
+consideration. Without a suitable index, the extra root lookup can increase
+RU; this rewrite does not guarantee a lower cost for every data distribution.
+
+Include a unique key in ordering when stable page membership matters. The
+compiler does not add a tie-breaker, so equal timestamps alone leave ties
+unspecified. Compare identical filters, projections, and pagination on small
+and large inputs, and measure total-count queries independently. Use a pinned
+`*sql.Conn` and call `LastServerRU` immediately after consuming each measured
+SELECT. Run `ExplainAnalyze` and then `SHOW WARNINGS` separately on that
+connection. Keep their RU outside the SELECT measurement.
+
+For a measured shape requiring other physical SQL choices, `Raw[T]` accepts
+fixed application-owned SQL, including TiDB index hints. Raw SQL does not add
+preload joins or soft-delete scopes. Never build index identifiers from request
+input. Recheck plans and RU when data distribution, indexes, or pagination change.
+
 ## Soft-delete scope
 
 A model with one field tagged `tidbgo:",soft_delete"` receives

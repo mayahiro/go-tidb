@@ -227,6 +227,52 @@ tables created by the current run. A pre-existing fixture table causes a
 failure and is not removed.
 Do not run multiple suites concurrently against the same database
 
+## Ordered list SQL comparison
+
+After configuring the dedicated test database above, explicitly enable the
+comparison:
+
+```sh
+TIDBGO_TEST_ORDERED_LIST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterOrderedListSQLShapes$' -count=1 -v
+```
+
+The test creates 12,000 links and 600 targets in its own tables, refuses
+pre-existing tables, and removes only the tables it created. It compares the
+default SELECT, `FORCE INDEX`, and a derived page of IDs through `Raw[T]`,
+plus the ordinary `Query` / `Preload` / `All` compiler path. Cases include
+first pages of 10, 50, and 100 rows, ascending order, deep OFFSET, large LIMIT,
+few or no matches, and an unindexed filter. The final case drops the ordered
+index from the newly created fixture to test behavior without it.
+
+It checks fixture-derived IDs, ordering, values, and missing or deleted
+targets, then compares all variants. After one warmup per variant, three
+samples rotate execution order and read ServerRU immediately on the same
+pinned connection. Logs include samples, medians, runtime plans, and hint
+warning checks. Timings include client scanning and, for the compiler variant,
+flattening hydrated results for comparison. They exclude the RU probe;
+setup, cleanup, and EXPLAIN are outside the reported SELECT RU.
+These timings do not isolate ORM overhead.
+
+This is an opt-in experiment, not an RU regression gate. It does not reproduce
+application statistics or guarantee a particular optimizer decision. No
+universal RU improvement should be inferred from these results alone.
+
+Compare offline compilation of the eligible page, fallback shapes, and scalar
+query separately from database savings:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkRootPageCompiler$' -benchmem -benchtime=200ms -count=3
+ordered_list_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkRootPageCompiler/page$' -benchtime=1s -cpuprofile "$ordered_list_profile_dir/cpu" -memprofile "$ordered_list_profile_dir/mem" -o "$ordered_list_profile_dir/orm.test"
+go -C tools tool pprof -top "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/mem"
+rm -rf "$ordered_list_profile_dir"
+```
+
+The benchmark reuses model metadata and measures `Build` without a driver,
+network access, or RU. Compare CPU and allocation profiles before and after
+compiler changes; a longer SQL template need not mean more allocated bytes.
+
 ## Write compiler benchmarks
 
 Measure single-row CRUD, selected-field updates, and value/pointer bulk writes:

@@ -117,6 +117,57 @@ target predicate valueは含めません
 
 fallbackも有効なRelation existence queryであるため、実際のplanを許容できるかは `Explain` または `ExplainAnalyze` で判断します
 
+## 小さい先頭ページの自動最適化
+
+filterと並び順に合うindexがあっても、TiDBのコスト比較で全表走査が選ばれる場合があります
+
+`QRY007` はsnapshotに適切なprefixがあるかを確認するもので、診断が空でも実際のindex利用や低RUを保証しません。TiDBの[index選択規則](https://docs.pingcap.com/tidb/stable/choose-index/)を参照してください
+
+条件を満たすto-one preload付き一覧では、derived tableでページ分のroot主キーだけを先に取得し、その後でrootの行と関連を取得します
+
+狭い主キー選択にすることで、元のJOIN付きSELECTが全表走査を選ぶ場合でも、既存のcovering indexを使える可能性があります。通常APIのまま利用できます
+
+```go
+items, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
+    Limit(50).
+    Preload("Target").
+    All(ctx, db)
+```
+
+rootとtargetのmodelはkeyを宣言し、その宣言がDBの制約と一致している必要があります。次の条件をすべて満たす場合に変換します
+
+- LIMITが1から100、OFFSETが未指定または0、`SeekAfter` なし
+- rootのfilterがscalarの `Equal` と任意の `And` に限られ、primaryまたはcandidate unique key全体を固定しない
+- 並び順が同じ方向で統一され、等価条件で固定されていない非主キーfieldを含む
+- rootに主キーがあり、projectionまたはinline join keyの取得に、主キー・等価条件・並び順・activeなsoft-delete列以外の列が必要
+- inlineのto-one preloadが1個以上あり、nestedを含むすべてのinline joinが宣言済みprimaryまたはcandidate unique keyを参照する
+
+projection、filter値、並び順、soft-delete scope、参照先なしの行を維持し、rootの複合主キーにも対応します
+
+rootのページ取得とinline preloadは1 statementで実行し、collection preloadは通常どおり後続statementを使います。`Count` と `Exists` は独立したcompileを維持します
+
+大きいLIMIT、正のOFFSET、範囲条件やRelation predicate、方向が混在する並び順、JOIN先の一意性が未証明の場合は従来のSELECTを使います。`First` と `Only` はterminalの実効LIMITで判断します
+
+`Build` はofflineのままで、indexやstatisticsを参照しません。`STRAIGHT_JOIN` はLimit済みの主キーからrootを取得する組合せだけに使い、index名やJOIN algorithmは固定しません
+
+TiDBの[SELECT構文](https://docs.pingcap.com/tidb/stable/sql-statement-select/)と[TopN/Limit pushdown](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
+
+等価条件・並び順・root主キーをcoverするindexがあれば効率的に取得できる可能性があります。追加のsoft-delete条件も考慮が必要です
+
+適切なindexがない場合はrootの追加lookupでRUが増えることがあり、すべてのデータ分布で低コストになる保証はありません
+
+ページに含まれる行を安定させる場合は並び順にunique keyを含めます。compilerはtie-breakerを追加しないため、同じ日時だけでは同順位の扱いは未定義です
+
+対象が少ない場合と多い場合を同じfilter、projection、paginationで比較し、総件数のCountは独立して測定します
+
+各SELECTを読み終えた直後に、同じ固定した `*sql.Conn` で `LastServerRU` を読みます。planとwarningは、そのconnectionで `ExplainAnalyze` と直後の `SHOW WARNINGS` を別途実行し、対象SELECTのRUに含めません
+
+実測で別のphysical SQLが必要と分かったshapeには、TiDBのindex hintを含むapplication所有の固定SQLを `Raw[T]` へ渡せます。Raw SQLはpreloadのJOINやsoft-delete scopeを自動追加しません
+
+index識別子をrequest入力から生成しないでください。データ分布、index、paginationが変わった場合はplanとRUを再確認します
+
 ## Soft delete scope
 
 `tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します

@@ -43,6 +43,9 @@ func buildSelectQueryShape(
 		Preloads:    buildQueryShapePreloads(compiled.preloads, ""),
 		Compiler:    buildQueryShapeCompilerDecision(relationTopN),
 	}
+	if compiled.rootPage {
+		shape.Compiler = queryshape.CompilerDecision{Rewrite: queryshape.CompilerRewriteRootPage}
+	}
 	if softDeleteField, active := activeSoftDeleteField(descriptor, selection.withDeleted); active {
 		shape.SoftDeleteColumn = softDeleteField.ColumnName()
 	}

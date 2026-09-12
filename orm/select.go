@@ -20,6 +20,7 @@ type compiledSelect struct {
 	statement *selectStatement
 	arguments []any
 	preloads  []*preloadPlan
+	rootPage  bool
 }
 
 type selectQuery struct {
@@ -66,6 +67,11 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 		return compiledSelect{}, err
 	}
 	if compiled, optimized, compileErr := compileRelationTopNSelect(descriptor, statement, preloads, query); compileErr != nil {
+		return compiledSelect{}, compileErr
+	} else if optimized {
+		return compiled, nil
+	}
+	if compiled, optimized, compileErr := compileRootPageSelect(descriptor, statement, preloads, query); compileErr != nil {
 		return compiledSelect{}, compileErr
 	} else if optimized {
 		return compiled, nil
