@@ -116,6 +116,7 @@ func (analyzer *sourceAnalyzer) sourceRootIndexAccess(summary sourceQuerySummary
 	index := pattern.index
 	if !exists || model.physical == nil || model.physical.ambiguous || index == nil || !index.indexPredicatesKnown ||
 		!pattern.orderTermsKnown || pattern.withDeleted == sourceToggleUnknown ||
+		pattern.forceIndex == sourceToggleUnknown || !index.forceIndexKnown ||
 		pattern.orderTerms.count == 0 || !sourceOrderTermsUniform(pattern.orderTerms) {
 		return queryshape.IndexAccess{}, false
 	}
@@ -144,6 +145,7 @@ func (analyzer *sourceAnalyzer) sourceRootIndexAccess(summary sourceQuerySummary
 	return queryshape.IndexAccess{
 		Kind:            queryshape.IndexAccessRootOrderedLimit,
 		Table:           model.physical.table,
+		ForceIndex:      index.forceIndexName,
 		EqualityColumns: equalityColumns,
 		OrderColumns:    orderColumns,
 	}, true

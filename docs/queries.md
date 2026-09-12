@@ -117,74 +117,66 @@ multiple collection predicates, or `SeekAfter`. It never includes target
 predicate values. The fallback remains a valid relation existence query; use
 `Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
 
-## Automatic optimization of small first pages
+## Explicit root index selection
 
-An index that matches the filter and ordering can still lose TiDB's
-cost comparison to a table scan. `QRY007` checks the snapshot for a suitable
-prefix; an empty diagnostic list does not establish that TiDB uses it or that
-the query has low RU. See TiDB's [index selection
-rules](https://docs.pingcap.com/tidb/stable/choose-index/).
-
-For eligible ordered lists with to-one preloads, the compiler selects only
-the page's root primary keys in a derived table before looking up full root
-rows and joining the related rows. A narrow key selection can use an existing
-covering index even when the original joined SELECT chooses a table scan.
-The ordinary API is sufficient:
+TiDB can choose a table scan even when an index matches the filter and order.
+After measuring the plan and ServerRU, use `ForceIndex` to select one physical
+index on the root table for any page:
 
 ```go
+total, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    Count(ctx, db)
+if err != nil {
+    return err
+}
+
 items, err := orm.Query[Bookmark]().
+    ForceIndex("owner_added_id").
     Where(orm.Equal("OwnerID", ownerID)).
     OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
-    Limit(50).
+    Limit(50).Offset(offset).
     Preload("Target").
     All(ctx, db)
 ```
 
-The root and target models must declare their keys, and those declarations
-must match the database constraints. The rewrite applies when all of these
-conditions hold:
+This example assumes the root table has an `owner_added_id` index on
+`(owner_id, added_at, id)`. The compiler emits `FORCE INDEX (` followed by the
+quoted index name after the root table and optional alias, before any JOIN.
+Projection, predicates, ordering, `SeekAfter`, soft-delete scopes, and missing
+preload targets retain their normal behavior. Positive OFFSET and large LIMIT
+use the same hint. Without `ForceIndex`, ordered scalar lists with to-one
+preloads use the ordinary SELECT and LEFT JOIN at every page size and offset.
 
-- LIMIT is between 1 and 100, OFFSET is absent or zero, and there is no `SeekAfter`
-- Root filters contain only scalar `Equal` predicates, optionally grouped with
-  `And`, and do not completely bind a primary or candidate unique key
-- Ordering uses one direction throughout and includes a non-primary field
-  that is not fixed by equality
-- The root has a primary key, and fetching projected fields or an inline join
-  key needs a column beyond the primary key, equality, ordering, and active
-  soft-delete columns
-- At least one to-one preload is inline, and every inline join, including
-  nested joins, targets a declared primary or candidate unique key
+The name is a physical identifier, not a Go field. It must match
+`[A-Za-z_][A-Za-z0-9_]*` and contain at most 64 bytes. `PRIMARY` is accepted;
+empty names, qualification, lists, and SQL fragments are rejected. The last
+call replaces the previous name. Use an application-owned name, not request
+input. `Build` validates and quotes it offline; database existence and index
+availability are checked by TiDB when executing.
 
-The compiler preserves projection, filter values, ordering, soft-delete
-scopes, and missing targets. Composite root primary keys are supported.
-The root page and inline preloads still execute as one statement; collection
-preloads retain their normal secondary statements. `Count` and `Exists` keep
-their independent compilation. Larger limits, positive offsets, range or
-relation predicates, mixed ordering, and unproven join uniqueness retain the
-ordinary SELECT. `First` and `Only` use their effective terminal limit.
+The hint affects all terminals on that builder, including `Count` and
+`Exists`, and never propagates to relation predicates or preload targets.
+An explicit hint disables relation-first TopN and association-only Count
+rewrites that would replace or remove the root access. Other builders retain
+their normal relation optimizations. Use a separate unhinted Count query for
+an independently optimized total, as above; list pagination is not part of
+that total. The ORM does not create a shared snapshot for the two calls.
 
-`Build` remains offline and does not inspect indexes or statistics. The
-compiler uses `STRAIGHT_JOIN` only between the limited keys and their root
-lookup; it does not name an index or fix the join algorithm. See TiDB's
-[SELECT syntax](https://docs.pingcap.com/tidb/stable/sql-statement-select/)
-and [TopN/Limit pushdown](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/).
-An index covering the equality fields, ordered fields, and root primary key
-can make this access efficient. Additional soft-delete conditions also need
-consideration. Without a suitable index, the extra root lookup can increase
-RU; this rewrite does not guarantee a lower cost for every data distribution.
+For supported ordered-limit shapes, schema diagnostics check the named index:
+`QRY006` reports a missing index and `QRY007` reports an unsuitable prefix,
+even if another index matches. These are offline checks, not a guarantee of
+low RU. TiDB's [index hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/)
+and [index selection rules](https://docs.pingcap.com/tidb/stable/choose-index/)
+describe the database behavior.
 
-Include a unique key in ordering when stable page membership matters. The
-compiler does not add a tie-breaker, so equal timestamps alone leave ties
-unspecified. Compare identical filters, projections, and pagination on small
-and large inputs, and measure total-count queries independently. Use a pinned
-`*sql.Conn` and call `LastServerRU` immediately after consuming each measured
-SELECT. Run `ExplainAnalyze` and then `SHOW WARNINGS` separately on that
-connection. Keep their RU outside the SELECT measurement.
-
-For a measured shape requiring other physical SQL choices, `Raw[T]` accepts
-fixed application-owned SQL, including TiDB index hints. Raw SQL does not add
-preload joins or soft-delete scopes. Never build index identifiers from request
-input. Recheck plans and RU when data distribution, indexes, or pagination change.
+Include a unique key in ordering to stabilize page membership. Compare the
+first, middle, and last pages, small and large result sets, and large LIMITs
+with and without the hint. Deep offsets still require skipping rows; forcing
+an index does not remove that cost and can increase RU for unfavorable data.
+Read `LastServerRU` immediately after consuming each SELECT on the same pinned
+`*sql.Conn`. Run `ExplainAnalyze` and `SHOW WARNINGS` separately, outside the
+SELECT measurement. Recheck plans when data distribution or indexes change.
 
 ## Soft-delete scope
 

@@ -82,7 +82,7 @@ func compileRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 }
 
 func analyzeRelationCount(descriptor *model.Descriptor, selection *selectQuery) (relationCountPlan, bool, error) {
-	if selection.pagination.limitSet || selection.pagination.offsetSet || selection.seekAfter != nil {
+	if selection.forceIndexSet || selection.pagination.limitSet || selection.pagination.offsetSet || selection.seekAfter != nil {
 		return relationCountPlan{}, false, nil
 	}
 	if _, filterSoftDeleted := activeSoftDeleteField(descriptor, selection.withDeleted); filterSoftDeleted {

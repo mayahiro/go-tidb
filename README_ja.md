@@ -293,7 +293,7 @@ users, err := orm.Query[User]().
 
 `Preload` はmetadataをofflineで検証し、lazy loadを使わず通常のpointerまたはslice fieldをhydrateします
 
-条件を満たすLIMIT 1から100の順序付き先頭ページでは、rootの主キーを先に絞ってから行とto-one preloadを取得し、index名を指定せず狭いindex走査を利用できるSQLへ自動変換します。[適用条件と制約](docs/queries_ja.md#小さい先頭ページの自動最適化)を参照してください
+`ForceIndex("index_name")` で、正のOFFSETを含む任意のページにroot indexを1個指定できます。実測で効果を確認して利用します。[rootインデックスの明示指定](docs/queries_ja.md#rootインデックスの明示指定)を参照してください
 
 `belongs_to` と `has_one` は決定的なinline `LEFT JOIN` を使います
 

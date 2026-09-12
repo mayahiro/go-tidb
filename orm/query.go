@@ -41,10 +41,6 @@ func (q *SelectQuery[T]) Select(fields ...string) *SelectQuery[T] {
 // has-many and many-to-many relations use deterministic secondary
 // SELECTs. An unrestricted All loads each root collection source once, while
 // constrained and nested collection loads use bounded parameter batches.
-// Eligible equality-filtered first pages with a uniform non-primary order and
-// LIMIT 1 through 100 select root primary keys before fetching rows and inline
-// preloads. This requires proven join uniqueness and can enable covering index
-// access without naming an index; lower RU is not guaranteed.
 //
 // Preload performs no I/O until All, First, or Only is called. Build validates
 // each relation path and returns the complete parent SQL, including inline

@@ -28,6 +28,10 @@ func (q Query) Fingerprint() string {
 	encoder.preloads(q.Preloads)
 	encoder.string(string(q.Compiler.Rewrite))
 	encoder.string(q.Compiler.Relation)
+	if q.ForceIndex != "" {
+		encoder.string("force-index")
+		encoder.string(q.ForceIndex)
+	}
 	var digest [sha256.Size]byte
 	sum := encoder.hash.Sum(digest[:0])
 	var result [len(fingerprintPrefix) + sha256.Size*2]byte

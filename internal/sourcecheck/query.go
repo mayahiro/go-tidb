@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/modelmeta"
 )
 
 const codeNarrowProjection = "SRC001"
@@ -614,11 +615,13 @@ func newSourceQuerySummary(model sourceTypeKey, schemaEnabled bool) sourceQueryS
 			rootCountKnown:  true,
 			seekAfter:       sourceToggleAbsent,
 			withDeleted:     sourceToggleAbsent,
+			forceIndex:      sourceToggleAbsent,
 		},
 	}
 	if schemaEnabled {
 		result.pattern.index = &sourceIndexPattern{
 			indexPredicatesKnown: true,
+			forceIndexKnown:      true,
 		}
 	}
 	return result
@@ -651,6 +654,16 @@ func (analyzer *sourceAnalyzer) applySourceQueryMethod(
 		summary.pattern = analyzer.applySourceOrderCall(context, summary.pattern, call, before)
 	case "SeekAfter":
 		summary.pattern.seekAfter = sourceTogglePresent
+	case "ForceIndex":
+		summary.pattern.forceIndex = sourceTogglePresent
+		if index := summary.pattern.index; index != nil {
+			index.forceIndexName, index.forceIndexKnown = "", false
+			if len(call.Args) == 1 && !call.Ellipsis.IsValid() {
+				name, known := sourceStringConstant(call.Args[0], nil)
+				index.forceIndexName = name
+				index.forceIndexKnown = known && modelmeta.ValidSQLIdentifier(name)
+			}
+		}
 	case "Where":
 		predicates := analyzer.sourceWherePredicates(context, call, before)
 		summary.pattern.wildcards = appendSourceWildcards(summary.pattern.wildcards, predicates.wildcards)
@@ -842,6 +855,9 @@ func (analyzer *sourceAnalyzer) summarizeBuilderObject(
 	if calls.withDeletedCall {
 		result.pattern.withDeleted = sourceToggleUnknown
 	}
+	if calls.forceIndexCall {
+		result.pattern.forceIndex = sourceToggleUnknown
+	}
 	if result.pattern.index != nil && (calls.orderCall || calls.whereCall || calls.withDeletedCall) {
 		index := result.pattern.index
 		if calls.whereCall {
@@ -929,6 +945,7 @@ type sourceBuilderCallSet struct {
 	whereCall       bool
 	seekAfterCall   bool
 	withDeletedCall bool
+	forceIndexCall  bool
 	safe            bool
 }
 
@@ -980,6 +997,8 @@ func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, befor
 				result.seekAfterCall = true
 			case "WithDeleted":
 				result.withDeletedCall = true
+			case "ForceIndex":
+				result.forceIndexCall = true
 			}
 		}
 		return true

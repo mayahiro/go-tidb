@@ -140,11 +140,11 @@ shape. Raw SQL is marked as opaque. Collection preloads and automatically split
 bulk mutations are recorded from the actual execution path, so
 application-side statement count wrappers are unnecessary.
 
-Eligible small first pages record `compiler.rewrite: "root_page"`. The
-rewrite decision participates in the query fingerprint, so an otherwise
-identical LIMIT 100 query and LIMIT 101 query can have different fingerprints
-without exposing their bind values. Both root access aliases in its runtime
-plan resolve to the root model and physical table.
+`ForceIndex` records the physical name in `query.force_index` and includes it
+in the typed query fingerprint. A different index or no hint has a different
+identity; changing a LIMIT or OFFSET value alone does not. Count and Exists
+include the hint in their statement fingerprint. Root plan aliases resolve to
+the root model and physical table.
 
 `UpdateWhere` and `DeleteWhere` records also carry a scalar-only `mutation`
 shape: model, physical table, predicate operators and columns, empty-list

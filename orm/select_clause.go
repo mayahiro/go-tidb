@@ -40,6 +40,9 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 	}
 
 	argumentCount, sqlCapacity := predicateCompileCapacity(selection.predicates)
+	if len(base.inlinePreloads) == 0 {
+		sqlCapacity += forceIndexSQLCapacity(selection.forceIndex)
+	}
 	softDeleteField, filterSoftDeleted := activeSoftDeleteField(descriptor, selection.withDeleted)
 	if filterSoftDeleted {
 		sqlCapacity += len(softDeleteField.ColumnName()) + len("`` IS NULL")
@@ -64,6 +67,9 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 		sqlCapacity += relationRootAliasSQLCapacity
 	}
 	sqlCapacity += orderCompileCapacity(selection.orderBy)
+	if base.qualifier != "" {
+		sqlCapacity += len(selection.orderBy) * (len(base.qualifier) + len("``."))
+	}
 	if selection.pagination.limitSet {
 		argumentCount++
 		sqlCapacity += len(" LIMIT ?")
@@ -80,6 +86,9 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 	if hasRelationPredicate && qualifier == "" {
 		qualifier = relationRootAlias
 		writeRelationRootAlias(&query)
+	}
+	if len(base.inlinePreloads) == 0 {
+		writeForceIndex(&query, selection.forceIndex)
 	}
 
 	var arguments []any
@@ -158,6 +167,9 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 }
 
 func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selection *selectQuery) (compiledClauses, error) {
+	if err := validateForceIndex(selection); err != nil {
+		return compiledClauses{}, err
+	}
 	if err := validateWithDeleted(descriptor, selection.withDeleted, "SELECT"); err != nil {
 		return compiledClauses{}, err
 	}
@@ -169,6 +181,7 @@ func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selec
 	}
 
 	argumentCount, sqlCapacity := predicateCompileCapacity(selection.predicates)
+	sqlCapacity += forceIndexSQLCapacity(selection.forceIndex)
 	softDeleteField, filterSoftDeleted := activeSoftDeleteField(descriptor, selection.withDeleted)
 	if filterSoftDeleted {
 		sqlCapacity += len(softDeleteField.ColumnName()) + len("`` IS NULL")
@@ -209,6 +222,7 @@ func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selec
 		qualifier = relationRootAlias
 		writeRelationRootAlias(&query)
 	}
+	writeForceIndex(&query, selection.forceIndex)
 
 	var arguments []any
 	if argumentCount != 0 {

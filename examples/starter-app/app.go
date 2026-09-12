@@ -264,6 +264,18 @@ func CountOrdersForUser(ctx context.Context, executor orm.QueryExecutor, userID 
 		Count(ctx, executor)
 }
 
+// ListOrdersForUser returns one ordered page using the index in schema.sql.
+// Measure the plan and RU for your data before choosing an explicit index.
+// CountOrdersForUser keeps the total count independent of this hint and page.
+func ListOrdersForUser(ctx context.Context, executor orm.QueryExecutor, userID, limit, offset int64) ([]Order, error) {
+	return orm.Query[Order]().
+		ForceIndex("orders_user_id_id").
+		Where(orm.Equal("UserID", userID)).
+		OrderBy(orm.Desc("ID")).
+		Limit(limit).Offset(offset).
+		All(ctx, executor)
+}
+
 // ListVideos returns active videos through the default soft-delete scope.
 func ListVideos(ctx context.Context, executor orm.QueryExecutor) ([]Video, error) {
 	return orm.Query[Video]().OrderBy(orm.Asc("ID")).All(ctx, executor)

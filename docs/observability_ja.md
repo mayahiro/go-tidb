@@ -149,7 +149,7 @@ Raw SQLはopaqueとして記録します
 
 collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
 
-条件を満たす小さい先頭ページでは `compiler.rewrite: "root_page"` を記録します。query fingerprintは変換判断を含むため、ほかの条件が同じLIMIT 100とLIMIT 101のqueryでも、bind値を公開せず異なるfingerprintになる場合があります。runtime planのroot取得に使う2個のaliasは、どちらもrootのmodelとphysical tableへ解決します
+`ForceIndex` は物理名を `query.force_index` へ記録し、typed queryのfingerprintへ含めます。別のindexや未指定では異なるidentityとなり、LIMITやOFFSETの値だけを変えても変わりません。CountとExistsはstatement fingerprintへ指定を含めます。root planのaliasはroot modelとphysical tableへ解決します
 
 `UpdateWhere` と `DeleteWhere` のrecordには、scalar専用の `mutation` shapeとしてmodel、物理table、predicate operatorとcolumn、empty listかどうか、暗黙のactive-row soft-delete columnも記録します
 

@@ -117,56 +117,58 @@ target predicate valueは含めません
 
 fallbackも有効なRelation existence queryであるため、実際のplanを許容できるかは `Explain` または `ExplainAnalyze` で判断します
 
-## 小さい先頭ページの自動最適化
+## rootインデックスの明示指定
 
-filterと並び順に合うindexがあっても、TiDBのコスト比較で全表走査が選ばれる場合があります
+filterと並び順に合うindexがあっても、TiDBが全表走査を選ぶ場合があります
 
-`QRY007` はsnapshotに適切なprefixがあるかを確認するもので、診断が空でも実際のindex利用や低RUを保証しません。TiDBの[index選択規則](https://docs.pingcap.com/tidb/stable/choose-index/)を参照してください
-
-条件を満たすto-one preload付き一覧では、derived tableでページ分のroot主キーだけを先に取得し、その後でrootの行と関連を取得します
-
-狭い主キー選択にすることで、元のJOIN付きSELECTが全表走査を選ぶ場合でも、既存のcovering indexを使える可能性があります。通常APIのまま利用できます
+planとServerRUを測定したうえで、`ForceIndex` により任意のページでroot tableの物理indexを1個指定できます
 
 ```go
+total, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    Count(ctx, db)
+if err != nil {
+    return err
+}
+
 items, err := orm.Query[Bookmark]().
+    ForceIndex("owner_added_id").
     Where(orm.Equal("OwnerID", ownerID)).
     OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
-    Limit(50).
+    Limit(50).Offset(offset).
     Preload("Target").
     All(ctx, db)
 ```
 
-rootとtargetのmodelはkeyを宣言し、その宣言がDBの制約と一致している必要があります。次の条件をすべて満たす場合に変換します
+この例はroot tableに `(owner_id, added_at, id)` の `owner_added_id` indexがあることを前提とします
 
-- LIMITが1から100、OFFSETが未指定または0、`SeekAfter` なし
-- rootのfilterがscalarの `Equal` と任意の `And` に限られ、primaryまたはcandidate unique key全体を固定しない
-- 並び順が同じ方向で統一され、等価条件で固定されていない非主キーfieldを含む
-- rootに主キーがあり、projectionまたはinline join keyの取得に、主キー・等価条件・並び順・activeなsoft-delete列以外の列が必要
-- inlineのto-one preloadが1個以上あり、nestedを含むすべてのinline joinが宣言済みprimaryまたはcandidate unique keyを参照する
+compilerはroot tableと任意のaliasの直後、JOINより前に、引用済みindex名を含む `FORCE INDEX` を出力します
 
-projection、filter値、並び順、soft-delete scope、参照先なしの行を維持し、rootの複合主キーにも対応します
+projection、predicate、並び順、`SeekAfter`、soft-delete scope、preload参照先なしの扱いは通常どおりです。正のOFFSETや大きいLIMITでも同じ指定を維持します
 
-rootのページ取得とinline preloadは1 statementで実行し、collection preloadは通常どおり後続statementを使います。`Count` と `Exists` は独立したcompileを維持します
+`ForceIndex` がないscalar条件の順序付き一覧とto-one preloadは、ページサイズやOFFSETによらず通常のSELECTとLEFT JOINを使います
 
-大きいLIMIT、正のOFFSET、範囲条件やRelation predicate、方向が混在する並び順、JOIN先の一意性が未証明の場合は従来のSELECTを使います。`First` と `Only` はterminalの実効LIMITで判断します
+指定するのはGo field名ではなく物理index名です。`[A-Za-z_][A-Za-z0-9_]*` に一致する64 byte以下の名前に限り、`PRIMARY` も指定できます
 
-`Build` はofflineのままで、indexやstatisticsを参照しません。`STRAIGHT_JOIN` はLimit済みの主キーからrootを取得する組合せだけに使い、index名やJOIN algorithmは固定しません
+空文字、修飾名、複数名、SQL断片は拒否します。複数回呼ぶと最後の名前で置き換えます。request入力ではなくapplicationで管理する名前を指定してください
 
-TiDBの[SELECT構文](https://docs.pingcap.com/tidb/stable/sql-statement-select/)と[TopN/Limit pushdown](https://docs.pingcap.com/tidb/stable/topn-limit-push-down/)を参照してください
+`Build` はofflineで名前を検証して引用します。indexの存在と利用可否は実行時にTiDBが確認します
 
-等価条件・並び順・root主キーをcoverするindexがあれば効率的に取得できる可能性があります。追加のsoft-delete条件も考慮が必要です
+同じbuilderの `Count` と `Exists` を含む全terminalに適用し、Relation predicateやpreload targetへは伝播しません
 
-適切なindexがない場合はrootの追加lookupでRUが増えることがあり、すべてのデータ分布で低コストになる保証はありません
+明示指定時はroot accessを置換または削除するrelation-first TopNとassociation-only Countへの変換を無効にします。他のbuilderでは通常のRelation最適化を維持します
 
-ページに含まれる行を安定させる場合は並び順にunique keyを含めます。compilerはtie-breakerを追加しないため、同じ日時だけでは同順位の扱いは未定義です
+総件数のCountを独立して最適化する場合は、例のように未指定の別queryを作ります。一覧のpaginationはその総件数へ含めません。ORMは2回の呼び出しを同じsnapshotにまとめません
 
-対象が少ない場合と多い場合を同じfilter、projection、paginationで比較し、総件数のCountは独立して測定します
+対応するordered-limit shapeのschema診断では指定したindexを検査し、不在は `QRY006`、prefixが適切でない場合は `QRY007` を出します。他に適切なindexがあっても指定したものを検査します
 
-各SELECTを読み終えた直後に、同じ固定した `*sql.Conn` で `LastServerRU` を読みます。planとwarningは、そのconnectionで `ExplainAnalyze` と直後の `SHOW WARNINGS` を別途実行し、対象SELECTのRUに含めません
+これはofflineの確認であり、低RUの保証ではありません。TiDBの[index hint](https://docs.pingcap.com/tidb/stable/optimizer-hints/)と[index選択規則](https://docs.pingcap.com/tidb/stable/choose-index/)を参照してください
 
-実測で別のphysical SQLが必要と分かったshapeには、TiDBのindex hintを含むapplication所有の固定SQLを `Raw[T]` へ渡せます。Raw SQLはpreloadのJOINやsoft-delete scopeを自動追加しません
+ページに含まれる行を安定させるため、並び順にunique keyを含めます。先頭・中間・末尾、少数件と多数件、大きいLIMITについて、指定ありとなしを比較します
 
-index識別子をrequest入力から生成しないでください。データ分布、index、paginationが変わった場合はplanとRUを再確認します
+深いOFFSETの読み飛ばしはINDEX指定でなくなりません。不利なデータではRUが増える場合があります
+
+固定した同じ `*sql.Conn` で各SELECTを読み終えた直後に `LastServerRU` を読みます。`ExplainAnalyze` と `SHOW WARNINGS` はSELECTの計測外で別途実行します。データ分布やindexの変更時はplanを再確認します
 
 ## Soft delete scope
 

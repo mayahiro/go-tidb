@@ -40,11 +40,6 @@ func compilePlanAccessResolver(descriptor *model.Descriptor, selection *selectQu
 	if compiled.statement.qualifier != "" {
 		resolver.root.alias = compiled.statement.qualifier
 	}
-	if compiled.rootPage {
-		binding := resolver.root
-		binding.alias = rootPageSourceAlias
-		resolver.add(binding)
-	}
 	resolver.appendInlinePreloads(compiled.statement.inlinePreloads, "")
 
 	relationTopN, err := analyzeRelationTopN(descriptor, selection)

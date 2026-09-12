@@ -40,11 +40,9 @@ func buildSelectQueryShape(
 			Value:    selection.pagination.offset,
 		},
 		WithDeleted: selection.withDeleted,
+		ForceIndex:  selection.forceIndex,
 		Preloads:    buildQueryShapePreloads(compiled.preloads, ""),
 		Compiler:    buildQueryShapeCompilerDecision(relationTopN),
-	}
-	if compiled.rootPage {
-		shape.Compiler = queryshape.CompilerDecision{Rewrite: queryshape.CompilerRewriteRootPage}
 	}
 	if softDeleteField, active := activeSoftDeleteField(descriptor, selection.withDeleted); active {
 		shape.SoftDeleteColumn = softDeleteField.ColumnName()
@@ -323,6 +321,7 @@ func buildQueryShapeIndexAccesses(
 	return []queryshape.IndexAccess{{
 		Kind:            queryshape.IndexAccessRootOrderedLimit,
 		Table:           descriptor.TableName(),
+		ForceIndex:      selection.forceIndex,
 		EqualityColumns: equalityColumns,
 		OrderColumns:    orderColumns,
 	}}

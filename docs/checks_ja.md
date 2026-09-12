@@ -153,6 +153,10 @@ default active soft-delete columnはroot query上で `WithDeleted` を解決で�
 
 via edgeのactiveなsoft-delete columnもjunction equality prefixへ含めます
 
+`ForceIndex` がある対応済みroot shapeでは指定したindexだけを検査し、不在は `QRY006`、不適切なprefixは他に適切なindexがあっても `QRY007` とします
+
+source analysisはliteralまたはlocal constantの名前を解決し、動的な名前や不確かな変更はuncertain coverageへ含めます。rootの明示指定時はruntime compileと同じくrelation-first TopNの分析対象から外します
+
 `index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
 
 Relation fallback、associationのnon-equality filter、mixed direction、unknown field、embedded model shape、別statementで変更されたbuilderには推測したindex diagnosticを出さずuncertainとします

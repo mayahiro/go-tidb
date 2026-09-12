@@ -31,6 +31,8 @@ It demonstrates the current struct-first foundation:
 - Offline source query-pattern, projection, and optional schema-aware root
   index analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
+- Root `ForceIndex` selection for offset pages, with a separate unhinted total
+  count; index choice requires plan and RU measurements for the caller's data
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion

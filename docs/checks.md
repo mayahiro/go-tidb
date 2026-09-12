@@ -168,6 +168,12 @@ root query; a direct relation target soft-delete column participates in its
 association equality prefix. A via edge's active soft-delete column also
 participates in its junction equality prefix
 
+`ForceIndex` restricts supported root index checks to the named index. A
+missing name is `QRY006`; an unsuitable prefix is `QRY007` even if another
+index matches. Source analysis resolves literal or local constant names;
+dynamic names and uncertain mutations remain in uncertain coverage. Explicit
+root hints disable relation-first TopN analysis, matching runtime compilation.
+
 `index_patterns` counts ordered positive-limit candidates while
 `analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that
 could and could not be checked. Relation fallbacks, non-equality association

@@ -44,9 +44,12 @@ func TestTiDBCloudStarterOrderedListSQLShapes(t *testing.T) {
 	for _, tc := range []orderedListCase{
 		{name: "first_50", owner: 1, limit: 50},
 		{name: "first_10", owner: 1, limit: 10},
+		{name: "second_10", owner: 1, limit: 10, offset: 10},
 		{name: "first_100", owner: 1, limit: 100},
 		{name: "ascending", owner: 1, limit: 50, ascending: true},
-		{name: "deep_offset", owner: 1, limit: 50, offset: 9000},
+		{name: "middle", owner: 1, limit: 50, offset: 5400},
+		{name: "last", owner: 1, limit: 50, offset: 10800},
+		{name: "beyond_end", owner: 1, limit: 50, offset: 10850},
 		{name: "large_limit", owner: 1, limit: 5000},
 		{name: "few_matches", owner: 3, limit: 50},
 		{name: "empty", owner: 4, limit: 50},
@@ -60,6 +63,9 @@ func TestTiDBCloudStarterOrderedListSQLShapes(t *testing.T) {
 					fatalDatabaseError(t, dsn, "remove index from the newly created comparison fixture", err)
 				}
 				shapes = []string{"default", "keys_first", "compiler"}
+				if _, err := orderedListQuery(tc).ForceIndex("owner_order").All(ctx, connection); err == nil {
+					t.Fatal("forcing a missing index must return a database error")
+				}
 			}
 			var reference []orderedListRow
 			costs, durations := make([][]float64, len(shapes)), make([][]float64, len(shapes))
@@ -149,6 +155,9 @@ func orderedListQuery(tc orderedListCase) *orm.SelectQuery[orderedListLinkModel]
 	query := orm.Query[orderedListLinkModel]().Preload("Target").
 		Where(orm.Equal("OwnerID", tc.owner)).
 		Limit(int64(tc.limit)).Offset(int64(tc.offset))
+	if !tc.missingIndex {
+		query.ForceIndex("owner_order")
+	}
 	if tc.ascending {
 		query.OrderBy(orm.Asc("AddedAt"), orm.Asc("ID"))
 	} else {
@@ -167,9 +176,8 @@ func orderedListSQL(t *testing.T, shape string, tc orderedListCase) (string, []a
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantRewrite := tc.offset == 0 && tc.limit <= 100 && !tc.filterTarget
-		if strings.Contains(statement, " STRAIGHT_JOIN ") != wantRewrite {
-			t.Fatalf("unexpected root page compiler decision for %s", tc.name)
+		if strings.Contains(statement, "FROM (SELECT") || strings.Contains(statement, "FORCE INDEX (`owner_order`)") != !tc.missingIndex {
+			t.Fatalf("unexpected index selection for %s: %s", tc.name, statement)
 		}
 		return statement, args
 	}

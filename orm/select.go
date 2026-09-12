@@ -20,18 +20,19 @@ type compiledSelect struct {
 	statement *selectStatement
 	arguments []any
 	preloads  []*preloadPlan
-	rootPage  bool
 }
 
 type selectQuery struct {
-	modelType   reflect.Type
-	projection  []string
-	predicates  []predicate
-	orderBy     []orderTerm
-	seekAfter   []cursorValue
-	pagination  pagination
-	preloads    []preloadRequest
-	withDeleted bool
+	modelType     reflect.Type
+	projection    []string
+	predicates    []predicate
+	orderBy       []orderTerm
+	seekAfter     []cursorValue
+	pagination    pagination
+	preloads      []preloadRequest
+	withDeleted   bool
+	forceIndex    string
+	forceIndexSet bool
 }
 
 var (
@@ -45,6 +46,9 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 		return compiledSelect{}, fmt.Errorf("orm: compile SELECT model: %w", err)
 	}
 	if err := validateWithDeleted(descriptor, query.withDeleted, "SELECT"); err != nil {
+		return compiledSelect{}, err
+	}
+	if err := validateForceIndex(query); err != nil {
 		return compiledSelect{}, err
 	}
 	if len(query.preloads) == 0 {
@@ -71,11 +75,6 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 	} else if optimized {
 		return compiled, nil
 	}
-	if compiled, optimized, compileErr := compileRootPageSelect(descriptor, statement, preloads, query); compileErr != nil {
-		return compiledSelect{}, compileErr
-	} else if optimized {
-		return compiled, nil
-	}
 	rootSoftDeleteColumn := ""
 	onlyDefaultSoftDeleteScope := selectUsesOnlyDefaultSoftDeleteScope(descriptor, query)
 	if onlyDefaultSoftDeleteScope {
@@ -89,7 +88,7 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 			return compiledSelect{statement: statement, preloads: preloads}, nil
 		}
 	}
-	statement = compileInlinePreloadStatement(descriptor, statement, preloads, inlinePreloadRootAlias, rootSoftDeleteColumn)
+	statement = compileInlinePreloadStatement(descriptor, statement, preloads, inlinePreloadRootAlias, rootSoftDeleteColumn, query.forceIndex)
 	if onlyDefaultSoftDeleteScope {
 		return compiledSelect{statement: statement, preloads: preloads}, nil
 	}
@@ -147,7 +146,7 @@ func compileSelectWithoutPreloads(descriptor *model.Descriptor, query *selectQue
 
 func selectUsesOnlyDefaultSoftDeleteScope(descriptor *model.Descriptor, query *selectQuery) bool {
 	_, hasSoftDelete := descriptor.SoftDeleteField()
-	return hasSoftDelete && !query.withDeleted &&
+	return hasSoftDelete && !query.withDeleted && !query.forceIndexSet &&
 		len(query.predicates) == 0 &&
 		len(query.orderBy) == 0 &&
 		query.seekAfter == nil &&
@@ -181,7 +180,7 @@ func compileDefaultSoftDeleteSelect(descriptor *model.Descriptor) (*selectStatem
 
 func selectNeedsClauses(descriptor *model.Descriptor, query *selectQuery) bool {
 	_, softDelete := descriptor.SoftDeleteField()
-	return softDelete && !query.withDeleted ||
+	return query.forceIndexSet || softDelete && !query.withDeleted ||
 		len(query.predicates) != 0 ||
 		len(query.orderBy) != 0 ||
 		query.seekAfter != nil ||
