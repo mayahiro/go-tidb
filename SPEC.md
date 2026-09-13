@@ -152,8 +152,8 @@ The currently implemented surface provides:
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
-  argument values excluded by default, explicit bind-value capture, and
-  explicit same-session ServerRU collection
+  explicit color overrides for any writer, argument values excluded by default,
+  explicit bind-value capture, and explicit same-session ServerRU collection
 - Structured runtime capture of completed root, relation, split-bulk, raw, and
   transaction statement events without per-query wrappers, with optional
   ServerRU diagnostic cost kept separate from target cost

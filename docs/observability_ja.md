@@ -35,11 +35,24 @@ built-in loggerは完了したstatementを1行ずつ出力します
 [tidbgo] 12:47:35.077 UPDATE   10.893ms args=2 affected=1 UPDATE `users` SET `email` = ? WHERE `id` = ?
 ```
 
-writerがinteractive terminalなどのcharacter-device `*os.File` の場合はoperation名へ自動的に色を付け、errorを赤色にします
+既定では、writerがinteractive terminalなどのcharacter-device `*os.File` の場合はoperation名へ自動的に色を付け、errorを赤色にします
 
 redirect先のfile、buffer、その他のwriterにはANSI escape sequenceを含まないplain textを出力します
 
-SQLとerrorのcontrol characterをescapeし、1 eventを1 physical lineに保ちます
+`StatementLoggerColor` で自動判定を上書きできます、ラップしたwriterの出力先がANSI colorに対応する場合は次のように設定します
+
+```go
+logger := orm.NewStatementLogger(writer, orm.StatementLoggerColor(true))
+executor := orm.Observe(db, logger)
+```
+
+`StatementLoggerColor(false)` は端末を含む任意のwriterで色を無効にします
+
+optionを省略すると自動判定を維持します、内部を公開しないwrapperの出力先は `io.Writer` から推定できません
+
+色のoptionは最後の指定を使い、nilのoptionは無視します、RuntimeCaptureとServerRU収集はloggerの色設定を維持し、capture artifactはstructured JSON Linesのままです
+
+色設定にかかわらずSQLとerrorのcontrol characterをescapeし、1 eventを1 physical lineに保ちます
 
 loggerは次を出力します
 

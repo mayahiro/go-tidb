@@ -440,7 +440,9 @@ override; ordinary logging needs no middleware or per-repository setup.
 By default, the logger records operation, duration, bind count, affected rows,
 SQL template, and errors without receiving argument values. Interactive
 terminal output uses colors automatically, while redirected output is plain
-text. See the [statement observation guide](docs/observability.md) for lifecycle
+text. `StatementLoggerColor(true)` or `StatementLoggerColor(false)` explicitly
+controls colors, including for wrapped writers. See the
+[statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
 

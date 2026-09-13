@@ -18,9 +18,10 @@
 // transaction-bound Executor without retrying it. Raw provides model-aware
 // result scanning for explicit SQL. Observe configures a shared executor once,
 // while WithStatementObserver supplies optional context overrides.
-// NewStatementLogger provides automatic terminal colors
-// with bind values excluded unless explicitly enabled. RuntimeCapture records
-// actual typed queries, preloads, and bulk splits after it is installed at an
+// NewStatementLogger provides automatic terminal colors, with an explicit
+// StatementLoggerColor override for any writer. Bind values are excluded unless
+// explicitly enabled. RuntimeCapture records actual typed queries, preloads,
+// and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an
 // explicit high-cost observer option that pins pooled statements as needed and
 // keeps diagnostic cost separate from target cost. Explain inspects the TiDB

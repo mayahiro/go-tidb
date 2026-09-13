@@ -33,10 +33,26 @@ The built-in logger writes one completed statement per line:
 [tidbgo] 12:47:35.077 UPDATE   10.893ms args=2 affected=1 UPDATE `users` SET `email` = ? WHERE `id` = ?
 ```
 
-Operation names are colored when the writer is a character-device `*os.File`,
-such as an interactive terminal. Errors are red. Redirected files, buffers,
-and other writers receive plain text without ANSI escape sequences. SQL and
-error control characters are escaped so one event remains one physical line.
+By default, operation names are colored when the writer is a character-device
+`*os.File`, such as an interactive terminal. Errors are red. Redirected files,
+buffers, and other writers receive plain text without ANSI escape sequences.
+
+Use `StatementLoggerColor` to override automatic detection. For a wrapped writer
+whose destination supports ANSI colors:
+
+```go
+logger := orm.NewStatementLogger(writer, orm.StatementLoggerColor(true))
+executor := orm.Observe(db, logger)
+```
+
+`StatementLoggerColor(false)` disables colors for any writer, including a
+terminal. Omitting the option keeps automatic detection; an opaque wrapper's
+destination cannot be inferred from `io.Writer`. The last color option wins,
+and nil options are ignored. Runtime capture and ServerRU collection preserve
+the logger's color setting; capture artifacts remain structured JSON Lines.
+
+SQL and error control characters are escaped regardless of the color setting,
+so one event remains one physical line.
 
 The logger includes:
 

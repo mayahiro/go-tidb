@@ -456,7 +456,9 @@ Preloadと `orm.Transaction` はobserver設定を継承します
 
 defaultのloggerはargument valueを受け取らず、operation、duration、bind count、affected rows、SQL template、errorを記録します
 
-interactive terminalでは自動的に色を付け、redirect先にはplain textを出力します
+既定ではinteractive terminalで自動的に色を付け、redirect先にはplain textを出力します
+
+`StatementLoggerColor(true)` または `StatementLoggerColor(false)` で、ラップしたwriterを含む出力先の色を明示的に設定できます
 
 lifecycleの対象、custom observer、logの安全境界は[Statement observation guide](docs/observability_ja.md)を参照してください
 
