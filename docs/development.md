@@ -227,6 +227,21 @@ tables created by the current run. A pre-existing fixture table causes a
 failure and is not removed.
 Do not run multiple suites concurrently against the same database
 
+The argument tests compare typed mutations, raw SQL, and direct `database/sql`
+execution with UTC/JST inputs, UTC/JST driver locations, both interpolation
+modes, and UTC/JST session time zones. They check `DATETIME(6)` and
+`TIMESTAMP(6)` writes, updates, and range predicates, including adjacent
+microseconds, nullable pointers, an application-defined wall-clock Valuer,
+and strings containing quotes, backslashes, NUL, and Unicode. They also read
+stored time representations with the session set to UTC to detect differences
+that a round trip through the same connection can hide.
+The test sets `parseTime=true` and disables driver `timeTruncate` for its own
+connections. To run only these cases with `TIDBGO_TEST_DSN` configured:
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterArguments$' -count=1 -v
+```
+
 ## Ordered list SQL comparison
 
 After configuring the dedicated test database above, explicitly enable the

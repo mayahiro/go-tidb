@@ -306,6 +306,11 @@ runtime receives an explicit `database/sql` executor and does not read
 connection settings from files or environment variables. Connected integration
 tests use `TIDBGO_TEST_DSN` only as a test-harness input.
 
+Native `time.Time` bind arguments are passed to the executor without ORM-level
+literal formatting or timezone conversion. Their serialization follows the
+database driver and connection settings. The ORM does not change connection
+time zones; see [SQL arguments and time zones](docs/models.md#sql-arguments-and-time-zones).
+
 Configuration for future diagnostics and migration commands will be designed
 with those commands rather than preserving the removed schema-generator
 configuration.

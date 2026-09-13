@@ -76,6 +76,12 @@ db, err := sql.Open("mysql", dsn)
 
 `go-sql-driver/mysql` で `DATE` または `DATETIME` を `time.Time` へscanする場合は `parseTime=true` を使用します
 
+`go-tidb` は通常の `time.Time` 引数をdriverへ渡します
+
+`go-sql-driver/mysql` は送信するゼロ値以外の日時をdriverの `loc`（既定はUTC）へ変換しますが、この設定はDB sessionの `time_zone` を変更しません
+
+列型の意味と接続設定については[SQL引数とタイムゾーン](docs/models_ja.md#sql引数とタイムゾーン)を参照してください
+
 `interpolateParams=true` は短命なparameterized queryのround tripを削減できますが、BIG5、CP932、GB2312、GBK、SJISとは併用できません
 
 詳細はdriverの[`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams)を参照してください

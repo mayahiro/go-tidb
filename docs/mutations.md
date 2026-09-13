@@ -6,6 +6,10 @@ The `orm` package builds CRUD statements from application-owned models and
 executes them only through an explicitly supplied `database/sql` executor.
 Query construction does not open a connection or require code generation.
 
+Strings and native `time.Time` values use bind arguments. Date/time conversion
+follows the supplied driver and connection settings; see
+[SQL arguments and time zones](models.md#sql-arguments-and-time-zones).
+
 ## Insert
 
 ```go

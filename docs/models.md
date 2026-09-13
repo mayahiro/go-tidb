@@ -309,6 +309,57 @@ An application can select its own decimal or identifier library. `go-tidb` recor
 whether the field or its address implements the standard database interfaces
 and does not import a decimal package for user-owned models.
 
+## SQL arguments and time zones
+
+`go-tidb` keeps SQL placeholders separate from their arguments. Pass ordinary
+strings such as `O'Reilly` as values without adding quotes or escaping them
+yourself. The database driver handles parameter encoding and, when enabled,
+interpolation. The same rule applies to values supplied through `Raw` and
+`RawExec`; their SQL text remains caller-owned.
+
+Native `time.Time` values remain bind arguments in mutations and predicates.
+`go-tidb` does not format them as SQL literals, convert them to UTC, or change
+connection time zones. With the same driver and connection settings, native
+time arguments have the same meaning as in direct `database/sql` execution.
+The driver and SQL column determine serialization and stored precision.
+
+For `go-sql-driver/mysql` v1.10.0, these settings have separate responsibilities:
+
+| Setting | Effect |
+| --- | --- |
+| `loc` | Converts outgoing nonzero `time.Time` values to this location and assigns this location to parsed date/time results, UTC by default |
+| `parseTime=true` | Scans supported date/time results into `time.Time`; it does not enable or disable outgoing location conversion |
+| `interpolateParams` | Selects driver-side interpolation or parameterized execution; both paths convert native time arguments using `loc` |
+| Session `time_zone` | Controls TiDB's interpretation and display of `TIMESTAMP` values and session-sensitive SQL time functions; `loc` does not set it |
+
+For example, a native argument representing `2026-09-13 00:30:00 JST` is sent
+as `2026-09-12 15:30:00` with `loc=UTC`, or `2026-09-13 00:30:00` with
+`loc=Asia%2FTokyo`. This conversion also applies to range predicates, not only
+to writes. See the driver's [`loc` and `parseTime` settings](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#loc)
+and its [interpolation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/connection.go)
+and [prepared execution](https://github.com/go-sql-driver/mysql/blob/v1.10.0/packets.go)
+implementations.
+
+TiDB `DATETIME` stores date and time fields without a time zone. `TIMESTAMP`
+interprets input in the session's `time_zone`, stores it in UTC, and converts
+it back to the session zone when read. For values representing instants, align
+the driver and session time zones, for example UTC for both. A successful
+round trip through the same connection alone does not prove that a
+`TIMESTAMP` represents the intended instant when these settings differ.
+See [TiDB's time zone semantics](https://docs.pingcap.com/tidb/stable/data-type-date-and-time/#timezone-handling).
+
+Whether a field represents an instant or local wall-clock time is an
+application decision. Column types alone cannot determine it. An
+application-selected `sql.Scanner` / `driver.Valuer` type can define an explicit
+representation. `Build` preserves a Valuer without calling `Value`; normal
+`database/sql` conversion occurs at execution. A Valuer returning a date/time
+string supplies that string rather than a native time argument for `loc`
+conversion.
+
+Nullable pointers follow normal NULL semantics. The documented exception is a
+non-pointer `soft_delete` field: its zero `time.Time` is written as SQL NULL,
+as described in the [mutation guide](mutations.md#insert).
+
 ## Current boundary
 
 Model metadata intentionally does not duplicate SQL column types, indexes, or

@@ -214,6 +214,20 @@ suiteのconnection character setは `utf8mb4` のまま使用します
 
 driverの[`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams)も参照してください
 
+日時引数のtestではUTC/JSTの入力、UTC/JSTのdriver location、interpolationの有無、UTC/JSTのsession timezoneを組み合わせ、typed mutation、raw SQL、`database/sql` による直接実行を比較します
+
+`DATETIME(6)` と `TIMESTAMP(6)` の保存・更新・範囲検索を、隣接するmicrosecond、nullable pointer、application独自のwall-clock Valuer、引用符・backslash・NUL・Unicodeを含む文字列で検証します
+
+同じ接続による読み戻しで隠れる差を検出するため、sessionをUTCにした状態の保存済み日時表現も確認します
+
+test自身の接続では `parseTime=true` とし、driverの `timeTruncate` を無効にします
+
+`TIDBGO_TEST_DSN` を設定した状態で、このtestだけを実行するcommandは次のとおりです
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterArguments$' -count=1 -v
+```
+
 suiteはconnection poolを1 connectionに制限します
 
 scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTのstatement observationを確認します

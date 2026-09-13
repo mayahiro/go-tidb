@@ -84,6 +84,13 @@ Follow the official [TiDB Cloud Starter connection
 requirements](https://docs.pingcap.com/tidbcloud/connect-to-tidb-cluster-serverless/?plan=starter),
 including TLS. With `go-sql-driver/mysql`, use `parseTime=true` when `DATE` or
 `DATETIME` values must scan into `time.Time`.
+
+`go-tidb` passes native `time.Time` arguments to the driver. With
+`go-sql-driver/mysql`, outgoing nonzero times are converted to the driver's `loc`
+(UTC by default), which does not set the database session's `time_zone`.
+See [SQL arguments and time zones](docs/models.md#sql-arguments-and-time-zones)
+for column semantics and connection settings.
+
 `interpolateParams=true` can reduce round trips for short-lived parameterized
 queries, but it must not be combined with BIG5, CP932, GB2312, GBK, or SJIS.
 See the driver's [`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams).

@@ -1,6 +1,11 @@
 // Package orm builds queries and mutations from application-owned Go structs
 // without code generation or an implicit database connection.
 //
+// SQL placeholders and bind arguments remain separate. Native time.Time values
+// are passed to the executor without literal formatting or timezone conversion;
+// serialization follows the database driver and connection settings. Build does
+// not invoke driver.Valuer. The package does not change connection time zones.
+//
 // Query.Build compiles SQL offline. All, First, Only, Exists, and Count perform
 // I/O only through an explicitly supplied database/sql executor. Has compiles
 // relation existence conditions without implicit loading.
