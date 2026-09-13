@@ -138,6 +138,8 @@ type sourceHasPredicate struct {
 type sourceIndexPattern struct {
 	equalityFields       []string
 	indexPredicatesKnown bool
+	forceIndexName       string
+	forceIndexKnown      bool
 }
 
 type sourceQueryPattern struct {
@@ -154,6 +156,7 @@ type sourceQueryPattern struct {
 	hasPredicates      []sourceHasPredicate
 	seekAfter          sourceToggleState
 	withDeleted        sourceToggleState
+	forceIndex         sourceToggleState
 	index              *sourceIndexPattern
 }
 
@@ -710,6 +713,7 @@ func mergeSourceQueryPatterns(left, right sourceQueryPattern) sourceQueryPattern
 		hasPredicates:      hasPredicates,
 		seekAfter:          mergeSourceToggle(left.seekAfter, right.seekAfter),
 		withDeleted:        mergeSourceToggle(left.withDeleted, right.withDeleted),
+		forceIndex:         mergeSourceToggle(left.forceIndex, right.forceIndex),
 		index:              mergeSourceIndexPatterns(left.index, right.index),
 	}
 }
@@ -731,6 +735,8 @@ func mergeSourceIndexPatterns(left, right *sourceIndexPattern) *sourceIndexPatte
 	return &sourceIndexPattern{
 		equalityFields:       equalityFields,
 		indexPredicatesKnown: left.indexPredicatesKnown && right.indexPredicatesKnown && sameEqualities,
+		forceIndexName:       left.forceIndexName,
+		forceIndexKnown:      left.forceIndexKnown && right.forceIndexKnown && left.forceIndexName == right.forceIndexName,
 	}
 }
 

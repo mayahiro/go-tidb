@@ -6,6 +6,12 @@
 
 query構築ではconnectionをopenせず、code generationも要求しません
 
+文字列と通常の `time.Time` はbind引数を使います
+
+日時の変換は渡したdriverと接続設定に従います
+
+詳細は[SQL引数とタイムゾーン](models_ja.md#sql引数とタイムゾーン)を参照してください
+
 ## Insert
 
 ```go

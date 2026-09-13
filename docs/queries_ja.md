@@ -39,6 +39,52 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
+## 部分取得結果をsliceで受け取る
+
+`All`は`[]T`を返します。単一列をscalarのsliceへ、選択列を別structのsliceへ直接読み込む場合は`ScanAll(ctx, executor, &destination)`を使います
+
+```go
+type Channel struct {
+    model.Meta `tidbgo:"table=channels"`
+    ID         int64 `tidbgo:",pk"`
+    YouTubeID  string `tidbgo:"external_id"`
+    Title      string
+    DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+type ChannelIdentity struct {
+    ID        int64
+    YouTubeID string
+}
+
+var ids []int64
+err := orm.Query[Channel]().Select("ID").ScanAll(ctx, db, &ids)
+
+var identities []ChannelIdentity
+err = orm.Query[Channel]().
+    Select("ID", "YouTubeID").
+    OrderBy(orm.Desc("ID")).Limit(100).
+    ScanAll(ctx, db, &identities)
+```
+
+物理column名、論理削除、`Where`/`Has`、`ForceIndex`、並び順、cursor、limit、offsetを含むSQLは取得元の`Channel`で決まります
+
+DTOにmodel metadataは不要です。取得列は引き続き`Select`で指定し、省略時は受け取り先に関係なく、取得元のmappingされたnon-computed fieldをすべて選択します
+
+- 受け取り先はsliceへのnon-nil pointerである必要があります。成功時は新しい領域のsliceへ置換し、0件ではnon-nilの空sliceにします。scan、iteration、query、closeのエラー時は元のsliceとその領域を保持します
+- scalarの要素は取得列が1列である必要があります。native scalar、名前付きscalar型、`time.Time`、byte slice、空interface、pointer、具象`sql.Scanner`型は`database/sql`の変換を使います。`sql.RawBytes`はiteration中に領域の有効期限が切れるためエラーとします
+- structの受け取り先は選択した取得元の**Go field名と完全一致**させます。例では`YouTubeID`が`external_id`を受け取ります。field順や`tidbgo`を含む受け取り先tagはmappingに影響せず、余分なfieldや未選択fieldはzeroのままです。structへのpointerと曖昧でないexportedな埋め込みfield pathに対応し、field不足、曖昧な対応、アクセス不能なfieldはI/O前にエラーとします
+- NULLには対応するpointer、`sql.Null*`、独自Scannerを使います。取得元modelのsoft-delete規則は維持し、選択したsoft-delete fieldを`time.Time`へ読む場合はNULLをzeroにします。通常のtime fieldにNULLからzeroへの変換はありません
+- scan可否は受け取り先で検証します。`driver.Valuer`だけを実装した取得元fieldも対応する別の型へ読み込めます。`Build`、`All`、`First`、`Only`は引き続き選択した取得元fieldへのscan可否を検証します
+- `Preload`はI/O前にエラーとし、Relationのhydrateにはmodel rowを返すterminalを使います。`Has`条件は使用でき、builderは変更しません
+
+mapping構造は実行前に検証し、DB値の変換不能や数値overflowはscan中のエラーとして返します
+
+RuntimeCaptureは`scan_all` terminalとして、取得元modelとquery shapeを維持します
+
+このAPIは部分取得時のアプリ側変換loopと中間の全model sliceを省きます。同じSQLで受け取り先だけを変えても追加のRU削減はありません
+
+取得元model全体が必要な場合は`All`を使います。`ScanAll`には受け取り先の検証とreflectionの追加costがあります
+
 ## 実行済みquery shapeの解析
 
 request、job、analysis testのboundaryでRuntimeCaptureを1回設定すると、実行されたtyped queryのbind-free QueryShapeを記録します
@@ -117,9 +163,62 @@ target predicate valueは含めません
 
 fallbackも有効なRelation existence queryであるため、実際のplanを許容できるかは `Explain` または `ExplainAnalyze` で判断します
 
+## rootインデックスの明示指定
+
+filterと並び順に合うindexがあっても、TiDBが全表走査を選ぶ場合があります
+
+planとServerRUを測定したうえで、`ForceIndex` により任意のページでroot tableの物理indexを1個指定できます
+
+```go
+total, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    Count(ctx, db)
+if err != nil {
+    return err
+}
+
+items, err := orm.Query[Bookmark]().
+    ForceIndex("owner_added_id").
+    Where(orm.Equal("OwnerID", ownerID)).
+    OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
+    Limit(50).Offset(offset).
+    Preload("Target").
+    All(ctx, db)
+```
+
+この例はroot tableに `(owner_id, added_at, id)` の `owner_added_id` indexがあることを前提とします
+
+compilerはroot tableと任意のaliasの直後、JOINより前に、引用済みindex名を含む `FORCE INDEX` を出力します
+
+projection、predicate、並び順、`SeekAfter`、soft-delete scope、preload参照先なしの扱いは通常どおりです。正のOFFSETや大きいLIMITでも同じ指定を維持します
+
+`ForceIndex` がないscalar条件の順序付き一覧とto-one preloadは、ページサイズやOFFSETによらず通常のSELECTとLEFT JOINを使います
+
+指定するのはGo field名ではなく物理index名です。`[A-Za-z_][A-Za-z0-9_]*` に一致する64 byte以下の名前に限り、`PRIMARY` も指定できます
+
+空文字、修飾名、複数名、SQL断片は拒否します。複数回呼ぶと最後の名前で置き換えます。request入力ではなくapplicationで管理する名前を指定してください
+
+`Build` はofflineで名前を検証して引用します。indexの存在と利用可否は実行時にTiDBが確認します
+
+同じbuilderの `Count` と `Exists` を含む全terminalに適用し、Relation predicateやpreload targetへは伝播しません
+
+明示指定時はroot accessを置換または削除するrelation-first TopNとassociation-only Countへの変換を無効にします。他のbuilderでは通常のRelation最適化を維持します
+
+総件数のCountを独立して最適化する場合は、例のように未指定の別queryを作ります。一覧のpaginationはその総件数へ含めません。ORMは2回の呼び出しを同じsnapshotにまとめません
+
+対応するordered-limit shapeのschema診断では指定したindexを検査し、不在は `QRY006`、prefixが適切でない場合は `QRY007` を出します。他に適切なindexがあっても指定したものを検査します
+
+これはofflineの確認であり、低RUの保証ではありません。TiDBの[index hint](https://docs.pingcap.com/tidb/stable/optimizer-hints/)と[index選択規則](https://docs.pingcap.com/tidb/stable/choose-index/)を参照してください
+
+ページに含まれる行を安定させるため、並び順にunique keyを含めます。先頭・中間・末尾、少数件と多数件、大きいLIMITについて、指定ありとなしを比較します
+
+深いOFFSETの読み飛ばしはINDEX指定でなくなりません。不利なデータではRUが増える場合があります
+
+固定した同じ `*sql.Conn` で各SELECTを読み終えた直後に `LastServerRU` を読みます。`ExplainAnalyze` と `SHOW WARNINGS` はSELECTの計測外で別途実行します。データ分布やindexの変更時はplanを再確認します
+
 ## Soft delete scope
 
-`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
+`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
 
 active rowとlogical deleted rowの両方が必要な場合だけ `WithDeleted` を使います
 
@@ -338,7 +437,7 @@ custom non-pointer valueの `driver.Valuer` をNULL判定のために実行し�
 
 ## 明示的な実行
 
-`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
+`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
 
 ```go
 orders, err := query.All(ctx, db)
@@ -669,8 +768,8 @@ edgeのprimary／candidate keyを含め、関係する全modelを `check.Schema`
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはmany-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはmany-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはmany-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはmany-to-many `Preload` に対応しています
 
-`IDs` は延期しています
+IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 
 scalar builderの範囲外となるJOIN、CTE、aggregateなどにはtyped `Raw[T]` を使います

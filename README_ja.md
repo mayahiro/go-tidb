@@ -76,6 +76,12 @@ db, err := sql.Open("mysql", dsn)
 
 `go-sql-driver/mysql` で `DATE` または `DATETIME` を `time.Time` へscanする場合は `parseTime=true` を使用します
 
+`go-tidb` は通常の `time.Time` 引数をdriverへ渡します
+
+`go-sql-driver/mysql` は送信するゼロ値以外の日時をdriverの `loc`（既定はUTC）へ変換しますが、この設定はDB sessionの `time_zone` を変更しません
+
+列型の意味と接続設定については[SQL引数とタイムゾーン](docs/models_ja.md#sql引数とタイムゾーン)を参照してください
+
 `interpolateParams=true` は短命なparameterized queryのround tripを削減できますが、BIG5、CP932、GB2312、GBK、SJISとは併用できません
 
 詳細はdriverの[`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams)を参照してください
@@ -244,6 +250,28 @@ count, err := query.Count(ctx, db)
 
 terminal error、predicate、pagination、NULL ordering、現在の実行境界は[Scalar query guide](docs/queries_ja.md)を参照してください
 
+選択列をscalarのsliceや別の結果structへ直接読み込めます
+
+```go
+var ids []int64
+err := orm.Query[User]().Select("ID").ScanAll(ctx, db, &ids)
+
+type UserIdentity struct {
+    ID    int64
+    Email string
+}
+var identities []UserIdentity
+err = orm.Query[User]().Select("ID", "Email").ScanAll(ctx, db, &identities)
+```
+
+`ScanAll`は取得元のGo field名で完全一致させ、受け取り先のtagは参照しません
+
+取得元modelの条件、論理削除、index指定、pagination、診断を維持し、成功時だけ受け取り先を置換します
+
+取得列は`Select`で決まり、小さい受け取り先からSQLを暗黙に絞ることはありません
+
+`Preload`はエラーとなり、`Has`によるRelation条件は使用できます
+
 Relationをloadせず、存在条件だけでfilterできます
 
 ```go
@@ -292,6 +320,8 @@ users, err := orm.Query[User]().
 ```
 
 `Preload` はmetadataをofflineで検証し、lazy loadを使わず通常のpointerまたはslice fieldをhydrateします
+
+`ForceIndex("index_name")` で、正のOFFSETを含む任意のページにroot indexを1個指定できます。実測で効果を確認して利用します。[rootインデックスの明示指定](docs/queries_ja.md#rootインデックスの明示指定)を参照してください
 
 `belongs_to` と `has_one` は決定的なinline `LEFT JOIN` を使います
 
@@ -454,7 +484,9 @@ Preloadと `orm.Transaction` はobserver設定を継承します
 
 defaultのloggerはargument valueを受け取らず、operation、duration、bind count、affected rows、SQL template、errorを記録します
 
-interactive terminalでは自動的に色を付け、redirect先にはplain textを出力します
+既定ではinteractive terminalで自動的に色を付け、redirect先にはplain textを出力します
+
+`StatementLoggerColor(true)` または `StatementLoggerColor(false)` で、ラップしたwriterを含む出力先の色を明示的に設定できます
 
 lifecycleの対象、custom observer、logの安全境界は[Statement observation guide](docs/observability_ja.md)を参照してください
 
@@ -698,7 +730,7 @@ command helpは `tidbgo --help` で表示できます
 
 ## 現在の制限
 
-- scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
+- scalar runtimeは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 - payload付きedgeを通る読み取り専用viaを含むdirectと `many_to_many` Relation predicateとpreloadはnested指定にも対応
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` と証明済みviaを含む `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装

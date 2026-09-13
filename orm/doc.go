@@ -1,9 +1,16 @@
 // Package orm builds queries and mutations from application-owned Go structs
 // without code generation or an implicit database connection.
 //
-// Query.Build compiles SQL offline. All, First, Only, Exists, and Count perform
-// I/O only through an explicitly supplied database/sql executor. Has compiles
-// relation existence conditions without implicit loading.
+// SQL placeholders and bind arguments remain separate. Native time.Time values
+// are passed to the executor without literal formatting or timezone conversion;
+// serialization follows the database driver and connection settings. Build does
+// not invoke driver.Valuer. The package does not change connection time zones.
+//
+// Query.Build compiles SQL offline. All, ScanAll, First, Only, Exists, and Count
+// perform I/O only through an explicitly supplied database/sql executor. Has
+// compiles relation existence conditions without implicit loading.
+// ScanAll reads a single column into a scalar slice or selected Go fields into
+// a separate struct slice, retaining the source model's SQL and diagnostics.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
@@ -18,9 +25,10 @@
 // transaction-bound Executor without retrying it. Raw provides model-aware
 // result scanning for explicit SQL. Observe configures a shared executor once,
 // while WithStatementObserver supplies optional context overrides.
-// NewStatementLogger provides automatic terminal colors
-// with bind values excluded unless explicitly enabled. RuntimeCapture records
-// actual typed queries, preloads, and bulk splits after it is installed at an
+// NewStatementLogger provides automatic terminal colors, with an explicit
+// StatementLoggerColor override for any writer. Bind values are excluded unless
+// explicitly enabled. RuntimeCapture records actual typed queries, preloads,
+// and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an
 // explicit high-cost observer option that pins pooled statements as needed and
 // keeps diagnostic cost separate from target cost. Explain inspects the TiDB

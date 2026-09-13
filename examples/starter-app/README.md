@@ -31,6 +31,8 @@ It demonstrates the current struct-first foundation:
 - Offline source query-pattern, projection, and optional schema-aware root
   index analysis through `tidbgo lint`
 - Explicit scalar execution through caller-owned database/sql executors
+- Root `ForceIndex` selection for offset pages, with a separate unhinted total
+  count; index choice requires plan and RU measurements for the caller's data
 - Nested relation preloading through deterministic inline `LEFT JOIN`s for
   to-one relations and secondary queries for collections, including target
   projection, collection ordering, and relation-scoped deleted-row inclusion
@@ -102,6 +104,9 @@ loading User rows. Both
 `tidbgo lint --schema` and captured `tidbgo analyze --schema` can report an
 `EXISTS` fallback or a missing association index prefix without another
 application wrapper.
+`ListVideoIDs` and `ListVideoSummaries` use `ScanAll` to read a scalar slice
+or a smaller struct directly. `VideoSummary` matches the source Go field names
+without duplicating tags; Video's soft-delete scope still controls SQL.
 `FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, `CountOrdersForUser`, and `CountClipsInGenre` demonstrate
 connected `First`, `Only`, `Exists`, and scalar or relation-only `Count`

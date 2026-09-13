@@ -33,10 +33,26 @@ The built-in logger writes one completed statement per line:
 [tidbgo] 12:47:35.077 UPDATE   10.893ms args=2 affected=1 UPDATE `users` SET `email` = ? WHERE `id` = ?
 ```
 
-Operation names are colored when the writer is a character-device `*os.File`,
-such as an interactive terminal. Errors are red. Redirected files, buffers,
-and other writers receive plain text without ANSI escape sequences. SQL and
-error control characters are escaped so one event remains one physical line.
+By default, operation names are colored when the writer is a character-device
+`*os.File`, such as an interactive terminal. Errors are red. Redirected files,
+buffers, and other writers receive plain text without ANSI escape sequences.
+
+Use `StatementLoggerColor` to override automatic detection. For a wrapped writer
+whose destination supports ANSI colors:
+
+```go
+logger := orm.NewStatementLogger(writer, orm.StatementLoggerColor(true))
+executor := orm.Observe(db, logger)
+```
+
+`StatementLoggerColor(false)` disables colors for any writer, including a
+terminal. Omitting the option keeps automatic detection; an opaque wrapper's
+destination cannot be inferred from `io.Writer`. The last color option wins,
+and nil options are ignored. Runtime capture and ServerRU collection preserve
+the logger's color setting; capture artifacts remain structured JSON Lines.
+
+SQL and error control characters are escaped regardless of the color setting,
+so one event remains one physical line.
 
 The logger includes:
 
@@ -130,15 +146,23 @@ The capture writes one JSON object per completed statement. Records contain a
 format version, capture and scope identities, bind-free fingerprint, SQL
 template, operation, terminal, model or Relation identity when known, start
 time, target-statement duration, returned or affected row count, error, and
-automatic bulk or preload batch position. Model-row `All`, `First`, and `Only`
+automatic bulk or preload batch position. `All`, `ScanAll`, `First`, and `Only`
 records and typed plan records also carry the bind-free query shape and
-compiler rewrite or fallback decision. LIMIT and OFFSET bind values remain
+compiler rewrite or fallback decision. `ScanAll` uses terminal `scan_all` and
+retains the source model and projection regardless of the destination type.
+LIMIT and OFFSET bind values remain
 excluded; the shape records only whether each bound is present and positive so
 offline rules can distinguish a zero LIMIT. `Count` and `Exists` retain a stable
 bind-free statement fingerprint without claiming the model-row projection
 shape. Raw SQL is marked as opaque. Collection preloads and automatically split
 bulk mutations are recorded from the actual execution path, so
 application-side statement count wrappers are unnecessary.
+
+`ForceIndex` records the physical name in `query.force_index` and includes it
+in the typed query fingerprint. A different index or no hint has a different
+identity; changing a LIMIT or OFFSET value alone does not. Count and Exists
+include the hint in their statement fingerprint. Root plan aliases resolve to
+the root model and physical table.
 
 `UpdateWhere` and `DeleteWhere` records also carry a scalar-only `mutation`
 shape: model, physical table, predicate operators and columns, empty-list

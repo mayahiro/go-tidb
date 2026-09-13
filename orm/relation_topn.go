@@ -229,7 +229,7 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 }
 
 func analyzeRelationTopN(descriptor *model.Descriptor, selection *selectQuery) (relationTopNAnalysis, error) {
-	if !selection.pagination.limitSet || selection.pagination.limit <= 0 || len(selection.orderBy) == 0 {
+	if selection.forceIndexSet || !selection.pagination.limitSet || selection.pagination.limit <= 0 || len(selection.orderBy) == 0 {
 		return relationTopNAnalysis{}, nil
 	}
 

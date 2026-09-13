@@ -65,6 +65,15 @@ func indexAccessDiagnostics(
 			))
 			continue
 		}
+		if access.ForceIndex != "" && !tableHasNamedIndex(table, access.ForceIndex) {
+			diagnostics = append(diagnostics, unavailableDiagnostic(
+				model,
+				fmt.Sprintf("forced index %q is absent from table %q", access.ForceIndex, table.Name()),
+				schemaLocation(table.Position()),
+				evidence,
+			))
+			continue
+		}
 		missing := missingTableColumns(table, access)
 		if len(missing) != 0 {
 			diagnostics = append(diagnostics, unavailableDiagnostic(
@@ -96,7 +105,7 @@ func unavailableDiagnostic(model, message string, location check.Location, evide
 		Title:      "Query index check is unavailable",
 		Message:    "SELECT for " + model + " cannot compare its ordered access with the physical schema because " + message,
 		Evidence:   append([]check.Evidence(nil), evidence...),
-		Suggestion: "Use a self-contained schema snapshot containing every table and column needed by each analyzed ordered access",
+		Suggestion: "Use a self-contained schema snapshot containing every table, column, and explicitly selected index needed by each analyzed ordered access",
 		Location:   location,
 	}
 }
@@ -112,16 +121,22 @@ func missingIndexDiagnostic(
 	if access.Kind == queryshape.IndexAccessRelationTopN {
 		accessName = "relation-first TopN for " + model + "." + access.Relation
 	}
+	indexDescription := "the SQL snapshot has no default-usable direct-column index whose prefix covers"
+	suggestion := "Verify the generated query with ExplainAnalyze and add this prefix when the observed plan scans unnecessary rows"
+	if access.ForceIndex != "" {
+		indexDescription = fmt.Sprintf("forced index %q is not a default-usable direct-column index whose prefix covers", access.ForceIndex)
+		suggestion = "Verify the generated query with ExplainAnalyze and change the ForceIndex selection or update the named index to match this prefix"
+	}
 	return check.Diagnostic{
 		Code:     CodeMissingIndexPrefix,
 		Severity: check.SeverityWarning,
 		Title:    "Ordered limited access has no matching index prefix",
 		Message: accessName + " filters and orders " + table.Name() +
-			", but the SQL snapshot has no default-usable direct-column index whose prefix covers (" + strings.Join(columns, ", ") + ")",
+			", but " + indexDescription + " (" + strings.Join(columns, ", ") + ")",
 		Evidence: append([]check.Evidence{{
 			Message: "Candidate index prefix: " + table.Name() + "(" + strings.Join(columns, ", ") + ")",
 		}}, evidence...),
-		Suggestion:   "Verify the generated query with ExplainAnalyze and add this prefix when the observed plan scans unnecessary rows",
+		Suggestion:   suggestion,
 		Location:     schemaLocation(table.Position()),
 		Suppressible: true,
 		Reference:    indexReference,
@@ -158,6 +173,15 @@ func missingTableColumns(table physicalschema.Table, access queryshape.IndexAcce
 	return missing
 }
 
+func tableHasNamedIndex(table physicalschema.Table, name string) bool {
+	for _, index := range table.Indexes() {
+		if strings.EqualFold(index.Name(), name) {
+			return true
+		}
+	}
+	return false
+}
+
 func tableHasAccessIndex(table physicalschema.Table, access queryshape.IndexAccess) bool {
 	equalityColumns := uniqueIdentifiers(access.EqualityColumns)
 	orderColumns := make([]string, 0, len(access.OrderColumns))
@@ -172,6 +196,9 @@ func tableHasAccessIndex(table physicalschema.Table, access queryshape.IndexAcce
 	}
 
 	for _, index := range table.Indexes() {
+		if access.ForceIndex != "" && !strings.EqualFold(index.Name(), access.ForceIndex) {
+			continue
+		}
 		if !index.SupportsDefaultColumnLookup() {
 			continue
 		}

@@ -304,8 +304,8 @@ func TestStatementLoggerWritesPlainOutputWithoutArgumentValues(t *testing.T) {
 
 func TestStatementLoggerColorsOperationAndErrorWhenEnabled(t *testing.T) {
 	var output bytes.Buffer
-	logger := &statementLogger{writer: &output, color: true}
-	logger.observe(StatementEvent{
+	logger := NewStatementLogger(&output, StatementLoggerColor(true))
+	logger(StatementEvent{
 		Operation: StatementDelete,
 		SQL:       "DELETE FROM users WHERE id = ?",
 		StartedAt: time.Date(2026, time.August, 30, 12, 47, 35, 0, time.Local),
@@ -318,6 +318,85 @@ func TestStatementLoggerColorsOperationAndErrorWhenEnabled(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "error=\x1b[31mdelete failed\x1b[0m") {
 		t.Fatalf("logger error color output = %q", output.String())
+	}
+}
+
+func TestStatementLoggerColorOptions(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		options []StatementLoggerOption
+		color   bool
+	}{
+		{name: "automatic"},
+		{name: "nil", options: []StatementLoggerOption{nil}},
+		{name: "enabled", options: []StatementLoggerOption{StatementLoggerColor(true)}, color: true},
+		{name: "disabled", options: []StatementLoggerOption{StatementLoggerColor(false)}},
+		{name: "last enables", options: []StatementLoggerOption{StatementLoggerColor(false), nil, StatementLoggerColor(true)}, color: true},
+		{name: "last disables", options: []StatementLoggerOption{StatementLoggerColor(true), nil, StatementLoggerColor(false)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writer := struct{ io.Writer }{Writer: &output}
+			logger := NewStatementLogger(writer, test.options...)
+			logger(StatementEvent{
+				Operation: StatementUpdate,
+				SQL:       "UPDATE items SET value = ?",
+				Error:     errors.New("update failed"),
+				ServerRU:  &ServerRUObservation{Error: errors.New("probe failed")},
+			})
+			got := output.String()
+			for _, text := range []string{"\x1b[33mUPDATE\x1b[0m", "error=\x1b[31mupdate failed\x1b[0m", "server_ru_error=\x1b[31mprobe failed\x1b[0m"} {
+				if strings.Contains(got, text) != test.color {
+					t.Fatalf("color=%t, log=%q", test.color, got)
+				}
+			}
+			if !test.color && strings.Contains(got, "\x1b[") {
+				t.Fatalf("disabled colors emitted ANSI sequences: %q", got)
+			}
+		})
+	}
+}
+
+func TestStatementLoggerColorWithRuntimeCapture(t *testing.T) {
+	t.Parallel()
+
+	for _, boundary := range []string{"executor", "observer then capture", "capture then observer"} {
+		t.Run(boundary, func(t *testing.T) {
+			state := &serverRUObserverState{serverRU: `{"ru_consumption":2}`}
+			database := openServerRUObserverDB(t, state)
+			var output, records bytes.Buffer
+			writer := struct{ io.Writer }{Writer: &output}
+			logger := NewStatementLogger(writer, StatementLoggerColor(true))
+			capture := NewRuntimeCapture(&records)
+			ctx := context.Background()
+			var executor Executor = database
+			switch boundary {
+			case "executor":
+				executor = Observe(executor, logger)
+				ctx = WithRuntimeCapture(ctx, capture, CollectServerRU())
+			case "observer then capture":
+				ctx = WithStatementObserver(ctx, logger)
+				ctx = WithRuntimeCapture(ctx, capture, CollectServerRU())
+			case "capture then observer":
+				ctx = WithRuntimeCapture(ctx, capture, CollectServerRU())
+				ctx = WithStatementObserver(ctx, logger)
+			}
+			if _, err := RawExec(ctx, executor, "UPDATE items SET value = ?", int64(1)); err != nil {
+				t.Fatal(err)
+			}
+			if got := output.String(); !strings.Contains(got, "\x1b[33mUPDATE\x1b[0m") || !strings.Contains(got, "server_ru=2") {
+				t.Fatalf("colored runtime log = %q", got)
+			}
+			if capture.Err() != nil || strings.Contains(records.String(), "\x1b[") {
+				t.Fatalf("capture error=%v, output=%q", capture.Err(), records.String())
+			}
+			captured := decodeRuntimeCaptureForTest(t, &records)
+			if len(captured) != 1 || captured[0].ServerRU == nil || captured[0].ServerRU.Value != 2 {
+				t.Fatalf("captured records = %#v", captured)
+			}
+		})
 	}
 }
 
@@ -378,7 +457,7 @@ func TestStatementLoggerEscapesTerminalControlCharacters(t *testing.T) {
 
 func TestStatementLoggerSerializesConcurrentWrites(t *testing.T) {
 	var output bytes.Buffer
-	logger := NewStatementLogger(&output)
+	logger := NewStatementLogger(&output, StatementLoggerColor(true))
 	const count = 100
 	var group sync.WaitGroup
 	group.Add(count)
@@ -393,10 +472,32 @@ func TestStatementLoggerSerializesConcurrentWrites(t *testing.T) {
 	if lines := strings.Count(output.String(), "\n"); lines != count {
 		t.Fatalf("logger line count = %d, want %d", lines, count)
 	}
+	if operations := strings.Count(output.String(), "\x1b[32mSELECT\x1b[0m"); operations != count {
+		t.Fatalf("colored operation count = %d, want %d", operations, count)
+	}
 }
 
 func TestStatementLoggerAcceptsNilWriter(t *testing.T) {
 	NewStatementLogger(nil)(StatementEvent{Operation: StatementSelect, SQL: "SELECT 1"})
+	NewStatementLogger(nil, nil, StatementLoggerColor(true))(StatementEvent{Operation: StatementSelect, SQL: "SELECT 1"})
+}
+
+func BenchmarkStatementLoggerConstruction(b *testing.B) {
+	for _, test := range []struct {
+		name    string
+		options []StatementLoggerOption
+	}{
+		{name: "automatic"},
+		{name: "enabled", options: []StatementLoggerOption{StatementLoggerColor(true)}},
+		{name: "disabled", options: []StatementLoggerOption{StatementLoggerColor(false)}},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				NewStatementLogger(io.Discard, test.options...)
+			}
+		})
+	}
 }
 
 func BenchmarkInsertExecWithStatementObserver(b *testing.B) {

@@ -371,18 +371,44 @@ type statementLogger struct {
 	mutex  sync.Mutex
 }
 
+// StatementLoggerOption configures NewStatementLogger output.
+type StatementLoggerOption interface {
+	applyStatementLogger(*statementLogger)
+}
+
+type statementLoggerColorOption bool
+
+func (option statementLoggerColorOption) applyStatementLogger(logger *statementLogger) {
+	logger.color = bool(option)
+}
+
+// StatementLoggerColor explicitly enables or disables ANSI colors, overriding
+// automatic detection. It also applies to wrapped writers whose destination
+// NewStatementLogger cannot inspect. Without this option, colors are enabled
+// only for character-device *os.File writers.
+func StatementLoggerColor(enabled bool) StatementLoggerOption {
+	return statementLoggerColorOption(enabled)
+}
+
 // NewStatementLogger returns a concurrency-safe observer that writes one line
 // per statement.
 //
 // It logs the SQL template and bind count. Bind values are logged only when
 // IncludeStatementArguments configures the context. ANSI colors are enabled
-// automatically for a character-device *os.File and disabled for other writers
-// such as files and buffers. Write failures do not change query results.
-func NewStatementLogger(writer io.Writer) StatementObserver {
+// automatically for a character-device *os.File and otherwise disabled by
+// default. StatementLoggerColor overrides this choice for any writer. Options
+// are applied in order; the last color option wins and nil options are ignored.
+// Write failures do not change query results.
+func NewStatementLogger(writer io.Writer, options ...StatementLoggerOption) StatementObserver {
 	if writer == nil {
 		return func(StatementEvent) {}
 	}
 	logger := &statementLogger{writer: writer, color: statementLogColorEnabled(writer)}
+	for _, option := range options {
+		if option != nil {
+			option.applyStatementLogger(logger)
+		}
+	}
 	return logger.observe
 }
 

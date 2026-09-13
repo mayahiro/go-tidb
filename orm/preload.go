@@ -248,7 +248,7 @@ func compilePreloadNode(source *model.Descriptor, node *preloadNode) (*preloadPl
 		if plan.junction != nil {
 			rootAlias = manyToManyTargetAlias
 		}
-		plan.targetStatement = compileInlinePreloadStatement(target, plan.targetStatement, plan.children, rootAlias, "")
+		plan.targetStatement = compileInlinePreloadStatement(target, plan.targetStatement, plan.children, rootAlias, "", "")
 	}
 	plan.inlineColumnCount = len(plan.targetStatement.scanPlan.fields) + inlinePreloadColumnCount(plan.inlineChildren)
 	return &plan, nil

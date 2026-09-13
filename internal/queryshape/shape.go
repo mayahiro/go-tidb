@@ -16,6 +16,7 @@ type Query struct {
 	Limit            Bound            `json:"limit"`
 	Offset           Bound            `json:"offset"`
 	WithDeleted      bool             `json:"with_deleted"`
+	ForceIndex       string           `json:"force_index,omitempty"`
 	SoftDeleteColumn string           `json:"soft_delete_column,omitempty"`
 	Preloads         []Preload        `json:"preloads"`
 	Compiler         CompilerDecision `json:"compiler"`
@@ -148,6 +149,7 @@ const (
 // positive-LIMIT access. Directions are uniform and can use a forward or
 // reverse scan of the same simple index prefix.
 type IndexAccess struct {
+	ForceIndex      string          `json:"force_index,omitempty"`
 	Kind            IndexAccessKind `json:"kind"`
 	Table           string          `json:"table"`
 	Relation        string          `json:"relation,omitempty"`

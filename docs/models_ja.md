@@ -6,6 +6,12 @@
 
 metadataはnon-pointer struct type単位でcacheし、offline toolingとscalar query runtimeで共有します
 
+`Query[T]().ScanAll(ctx, executor, &destination)`の受け取り先には、model metadataを持たない別の結果structを使えます
+
+選択fieldは取得元のGo名で対応付け、受け取り先のtagは参照しません。table、column、Relation、論理削除のmetadataは引き続き`T`に属します
+
+詳細は[部分取得結果のscan](queries_ja.md#部分取得結果をsliceで受け取る)を参照してください
+
 ## Modelの定義
 
 ```go
@@ -324,6 +330,63 @@ warning対象と同名の物理columnも有効です
 applicationは任意のDecimalまたはidentifier libraryを選択できます
 
 `go-tidb` はfieldまたはfield addressが標準database interfaceを実装するか記録し、ユーザー所有modelへDecimal packageをimportしません
+
+## SQL引数とタイムゾーン
+
+`go-tidb` はSQLのplaceholderと引数を分けて扱います
+
+`O'Reilly` などの通常の文字列は、引用符やescape処理を加えず値として渡します
+
+parameterのencodingと、有効にした場合のinterpolationはdatabase driverが処理します
+
+`Raw` と `RawExec` の引数にも同じ規則が適用され、SQL本文は呼び出し側が所有します
+
+通常の `time.Time` はmutationとpredicateのbind引数として保持します
+
+`go-tidb` はSQL literalへの文字列化、UTCへの変換、接続のタイムゾーン変更を行いません
+
+同じdriverと接続設定では、通常の日時引数は `database/sql` による直接実行と同じ意味を持ちます
+
+送信時の表現と保存精度はdriverとSQLの列型で決まります
+
+`go-sql-driver/mysql` v1.10.0では、次の設定がそれぞれ異なる責務を持ちます
+
+| 設定 | 効果 |
+| --- | --- |
+| `loc` | 送信する非ゼロの `time.Time` をこのlocationへ変換し、parseした日時の読取結果にもこのlocationを設定する、既定はUTC |
+| `parseTime=true` | 対応する日時の読取結果を `time.Time` にする、送信時のlocation変換の有効・無効は切り替えない |
+| `interpolateParams` | driverによるinterpolationかparameterized executionかを選択する、どちらも通常の日時引数を `loc` へ変換する |
+| Sessionの `time_zone` | TiDBの `TIMESTAMP` の解釈と表示、およびsessionに依存するSQL日時関数を制御する、`loc` はこの設定を変更しない |
+
+例えば `2026-09-13 00:30:00 JST` を表す通常の日時引数は、`loc=UTC` では `2026-09-12 15:30:00`、`loc=Asia%2FTokyo` では `2026-09-13 00:30:00` として送信されます
+
+この変換は書き込みだけでなく範囲検索のpredicateにも適用されます
+
+driverの[`loc` と `parseTime` の設定](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#loc)、[interpolationの実装](https://github.com/go-sql-driver/mysql/blob/v1.10.0/connection.go)、[prepared executionの実装](https://github.com/go-sql-driver/mysql/blob/v1.10.0/packets.go)も参照してください
+
+TiDBの `DATETIME` はタイムゾーンを持たず年月日時分秒を保存します
+
+`TIMESTAMP` は入力をsessionの `time_zone` で解釈してUTCで保存し、読み取り時にsessionのタイムゾーンへ戻します
+
+瞬間を表す値では、driverとsessionのタイムゾーンを、例えば両方UTCに揃えます
+
+これらの設定が異なる場合、同じ接続による書き込みと読み戻しの成功だけでは、`TIMESTAMP` が意図した瞬間を表しているとは確認できません
+
+[TiDBのタイムゾーンの仕様](https://docs.pingcap.com/tidb/stable/data-type-date-and-time/#timezone-handling)も参照してください
+
+fieldが瞬間を表すのか現地の年月日時分秒を表すのかはapplicationが決定し、列型だけでは判断できません
+
+明示的な表現が必要な場合はapplicationが選択する `sql.Scanner` / `driver.Valuer` typeで定義できます
+
+`Build` はValuerの `Value` を呼ばずに保持し、実行時に通常の `database/sql` の変換が行われます
+
+Valuerが日時文字列を返す場合、その文字列を値として渡し、通常の日時引数に対する `loc` 変換は適用されません
+
+nullable pointerは通常のNULL規則に従います
+
+文書化された例外として、non-pointerの `soft_delete` fieldのゼロ `time.Time` はSQL NULLとして書き込みます
+
+詳細は[mutation guide](mutations_ja.md#insert)を参照してください
 
 ## 現在の境界
 

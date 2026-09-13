@@ -35,6 +35,71 @@ field in struct declaration order. It never uses `SELECT *`. `Select` accepts
 Go field names, not physical column names, and preserves the requested scan
 order. Computed fields are available only through aliased `Raw[T]` results.
 
+## Read partial results into slices
+
+`All` returns `[]T`. Use `ScanAll(ctx, executor, &destination)` to read one
+column into a scalar slice, or selected columns into another struct slice:
+
+```go
+type Channel struct {
+    model.Meta `tidbgo:"table=channels"`
+    ID         int64 `tidbgo:",pk"`
+    YouTubeID  string `tidbgo:"external_id"`
+    Title      string
+    DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+type ChannelIdentity struct {
+    ID        int64
+    YouTubeID string
+}
+
+var ids []int64
+err := orm.Query[Channel]().Select("ID").ScanAll(ctx, db, &ids)
+
+var identities []ChannelIdentity
+err = orm.Query[Channel]().
+    Select("ID", "YouTubeID").
+    OrderBy(orm.Desc("ID")).Limit(100).
+    ScanAll(ctx, db, &identities)
+```
+
+The source `Channel` defines SQL, including its physical column names, soft-delete
+scope, `Where`/`Has`, `ForceIndex`, ordering, cursor, limit, and offset. DTOs
+need no model metadata. `Select` still determines the projection; omitting it
+selects all mapped non-computed source fields, independently of destination.
+
+- Destination must be a non-nil pointer to a slice. Success replaces it with
+  newly owned storage, including a non-nil empty slice for zero rows. Scan,
+  iteration, query, or close errors leave the original slice and its storage
+  unchanged
+- Scalar elements require exactly one selected column. Native scalars, named
+  scalar types, `time.Time`, byte slices, empty interfaces, pointers, and
+  concrete `sql.Scanner` types use `database/sql` conversions. `sql.RawBytes`
+  is rejected because its storage expires during iteration
+- Struct destinations match each selected source **Go field name exactly**.
+  `YouTubeID` receives `external_id` in the example. Field order and destination
+  tags, including `tidbgo`, do not affect mapping. Extra or unselected fields
+  remain zero. Struct pointers and unambiguous exported embedded field paths
+  are supported; missing, ambiguous, or inaccessible fields fail before I/O
+- NULL requires a compatible pointer, `sql.Null*`, or custom Scanner. The source
+  model's soft-delete convention is retained: a selected soft-delete field
+  scanned into `time.Time` receives zero for NULL. Ordinary time fields have
+  no NULL-to-zero conversion
+- The destination determines scan capability. A source field implementing only
+  `driver.Valuer` can be read into a supported destination type. `Build`, `All`,
+  `First`, and `Only` still validate scanning into the selected source fields
+- `Preload` is rejected before I/O; use model-row terminals for relation
+  hydration. `Has` conditions remain available. The builder is not mutated
+
+Mapping structure is validated before execution; incompatible database values
+and numeric overflow are reported during scanning. Runtime capture retains
+the source model and query shape under terminal `scan_all`.
+
+This API removes the application conversion loop and intermediate full-model
+slice for partial results. Identical SQL has no additional RU reduction from
+changing the destination type. Use `All` when the desired result is the full
+source model; `ScanAll` adds destination validation and reflection overhead.
+
 ## Analyze executed query shapes
 
 RuntimeCapture records the bind-free QueryShape of executed typed queries
@@ -117,10 +182,71 @@ multiple collection predicates, or `SeekAfter`. It never includes target
 predicate values. The fallback remains a valid relation existence query; use
 `Explain` or `ExplainAnalyze` to decide whether its actual plan is acceptable.
 
+## Explicit root index selection
+
+TiDB can choose a table scan even when an index matches the filter and order.
+After measuring the plan and ServerRU, use `ForceIndex` to select one physical
+index on the root table for any page:
+
+```go
+total, err := orm.Query[Bookmark]().
+    Where(orm.Equal("OwnerID", ownerID)).
+    Count(ctx, db)
+if err != nil {
+    return err
+}
+
+items, err := orm.Query[Bookmark]().
+    ForceIndex("owner_added_id").
+    Where(orm.Equal("OwnerID", ownerID)).
+    OrderBy(orm.Desc("AddedAt"), orm.Desc("ID")).
+    Limit(50).Offset(offset).
+    Preload("Target").
+    All(ctx, db)
+```
+
+This example assumes the root table has an `owner_added_id` index on
+`(owner_id, added_at, id)`. The compiler emits `FORCE INDEX (` followed by the
+quoted index name after the root table and optional alias, before any JOIN.
+Projection, predicates, ordering, `SeekAfter`, soft-delete scopes, and missing
+preload targets retain their normal behavior. Positive OFFSET and large LIMIT
+use the same hint. Without `ForceIndex`, ordered scalar lists with to-one
+preloads use the ordinary SELECT and LEFT JOIN at every page size and offset.
+
+The name is a physical identifier, not a Go field. It must match
+`[A-Za-z_][A-Za-z0-9_]*` and contain at most 64 bytes. `PRIMARY` is accepted;
+empty names, qualification, lists, and SQL fragments are rejected. The last
+call replaces the previous name. Use an application-owned name, not request
+input. `Build` validates and quotes it offline; database existence and index
+availability are checked by TiDB when executing.
+
+The hint affects all terminals on that builder, including `Count` and
+`Exists`, and never propagates to relation predicates or preload targets.
+An explicit hint disables relation-first TopN and association-only Count
+rewrites that would replace or remove the root access. Other builders retain
+their normal relation optimizations. Use a separate unhinted Count query for
+an independently optimized total, as above; list pagination is not part of
+that total. The ORM does not create a shared snapshot for the two calls.
+
+For supported ordered-limit shapes, schema diagnostics check the named index:
+`QRY006` reports a missing index and `QRY007` reports an unsuitable prefix,
+even if another index matches. These are offline checks, not a guarantee of
+low RU. TiDB's [index hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/)
+and [index selection rules](https://docs.pingcap.com/tidb/stable/choose-index/)
+describe the database behavior.
+
+Include a unique key in ordering to stabilize page membership. Compare the
+first, middle, and last pages, small and large result sets, and large LIMITs
+with and without the hint. Deep offsets still require skipping rows; forcing
+an index does not remove that cost and can increase RU for unfavorable data.
+Read `LastServerRU` immediately after consuming each SELECT on the same pinned
+`*sql.Conn`. Run `ExplainAnalyze` and `SHOW WARNINGS` separately, outside the
+SELECT measurement. Recheck plans when data distribution or indexes change.
+
 ## Soft-delete scope
 
 A model with one field tagged `tidbgo:",soft_delete"` receives
-`deleted_at IS NULL` automatically in `Build`, `All`, `First`, `Only`,
+`deleted_at IS NULL` automatically in `Build`, `All`, `ScanAll`, `First`, `Only`,
 `Exists`, `Count`, `Explain`, and `ExplainAnalyze`. Use `WithDeleted` only when
 both active and logically deleted root rows are required:
 
@@ -337,7 +463,7 @@ representation when NULL must be expressed.
 
 ## Execute explicitly
 
-`All`, `First`, `Only`, `Exists`, `Count`, `Explain`, and `ExplainAnalyze`
+`All`, `ScanAll`, `First`, `Only`, `Exists`, `Count`, `Explain`, and `ExplainAnalyze`
 perform I/O only when an existing executor is passed explicitly:
 
 ```go
@@ -649,10 +775,10 @@ before updating an RU baseline.
 
 ## Current boundary
 
-The public query surface includes `Build`, `All`, `First`, `Only`, `Exists`,
+The public query surface includes `Build`, `All`, `ScanAll`, `First`, `Only`, `Exists`,
 `Count`, `Explain`, `ExplainAnalyze`, direct and
 many-to-many relation predicates, and nested direct or many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.
-`IDs` remains deferred. Use typed `Raw[T]` for joins, CTEs, aggregates, and
-other SQL outside the scalar builder surface.
+Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice, and typed `Raw[T]`
+for joins, CTEs, aggregates, and other SQL outside the scalar builder surface.

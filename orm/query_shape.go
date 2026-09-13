@@ -40,6 +40,7 @@ func buildSelectQueryShape(
 			Value:    selection.pagination.offset,
 		},
 		WithDeleted: selection.withDeleted,
+		ForceIndex:  selection.forceIndex,
 		Preloads:    buildQueryShapePreloads(compiled.preloads, ""),
 		Compiler:    buildQueryShapeCompilerDecision(relationTopN),
 	}
@@ -320,6 +321,7 @@ func buildQueryShapeIndexAccesses(
 	return []queryshape.IndexAccess{{
 		Kind:            queryshape.IndexAccessRootOrderedLimit,
 		Table:           descriptor.TableName(),
+		ForceIndex:      selection.forceIndex,
 		EqualityColumns: equalityColumns,
 		OrderColumns:    orderColumns,
 	}}

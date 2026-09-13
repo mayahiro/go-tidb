@@ -25,7 +25,7 @@ const (
 	inlinePreloadAlias8    = "tidbgo_t8"
 )
 
-func compileInlinePreloadStatement(descriptor *model.Descriptor, base *selectStatement, plans []*preloadPlan, rootAlias, rootSoftDeleteColumn string) *selectStatement {
+func compileInlinePreloadStatement(descriptor *model.Descriptor, base *selectStatement, plans []*preloadPlan, rootAlias, rootSoftDeleteColumn, forceIndex string) *selectStatement {
 	inline := inlinePreloadPlans(plans)
 	if len(inline) == 0 {
 		if rootSoftDeleteColumn != "" {
@@ -38,7 +38,8 @@ func compileInlinePreloadStatement(descriptor *model.Descriptor, base *selectSta
 	assignInlinePreloadAliases(inline, rootAlias, &nextAlias)
 
 	var query strings.Builder
-	capacity := len(base.sql) + inlinePreloadSQLCapacity(inline)
+	capacity := len(base.sql) + inlinePreloadSQLCapacity(inline) + forceIndexSQLCapacity(forceIndex)
+	capacity += len(base.scanPlan.columns)*(len(rootAlias)+len("``.")) + len(" AS ``") + len(rootAlias)
 	if rootSoftDeleteColumn != "" {
 		capacity += len(rootSoftDeleteColumn) + len(" WHERE ``.`` IS NULL")
 	}
@@ -55,6 +56,7 @@ func compileInlinePreloadStatement(descriptor *model.Descriptor, base *selectSta
 	writeQuotedIdentifier(&query, descriptor.TableName())
 	query.WriteString(" AS ")
 	writeQuotedIdentifier(&query, rootAlias)
+	writeForceIndex(&query, forceIndex)
 	writeInlinePreloadJoins(&query, inline)
 	if rootSoftDeleteColumn != "" {
 		query.WriteString(" WHERE ")

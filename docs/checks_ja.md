@@ -121,7 +121,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-source解析は解決済みの `Build`、`All`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
+source解析は解決済みの `Build`、`All`、`ScanAll`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
 
 fluent chain、1個のlocal builder定義、local query helper、integerとstring literal、同じfile内の単純なconstantを解決します
 
@@ -153,6 +153,10 @@ default active soft-delete columnはroot query上で `WithDeleted` を解決で�
 
 via edgeのactiveなsoft-delete columnもjunction equality prefixへ含めます
 
+`ForceIndex` がある対応済みroot shapeでは指定したindexだけを検査し、不在は `QRY006`、不適切なprefixは他に適切なindexがあっても `QRY007` とします
+
+source analysisはliteralまたはlocal constantの名前を解決し、動的な名前や不確かな変更はuncertain coverageへ含めます。rootの明示指定時はruntime compileと同じくrelation-first TopNの分析対象から外します
+
 `index_patterns` はordered positive-limit候補を数え、`analyzed_index_patterns` と `uncertain_index_patterns` は照合できたshapeとできなかったshapeを分離します
 
 Relation fallback、associationのnon-equality filter、mixed direction、unknown field、embedded model shape、別statementで変更されたbuilderには推測したindex diagnosticを出さずuncertainとします
@@ -160,6 +164,8 @@ Relation fallback、associationのnon-equality filter、mixed direction、unknow
 `SRC001` は1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
 
 repository return、alias、model method、解決できないresult flowは別の `analyzed` と `uncertain` projection counterへ反映します
+
+`ScanAll`もquery patternとschema付きindex checkの対象です。明示した`Select`はexplicit projectionへ計上します。`Select`がない場合はdestination pointerのresult flowを`uncertain`へ計上し、`SRC001`を提案しません
 
 ## Runtime plan diagnostic
 

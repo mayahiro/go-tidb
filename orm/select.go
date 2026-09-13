@@ -23,14 +23,16 @@ type compiledSelect struct {
 }
 
 type selectQuery struct {
-	modelType   reflect.Type
-	projection  []string
-	predicates  []predicate
-	orderBy     []orderTerm
-	seekAfter   []cursorValue
-	pagination  pagination
-	preloads    []preloadRequest
-	withDeleted bool
+	modelType     reflect.Type
+	projection    []string
+	predicates    []predicate
+	orderBy       []orderTerm
+	seekAfter     []cursorValue
+	pagination    pagination
+	preloads      []preloadRequest
+	withDeleted   bool
+	forceIndex    string
+	forceIndexSet bool
 }
 
 var (
@@ -44,6 +46,9 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 		return compiledSelect{}, fmt.Errorf("orm: compile SELECT model: %w", err)
 	}
 	if err := validateWithDeleted(descriptor, query.withDeleted, "SELECT"); err != nil {
+		return compiledSelect{}, err
+	}
+	if err := validateForceIndex(query); err != nil {
 		return compiledSelect{}, err
 	}
 	if len(query.preloads) == 0 {
@@ -83,7 +88,7 @@ func compileSelect(query *selectQuery) (compiledSelect, error) {
 			return compiledSelect{statement: statement, preloads: preloads}, nil
 		}
 	}
-	statement = compileInlinePreloadStatement(descriptor, statement, preloads, inlinePreloadRootAlias, rootSoftDeleteColumn)
+	statement = compileInlinePreloadStatement(descriptor, statement, preloads, inlinePreloadRootAlias, rootSoftDeleteColumn, query.forceIndex)
 	if onlyDefaultSoftDeleteScope {
 		return compiledSelect{statement: statement, preloads: preloads}, nil
 	}
@@ -128,6 +133,10 @@ func compileSelectWithoutPreloads(descriptor *model.Descriptor, query *selectQue
 	if err != nil {
 		return compiledSelect{}, err
 	}
+	return compileSelectFromProjection(descriptor, statement, query)
+}
+
+func compileSelectFromProjection(descriptor *model.Descriptor, statement *selectStatement, query *selectQuery) (compiledSelect, error) {
 	if compiled, optimized, compileErr := compileRelationTopNSelect(descriptor, statement, nil, query); compileErr != nil {
 		return compiledSelect{}, compileErr
 	} else if optimized {
@@ -141,7 +150,7 @@ func compileSelectWithoutPreloads(descriptor *model.Descriptor, query *selectQue
 
 func selectUsesOnlyDefaultSoftDeleteScope(descriptor *model.Descriptor, query *selectQuery) bool {
 	_, hasSoftDelete := descriptor.SoftDeleteField()
-	return hasSoftDelete && !query.withDeleted &&
+	return hasSoftDelete && !query.withDeleted && !query.forceIndexSet &&
 		len(query.predicates) == 0 &&
 		len(query.orderBy) == 0 &&
 		query.seekAfter == nil &&
@@ -175,7 +184,7 @@ func compileDefaultSoftDeleteSelect(descriptor *model.Descriptor) (*selectStatem
 
 func selectNeedsClauses(descriptor *model.Descriptor, query *selectQuery) bool {
 	_, softDelete := descriptor.SoftDeleteField()
-	return softDelete && !query.withDeleted ||
+	return query.forceIndexSet || softDelete && !query.withDeleted ||
 		len(query.predicates) != 0 ||
 		len(query.orderBy) != 0 ||
 		query.seekAfter != nil ||
@@ -186,6 +195,28 @@ func selectNeedsClauses(descriptor *model.Descriptor, query *selectQuery) bool {
 func compileSelectProjection(descriptor *model.Descriptor, projection []string) (*selectStatement, error) {
 	if projection == nil {
 		return compileDefaultSelect(descriptor)
+	}
+	fields, err := selectProjectionFields(descriptor, projection)
+	if err != nil {
+		return nil, err
+	}
+	scanPlan, err := compileScanPlanFields(descriptor, fields)
+	if err != nil {
+		return nil, err
+	}
+	return &selectStatement{
+		sql:      renderSelect(descriptor.TableName(), scanPlan.columns),
+		scanPlan: scanPlan,
+	}, nil
+}
+
+func selectProjectionFields(descriptor *model.Descriptor, projection []string) ([]model.Field, error) {
+	if projection == nil {
+		fields := baseTableFields(descriptor)
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("orm: SELECT model %s has no base-table fields", descriptor.Name())
+		}
+		return fields, nil
 	}
 	if len(projection) == 0 {
 		return nil, fmt.Errorf("orm: SELECT projection for %s must contain at least one mapped scalar field", descriptor.Name())
@@ -207,14 +238,7 @@ func compileSelectProjection(descriptor *model.Descriptor, projection []string) 
 		seen[name] = true
 		fields[index] = field
 	}
-	scanPlan, err := compileScanPlanFields(descriptor, fields)
-	if err != nil {
-		return nil, err
-	}
-	return &selectStatement{
-		sql:      renderSelect(descriptor.TableName(), scanPlan.columns),
-		scanPlan: scanPlan,
-	}, nil
+	return fields, nil
 }
 
 func compileDefaultSelect(descriptor *model.Descriptor) (*selectStatement, error) {

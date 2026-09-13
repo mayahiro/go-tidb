@@ -214,6 +214,20 @@ suiteのconnection character setは `utf8mb4` のまま使用します
 
 driverの[`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams)も参照してください
 
+日時引数のtestではUTC/JSTの入力、UTC/JSTのdriver location、interpolationの有無、UTC/JSTのsession timezoneを組み合わせ、typed mutation、raw SQL、`database/sql` による直接実行を比較します
+
+`DATETIME(6)` と `TIMESTAMP(6)` の保存・更新・範囲検索を、隣接するmicrosecond、nullable pointer、application独自のwall-clock Valuer、引用符・backslash・NUL・Unicodeを含む文字列で検証します
+
+同じ接続による読み戻しで隠れる差を検出するため、sessionをUTCにした状態の保存済み日時表現も確認します
+
+test自身の接続では `parseTime=true` とし、driverの `timeTruncate` を無効にします
+
+`TIDBGO_TEST_DSN` を設定した状態で、このtestだけを実行するcommandは次のとおりです
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterArguments$' -count=1 -v
+```
+
 suiteはconnection poolを1 connectionに制限します
 
 scalar terminal、slice predicate、application-selected DECIMAL type、temporal field、Relation predicateとpreload、CRUD、bulk insertとupsert、`AUTO_RANDOM`、typed raw SQL、soft delete、restore、transactionのcommitとrollback、typed SELECT EXPLAINとEXPLAIN ANALYZE、same-session ServerRU取得、rootとpreload SELECTのstatement observationを確認します
@@ -223,6 +237,67 @@ scalar terminal、slice predicate、application-selected DECIMAL type、temporal
 既存fixture tableを検出した場合は削除せず失敗します
 
 同じdatabaseに対する複数suiteを同時実行しません
+
+## 部分取得結果のscan
+
+同じofflineの`database/sql` driverとSQLで、`All`後の変換loop、`ScanAll`、benchmark専用のgeneric collectorを比較します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkScanAll$' -benchmem -benchtime=100ms -count=3
+```
+
+IDのscalar、小さいstruct、nullable/Scanner field、幅の広い結果を0、1、100、10,000行で測定します
+
+幅の広い`all_map`は結果型が一致するため`All`をそのまま使います。genericの代替方式は取得元のcompileと診断を共有しますが、destination pointerの検証を省いており、public APIではありません
+
+測定対象はclientの時間とallocationであり、RUやnetwork costではありません。`rows_10000/dto/all_map`と`rows_10000/dto/scan_all`へ`-cpuprofile`、`-memprofile`を指定し、`go -C tools tool pprof`でCPUとallocationを確認できます
+
+専用test DSNを設定した状態で、実TiDBの結果、取得元SQL、pagination、Relation条件、soft-deleteのNULL、ServerRU収集を検証します
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterScanAll$' -count=1 -v
+```
+
+test DBを検証してから、自分で作成した`tidbgo_it_projection_*`のfixture tableだけを削除します。既存のfixture tableがある場合は失敗し、そのtableを変更しません
+
+## 一覧SQLの比較
+
+上記の専用テストDBを設定してから、比較を明示的に有効にします
+
+```sh
+TIDBGO_TEST_ORDERED_LIST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterOrderedListSQLShapes$' -count=1 -v
+```
+
+専用tableへ12,000件のlinkと600件のtargetを作成し、既存tableがある場合は拒否し、今回作成したtableだけを削除します
+
+既定SELECT、`FORCE INDEX`、derived tableでIDを先に絞る方式を `Raw[T]` で実行し、`Query` / `ForceIndex` / `Preload` / `All` のcompiler経路も比較します
+
+10・50・100件の先頭ページ、2ページ目・中間・末尾・末尾超え、昇順、大きいLIMIT、少数件または0件、非index filterを含みます。最後の条件では今回作成したfixtureのordered indexをDROPし、明示指定がDB errorとなることと未指定での実行を検証します
+
+fixtureから計算したID、順序、値、参照先なしと削除済みtargetの扱いを確認したうえで、各方式の結果を比較します
+
+各方式のwarmupを1回行い、実行順を入れ替えた3 sampleについて、同じ固定connectionから直後にServerRUを読みます
+
+logには各sample、中央値、runtime plan、hint warningの確認結果を残します
+
+所要時間はclientのscanと、compiler経路では比較用にhydrate済みresultを平坦化する処理も含み、RU probeを含みません。setup、cleanup、EXPLAINは報告するSELECTのRUへ含めません。ORM単体のoverheadを切り分ける計測ではありません
+
+この比較は明示的に有効にする実験であり、RU regression gateではありません
+
+applicationのstatisticsを再現するものではなく、特定のoptimizer判断や普遍的なRU改善を保証しません
+
+index指定付き一覧のページサイズとOFFSETを変えた場合や、scalar queryのoffline compileを、DB側の効果と分けて比較できます
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkOrderedListCompiler$' -benchmem -benchtime=200ms -count=3
+ordered_list_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkOrderedListCompiler/first_50$' -benchtime=1s -cpuprofile "$ordered_list_profile_dir/cpu" -memprofile "$ordered_list_profile_dir/mem" -o "$ordered_list_profile_dir/orm.test"
+go -C tools tool pprof -top "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$ordered_list_profile_dir/orm.test" "$ordered_list_profile_dir/mem"
+rm -rf "$ordered_list_profile_dir"
+```
+
+benchmarkはmodel metadataを再利用して `Build` を計測し、driver、network、RUを含みません。compiler変更の前後でCPUとallocationのprofileを比較します。SQL templateが長くてもallocation量が増えるとは限りません
 
 ## Write compiler benchmark
 

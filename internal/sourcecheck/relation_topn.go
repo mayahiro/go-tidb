@@ -16,12 +16,12 @@ type sourceRelationTopNAnalysis struct {
 
 func (analyzer *sourceAnalyzer) analyzeSourceRelationTopN(summary sourceQuerySummary) sourceRelationTopNAnalysis {
 	pattern := summary.pattern
-	if pattern.limit.state != sourceBoundPositive || pattern.order == sourceOrderAbsent || len(pattern.hasPredicates) == 0 {
+	if pattern.forceIndex == sourceTogglePresent || pattern.limit.state != sourceBoundPositive || pattern.order == sourceOrderAbsent || len(pattern.hasPredicates) == 0 {
 		return sourceRelationTopNAnalysis{}
 	}
 	analysis := sourceRelationTopNAnalysis{candidate: true}
 	if !pattern.predicatesKnown || !pattern.rootCountKnown || !pattern.orderTermsKnown ||
-		pattern.seekAfter == sourceToggleUnknown || pattern.withDeleted == sourceToggleUnknown {
+		pattern.seekAfter == sourceToggleUnknown || pattern.withDeleted == sourceToggleUnknown || pattern.forceIndex == sourceToggleUnknown {
 		return analysis
 	}
 

@@ -84,6 +84,13 @@ Follow the official [TiDB Cloud Starter connection
 requirements](https://docs.pingcap.com/tidbcloud/connect-to-tidb-cluster-serverless/?plan=starter),
 including TLS. With `go-sql-driver/mysql`, use `parseTime=true` when `DATE` or
 `DATETIME` values must scan into `time.Time`.
+
+`go-tidb` passes native `time.Time` arguments to the driver. With
+`go-sql-driver/mysql`, outgoing nonzero times are converted to the driver's `loc`
+(UTC by default), which does not set the database session's `time_zone`.
+See [SQL arguments and time zones](docs/models.md#sql-arguments-and-time-zones)
+for column semantics and connection settings.
+
 `interpolateParams=true` can reduce round trips for short-lived parameterized
 queries, but it must not be combined with BIG5, CP932, GB2312, GBK, or SJIS.
 See the driver's [`interpolateParams` documentation](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#interpolateparams).
@@ -239,6 +246,26 @@ SQL and includes the builder's predicates and pagination. See the [scalar
 query guide](docs/queries.md) for terminal errors, predicates, pagination,
 NULL ordering, and the current execution boundary.
 
+Read selected columns directly into a scalar slice or a separate result struct:
+
+```go
+var ids []int64
+err := orm.Query[User]().Select("ID").ScanAll(ctx, db, &ids)
+
+type UserIdentity struct {
+    ID    int64
+    Email string
+}
+var identities []UserIdentity
+err = orm.Query[User]().Select("ID", "Email").ScanAll(ctx, db, &identities)
+```
+
+`ScanAll` matches exact source Go field names, ignoring destination tags. The
+source model retains its conditions, soft-delete scope, index hint, pagination,
+and diagnostics. The destination is replaced only on success. `Select`
+determines the columns; a smaller destination does not narrow SQL implicitly.
+`Preload` is rejected; relation predicates through `Has` remain supported.
+
 Filter by relation existence without loading the relation:
 
 ```go
@@ -290,7 +317,10 @@ users, err := orm.Query[User]().
 
 `Preload` validates metadata offline and hydrates ordinary pointer or slice
 fields without lazy loading. `belongs_to` and `has_one` relations use
-deterministic inline `LEFT JOIN`s. `has_many` and `many_to_many` relations
+deterministic inline `LEFT JOIN`s. `ForceIndex("index_name")` selects one
+root index for any page, including positive offsets, when measurements justify
+it. See [root index selection](docs/queries.md#explicit-root-index-selection).
+`has_many` and `many_to_many` relations
 use deterministic secondary SELECTs after the preceding rows close. An
 unrestricted `All` without an active root soft-delete scope loads each root
 collection source once without an `IN` list. A default-scoped soft-delete
@@ -437,7 +467,9 @@ override; ordinary logging needs no middleware or per-repository setup.
 By default, the logger records operation, duration, bind count, affected rows,
 SQL template, and errors without receiving argument values. Interactive
 terminal output uses colors automatically, while redirected output is plain
-text. See the [statement observation guide](docs/observability.md) for lifecycle
+text. `StatementLoggerColor(true)` or `StatementLoggerColor(false)` explicitly
+controls colors, including for wrapped writers. See the
+[statement observation guide](docs/observability.md) for lifecycle
 coverage, custom observers, the explicit `IncludeStatementArguments` mode, and
 logging safety boundaries.
 
@@ -679,9 +711,9 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 
 ## Known limitations
 
-- The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
-  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
-  yet.
+- The scalar runtime provides `Build`, `All`, `ScanAll`, `First`, `Only`,
+  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`. Use
+  `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice.
 - Direct and `many_to_many` relation predicates and preloads may be nested,
   including read-only `via` mappings through payload-bearing edges.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,

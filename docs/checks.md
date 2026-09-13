@@ -127,7 +127,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`,
+Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`, `ScanAll`,
 `First`, `Only`, `Explain`, and `ExplainAnalyze` query terminals
 It resolves fluent chains, a single local builder definition, local query
 helpers, integer and string literals, and simple same-file constants
@@ -168,6 +168,12 @@ root query; a direct relation target soft-delete column participates in its
 association equality prefix. A via edge's active soft-delete column also
 participates in its junction equality prefix
 
+`ForceIndex` restricts supported root index checks to the named index. A
+missing name is `QRY006`; an unsuitable prefix is `QRY007` even if another
+index matches. Source analysis resolves literal or local constant names;
+dynamic names and uncertain mutations remain in uncertain coverage. Explicit
+root hints disable relation-first TopN analysis, matching runtime compilation.
+
 `index_patterns` counts ordered positive-limit candidates while
 `analyzed_index_patterns` and `uncertain_index_patterns` separate shapes that
 could and could not be checked. Relation fallbacks, non-equality association
@@ -180,6 +186,11 @@ complete result use
 Repository returns, aliases, model methods, and unresolved result flows remain
 explicitly uncertain in the separate `analyzed` and `uncertain` projection
 counters
+
+`ScanAll` participates in query-pattern and schema-aware index checks. An
+explicit `Select` counts as an explicit projection. Without `Select`, its
+destination-pointer result flow is counted as `uncertain`; it does not receive
+`SRC001` suggestions
 
 ## Runtime plan diagnostics
 

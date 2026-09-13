@@ -264,9 +264,41 @@ func CountOrdersForUser(ctx context.Context, executor orm.QueryExecutor, userID 
 		Count(ctx, executor)
 }
 
+// ListOrdersForUser returns one ordered page using the index in schema.sql.
+// Measure the plan and RU for your data before choosing an explicit index.
+// CountOrdersForUser keeps the total count independent of this hint and page.
+func ListOrdersForUser(ctx context.Context, executor orm.QueryExecutor, userID, limit, offset int64) ([]Order, error) {
+	return orm.Query[Order]().
+		ForceIndex("orders_user_id_id").
+		Where(orm.Equal("UserID", userID)).
+		OrderBy(orm.Desc("ID")).
+		Limit(limit).Offset(offset).
+		All(ctx, executor)
+}
+
 // ListVideos returns active videos through the default soft-delete scope.
 func ListVideos(ctx context.Context, executor orm.QueryExecutor) ([]Video, error) {
 	return orm.Query[Video]().OrderBy(orm.Asc("ID")).All(ctx, executor)
+}
+
+// VideoSummary receives selected source Go fields without duplicating metadata.
+type VideoSummary struct {
+	ID    int64
+	Title string
+}
+
+// ListVideoIDs reads one column while retaining Video's soft-delete scope.
+func ListVideoIDs(ctx context.Context, executor orm.QueryExecutor) ([]int64, error) {
+	var ids []int64
+	err := orm.Query[Video]().Select("ID").OrderBy(orm.Asc("ID")).ScanAll(ctx, executor, &ids)
+	return ids, err
+}
+
+// ListVideoSummaries scans selected fields into a smaller result type directly.
+func ListVideoSummaries(ctx context.Context, executor orm.QueryExecutor) ([]VideoSummary, error) {
+	var summaries []VideoSummary
+	err := orm.Query[Video]().Select("ID", "Title").OrderBy(orm.Asc("ID")).ScanAll(ctx, executor, &summaries)
+	return summaries, err
 }
 
 // ListVideosWithDeleted returns active and logically deleted videos.

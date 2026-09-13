@@ -35,11 +35,24 @@ built-in loggerは完了したstatementを1行ずつ出力します
 [tidbgo] 12:47:35.077 UPDATE   10.893ms args=2 affected=1 UPDATE `users` SET `email` = ? WHERE `id` = ?
 ```
 
-writerがinteractive terminalなどのcharacter-device `*os.File` の場合はoperation名へ自動的に色を付け、errorを赤色にします
+既定では、writerがinteractive terminalなどのcharacter-device `*os.File` の場合はoperation名へ自動的に色を付け、errorを赤色にします
 
 redirect先のfile、buffer、その他のwriterにはANSI escape sequenceを含まないplain textを出力します
 
-SQLとerrorのcontrol characterをescapeし、1 eventを1 physical lineに保ちます
+`StatementLoggerColor` で自動判定を上書きできます、ラップしたwriterの出力先がANSI colorに対応する場合は次のように設定します
+
+```go
+logger := orm.NewStatementLogger(writer, orm.StatementLoggerColor(true))
+executor := orm.Observe(db, logger)
+```
+
+`StatementLoggerColor(false)` は端末を含む任意のwriterで色を無効にします
+
+optionを省略すると自動判定を維持します、内部を公開しないwrapperの出力先は `io.Writer` から推定できません
+
+色のoptionは最後の指定を使い、nilのoptionは無視します、RuntimeCaptureとServerRU収集はloggerの色設定を維持し、capture artifactはstructured JSON Linesのままです
+
+色設定にかかわらずSQLとerrorのcontrol characterをescapeし、1 eventを1 physical lineに保ちます
 
 loggerは次を出力します
 
@@ -139,7 +152,9 @@ captureは完了statementごとに1個のJSON objectを書き込みます
 
 recordにはformat version、captureとscopeのidentity、bind valueを含まないfingerprint、SQL template、operation、terminal、判明しているmodelまたはRelation identity、start time、対象statement duration、returnedまたはaffected row count、error、自動bulkまたはpreload batch位置を含めます
 
-model rowを返す `All`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+`All`、`ScanAll`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+
+`ScanAll`は`scan_all` terminalを使い、受け取り先の型に関係なく取得元modelとprojectionを維持します
 
 LIMITとOFFSETのbind valueは除外したまま、offline ruleがzero LIMITを区別できるよう指定の有無と正数かどうかだけをshapeへ記録します
 
@@ -148,6 +163,8 @@ LIMITとOFFSETのbind valueは除外したまま、offline ruleがzero LIMITを�
 Raw SQLはopaqueとして記録します
 
 collection preloadと自動分割bulk mutationは実際のexecution pathから記録するため、application側のstatement count wrapperは不要です
+
+`ForceIndex` は物理名を `query.force_index` へ記録し、typed queryのfingerprintへ含めます。別のindexや未指定では異なるidentityとなり、LIMITやOFFSETの値だけを変えても変わりません。CountとExistsはstatement fingerprintへ指定を含めます。root planのaliasはroot modelとphysical tableへ解決します
 
 `UpdateWhere` と `DeleteWhere` のrecordには、scalar専用の `mutation` shapeとしてmodel、物理table、predicate operatorとcolumn、empty listかどうか、暗黙のactive-row soft-delete columnも記録します
 
