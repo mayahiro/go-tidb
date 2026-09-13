@@ -121,7 +121,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-source解析は解決済みの `Build`、`All`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
+source解析は解決済みの `Build`、`All`、`ScanAll`、`First`、`Only`、`Explain`、`ExplainAnalyze` query terminalへ `QRY002` から `QRY005` を適用します
 
 fluent chain、1個のlocal builder定義、local query helper、integerとstring literal、同じfile内の単純なconstantを解決します
 
@@ -164,6 +164,8 @@ Relation fallback、associationのnon-equality filter、mixed direction、unknow
 `SRC001` は1 function内でresultの全利用を証明できた場合だけprojectionの限定を提案します
 
 repository return、alias、model method、解決できないresult flowは別の `analyzed` と `uncertain` projection counterへ反映します
+
+`ScanAll`もquery patternとschema付きindex checkの対象です。明示した`Select`はexplicit projectionへ計上します。`Select`がない場合はdestination pointerのresult flowを`uncertain`へ計上し、`SRC001`を提案しません
 
 ## Runtime plan diagnostic
 

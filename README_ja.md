@@ -250,6 +250,28 @@ count, err := query.Count(ctx, db)
 
 terminal error、predicate、pagination、NULL ordering、現在の実行境界は[Scalar query guide](docs/queries_ja.md)を参照してください
 
+選択列をscalarのsliceや別の結果structへ直接読み込めます
+
+```go
+var ids []int64
+err := orm.Query[User]().Select("ID").ScanAll(ctx, db, &ids)
+
+type UserIdentity struct {
+    ID    int64
+    Email string
+}
+var identities []UserIdentity
+err = orm.Query[User]().Select("ID", "Email").ScanAll(ctx, db, &identities)
+```
+
+`ScanAll`は取得元のGo field名で完全一致させ、受け取り先のtagは参照しません
+
+取得元modelの条件、論理削除、index指定、pagination、診断を維持し、成功時だけ受け取り先を置換します
+
+取得列は`Select`で決まり、小さい受け取り先からSQLを暗黙に絞ることはありません
+
+`Preload`はエラーとなり、`Has`によるRelation条件は使用できます
+
 Relationをloadせず、存在条件だけでfilterできます
 
 ```go
@@ -708,7 +730,7 @@ command helpは `tidbgo --help` で表示できます
 
 ## 現在の制限
 
-- scalar runtimeは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、`IDs` は未実装
+- scalar runtimeは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` に対応し、IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 - payload付きedgeを通る読み取り専用viaを含むdirectと `many_to_many` Relation predicateとpreloadはnested指定にも対応
 - filtered positive collection predicateはTiDBのsemi-join rewrite hintを使い、条件を満たすordered `has_many` と証明済みviaを含む `many_to_many` pageはrelation-first TopN SQLを使う
 - preload projection、collection order、logical deleted targetをRelation path単位で含める指定に対応し、任意のtarget predicateは未実装

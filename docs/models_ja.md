@@ -6,6 +6,12 @@
 
 metadataはnon-pointer struct type単位でcacheし、offline toolingとscalar query runtimeで共有します
 
+`Query[T]().ScanAll(ctx, executor, &destination)`の受け取り先には、model metadataを持たない別の結果structを使えます
+
+選択fieldは取得元のGo名で対応付け、受け取り先のtagは参照しません。table、column、Relation、論理削除のmetadataは引き続き`T`に属します
+
+詳細は[部分取得結果のscan](queries_ja.md#部分取得結果をsliceで受け取る)を参照してください
+
 ## Modelの定義
 
 ```go

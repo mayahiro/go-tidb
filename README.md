@@ -246,6 +246,26 @@ SQL and includes the builder's predicates and pagination. See the [scalar
 query guide](docs/queries.md) for terminal errors, predicates, pagination,
 NULL ordering, and the current execution boundary.
 
+Read selected columns directly into a scalar slice or a separate result struct:
+
+```go
+var ids []int64
+err := orm.Query[User]().Select("ID").ScanAll(ctx, db, &ids)
+
+type UserIdentity struct {
+    ID    int64
+    Email string
+}
+var identities []UserIdentity
+err = orm.Query[User]().Select("ID", "Email").ScanAll(ctx, db, &identities)
+```
+
+`ScanAll` matches exact source Go field names, ignoring destination tags. The
+source model retains its conditions, soft-delete scope, index hint, pagination,
+and diagnostics. The destination is replaced only on success. `Select`
+determines the columns; a smaller destination does not narrow SQL implicitly.
+`Preload` is rejected; relation predicates through `Has` remain supported.
+
 Filter by relation existence without loading the relation:
 
 ```go
@@ -691,9 +711,9 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
 
 ## Known limitations
 
-- The scalar runtime currently provides `Build`, `All`, `First`, `Only`,
-  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`; `IDs` is not implemented
-  yet.
+- The scalar runtime provides `Build`, `All`, `ScanAll`, `First`, `Only`,
+  `Exists`, `Count`, `Explain`, and `ExplainAnalyze`. Use
+  `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice.
 - Direct and `many_to_many` relation predicates and preloads may be nested,
   including read-only `via` mappings through payload-bearing edges.
   Filtered positive collection predicates use TiDB's semi-join rewrite hint,

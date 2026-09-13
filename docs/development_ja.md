@@ -238,6 +238,28 @@ scalar terminal、slice predicate、application-selected DECIMAL type、temporal
 
 同じdatabaseに対する複数suiteを同時実行しません
 
+## 部分取得結果のscan
+
+同じofflineの`database/sql` driverとSQLで、`All`後の変換loop、`ScanAll`、benchmark専用のgeneric collectorを比較します
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkScanAll$' -benchmem -benchtime=100ms -count=3
+```
+
+IDのscalar、小さいstruct、nullable/Scanner field、幅の広い結果を0、1、100、10,000行で測定します
+
+幅の広い`all_map`は結果型が一致するため`All`をそのまま使います。genericの代替方式は取得元のcompileと診断を共有しますが、destination pointerの検証を省いており、public APIではありません
+
+測定対象はclientの時間とallocationであり、RUやnetwork costではありません。`rows_10000/dto/all_map`と`rows_10000/dto/scan_all`へ`-cpuprofile`、`-memprofile`を指定し、`go -C tools tool pprof`でCPUとallocationを確認できます
+
+専用test DSNを設定した状態で、実TiDBの結果、取得元SQL、pagination、Relation条件、soft-deleteのNULL、ServerRU収集を検証します
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterScanAll$' -count=1 -v
+```
+
+test DBを検証してから、自分で作成した`tidbgo_it_projection_*`のfixture tableだけを削除します。既存のfixture tableがある場合は失敗し、そのtableを変更しません
+
 ## 一覧SQLの比較
 
 上記の専用テストDBを設定してから、比較を明示的に有効にします

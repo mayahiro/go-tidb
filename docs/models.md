@@ -6,6 +6,11 @@ The `model` package inspects application-owned Go structs without generated
 files or a database connection. Metadata is cached by the non-pointer struct
 type and is shared by offline tooling and the scalar query runtime.
 
+`Query[T]().ScanAll(ctx, executor, &destination)` can use a separate result
+struct without model metadata. Its selected fields match the source Go names;
+destination tags are ignored. Table, column, relation, and soft-delete metadata
+still belong to `T`. See [partial result scanning](queries.md#read-partial-results-into-slices).
+
 ## Define a model
 
 ```go

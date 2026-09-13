@@ -242,6 +242,35 @@ connections. To run only these cases with `TIDBGO_TEST_DSN` configured:
 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterArguments$' -count=1 -v
 ```
 
+## Partial-result scanning
+
+Compare `All` followed by a conversion loop, `ScanAll`, and a benchmark-only
+generic collector through the same offline `database/sql` driver and SQL:
+
+```sh
+go test ./orm -run '^$' -bench '^BenchmarkScanAll$' -benchmem -benchtime=100ms -count=3
+```
+
+The workloads include scalar IDs, small structs, nullable/Scanner fields, and
+full-width results at 0, 1, 100, and 10,000 rows. The full-width `all_map` case
+uses `All` directly because its result already has the desired type. The generic
+alternative shares source compilation and diagnostics but omits destination
+pointer validation; it is not a public API. These measurements cover client
+time and allocation, not RU or network cost. Capture CPU and allocation
+profiles for the `rows_10000/dto/all_map` and `rows_10000/dto/scan_all` subcases
+with `-cpuprofile` and `-memprofile`; inspect them using `go -C tools tool pprof`.
+
+With the dedicated test DSN configured, verify actual TiDB results, source
+SQL, pagination, relation conditions, soft-delete NULLs, and ServerRU capture:
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterScanAll$' -count=1 -v
+```
+
+This creates and removes only its own `tidbgo_it_projection_*` fixture tables
+after validating the test database. Pre-existing fixture tables cause failure
+and are left untouched.
+
 ## Ordered list SQL comparison
 
 After configuring the dedicated test database above, explicitly enable the

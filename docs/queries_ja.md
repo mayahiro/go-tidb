@@ -39,6 +39,52 @@ query methodは同じbuilderを変更して返すため、1個のbuilderを並�
 
 computed fieldはalias付き `Raw[T]` resultだけで使用できます
 
+## 部分取得結果をsliceで受け取る
+
+`All`は`[]T`を返します。単一列をscalarのsliceへ、選択列を別structのsliceへ直接読み込む場合は`ScanAll(ctx, executor, &destination)`を使います
+
+```go
+type Channel struct {
+    model.Meta `tidbgo:"table=channels"`
+    ID         int64 `tidbgo:",pk"`
+    YouTubeID  string `tidbgo:"external_id"`
+    Title      string
+    DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+type ChannelIdentity struct {
+    ID        int64
+    YouTubeID string
+}
+
+var ids []int64
+err := orm.Query[Channel]().Select("ID").ScanAll(ctx, db, &ids)
+
+var identities []ChannelIdentity
+err = orm.Query[Channel]().
+    Select("ID", "YouTubeID").
+    OrderBy(orm.Desc("ID")).Limit(100).
+    ScanAll(ctx, db, &identities)
+```
+
+物理column名、論理削除、`Where`/`Has`、`ForceIndex`、並び順、cursor、limit、offsetを含むSQLは取得元の`Channel`で決まります
+
+DTOにmodel metadataは不要です。取得列は引き続き`Select`で指定し、省略時は受け取り先に関係なく、取得元のmappingされたnon-computed fieldをすべて選択します
+
+- 受け取り先はsliceへのnon-nil pointerである必要があります。成功時は新しい領域のsliceへ置換し、0件ではnon-nilの空sliceにします。scan、iteration、query、closeのエラー時は元のsliceとその領域を保持します
+- scalarの要素は取得列が1列である必要があります。native scalar、名前付きscalar型、`time.Time`、byte slice、空interface、pointer、具象`sql.Scanner`型は`database/sql`の変換を使います。`sql.RawBytes`はiteration中に領域の有効期限が切れるためエラーとします
+- structの受け取り先は選択した取得元の**Go field名と完全一致**させます。例では`YouTubeID`が`external_id`を受け取ります。field順や`tidbgo`を含む受け取り先tagはmappingに影響せず、余分なfieldや未選択fieldはzeroのままです。structへのpointerと曖昧でないexportedな埋め込みfield pathに対応し、field不足、曖昧な対応、アクセス不能なfieldはI/O前にエラーとします
+- NULLには対応するpointer、`sql.Null*`、独自Scannerを使います。取得元modelのsoft-delete規則は維持し、選択したsoft-delete fieldを`time.Time`へ読む場合はNULLをzeroにします。通常のtime fieldにNULLからzeroへの変換はありません
+- scan可否は受け取り先で検証します。`driver.Valuer`だけを実装した取得元fieldも対応する別の型へ読み込めます。`Build`、`All`、`First`、`Only`は引き続き選択した取得元fieldへのscan可否を検証します
+- `Preload`はI/O前にエラーとし、Relationのhydrateにはmodel rowを返すterminalを使います。`Has`条件は使用でき、builderは変更しません
+
+mapping構造は実行前に検証し、DB値の変換不能や数値overflowはscan中のエラーとして返します
+
+RuntimeCaptureは`scan_all` terminalとして、取得元modelとquery shapeを維持します
+
+このAPIは部分取得時のアプリ側変換loopと中間の全model sliceを省きます。同じSQLで受け取り先だけを変えても追加のRU削減はありません
+
+取得元model全体が必要な場合は`All`を使います。`ScanAll`には受け取り先の検証とreflectionの追加costがあります
+
 ## 実行済みquery shapeの解析
 
 request、job、analysis testのboundaryでRuntimeCaptureを1回設定すると、実行されたtyped queryのbind-free QueryShapeを記録します
@@ -172,7 +218,7 @@ projection、predicate、並び順、`SeekAfter`、soft-delete scope、preload�
 
 ## Soft delete scope
 
-`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
+`tidbgo:",soft_delete"` fieldを1個持つmodelでは、`Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` へ `deleted_at IS NULL` を自動追加します
 
 active rowとlogical deleted rowの両方が必要な場合だけ `WithDeleted` を使います
 
@@ -391,7 +437,7 @@ custom non-pointer valueの `driver.Valuer` をNULL判定のために実行し�
 
 ## 明示的な実行
 
-`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
+`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze` は既存executorを明示的に渡した場合だけI/Oを行います
 
 ```go
 orders, err := query.All(ctx, db)
@@ -722,8 +768,8 @@ edgeのprimary／candidate keyを含め、関係する全modelを `check.Schema`
 
 ## 現在の境界
 
-public query surfaceは `Build`、`All`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはmany-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはmany-to-many `Preload` に対応しています
+public query surfaceは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists`、`Count`、`Explain`、`ExplainAnalyze`、directまたはmany-to-many Relation predicate、target projection、collection order、path単位のsoft-delete scopeを指定できるnested directまたはmany-to-many `Preload` に対応しています
 
-`IDs` は延期しています
+IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 
 scalar builderの範囲外となるJOIN、CTE、aggregateなどにはtyped `Raw[T]` を使います

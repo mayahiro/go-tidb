@@ -104,6 +104,9 @@ loading User rows. Both
 `tidbgo lint --schema` and captured `tidbgo analyze --schema` can report an
 `EXISTS` fallback or a missing association index prefix without another
 application wrapper.
+`ListVideoIDs` and `ListVideoSummaries` use `ScanAll` to read a scalar slice
+or a smaller struct directly. `VideoSummary` matches the source Go field names
+without duplicating tags; Video's soft-delete scope still controls SQL.
 `FirstRecentOrder`, `FindUserByEmail`,
 `HasUserWithEmail`, `CountOrdersForUser`, and `CountClipsInGenre` demonstrate
 connected `First`, `Only`, `Exists`, and scalar or relation-only `Count`

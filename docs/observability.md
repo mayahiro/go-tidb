@@ -146,9 +146,11 @@ The capture writes one JSON object per completed statement. Records contain a
 format version, capture and scope identities, bind-free fingerprint, SQL
 template, operation, terminal, model or Relation identity when known, start
 time, target-statement duration, returned or affected row count, error, and
-automatic bulk or preload batch position. Model-row `All`, `First`, and `Only`
+automatic bulk or preload batch position. `All`, `ScanAll`, `First`, and `Only`
 records and typed plan records also carry the bind-free query shape and
-compiler rewrite or fallback decision. LIMIT and OFFSET bind values remain
+compiler rewrite or fallback decision. `ScanAll` uses terminal `scan_all` and
+retains the source model and projection regardless of the destination type.
+LIMIT and OFFSET bind values remain
 excluded; the shape records only whether each bound is present and positive so
 offline rules can distinguish a zero LIMIT. `Count` and `Exists` retain a stable
 bind-free statement fingerprint without claiming the model-row projection

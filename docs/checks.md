@@ -127,7 +127,7 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
-Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`,
+Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`, `ScanAll`,
 `First`, `Only`, `Explain`, and `ExplainAnalyze` query terminals
 It resolves fluent chains, a single local builder definition, local query
 helpers, integer and string literals, and simple same-file constants
@@ -186,6 +186,11 @@ complete result use
 Repository returns, aliases, model methods, and unresolved result flows remain
 explicitly uncertain in the separate `analyzed` and `uncertain` projection
 counters
+
+`ScanAll` participates in query-pattern and schema-aware index checks. An
+explicit `Select` counts as an explicit projection. Without `Select`, its
+destination-pointer result flow is counted as `uncertain`; it does not receive
+`SRC001` suggestions
 
 ## Runtime plan diagnostics
 

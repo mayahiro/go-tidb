@@ -133,6 +133,10 @@ func compileSelectWithoutPreloads(descriptor *model.Descriptor, query *selectQue
 	if err != nil {
 		return compiledSelect{}, err
 	}
+	return compileSelectFromProjection(descriptor, statement, query)
+}
+
+func compileSelectFromProjection(descriptor *model.Descriptor, statement *selectStatement, query *selectQuery) (compiledSelect, error) {
 	if compiled, optimized, compileErr := compileRelationTopNSelect(descriptor, statement, nil, query); compileErr != nil {
 		return compiledSelect{}, compileErr
 	} else if optimized {
@@ -192,6 +196,28 @@ func compileSelectProjection(descriptor *model.Descriptor, projection []string) 
 	if projection == nil {
 		return compileDefaultSelect(descriptor)
 	}
+	fields, err := selectProjectionFields(descriptor, projection)
+	if err != nil {
+		return nil, err
+	}
+	scanPlan, err := compileScanPlanFields(descriptor, fields)
+	if err != nil {
+		return nil, err
+	}
+	return &selectStatement{
+		sql:      renderSelect(descriptor.TableName(), scanPlan.columns),
+		scanPlan: scanPlan,
+	}, nil
+}
+
+func selectProjectionFields(descriptor *model.Descriptor, projection []string) ([]model.Field, error) {
+	if projection == nil {
+		fields := baseTableFields(descriptor)
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("orm: SELECT model %s has no base-table fields", descriptor.Name())
+		}
+		return fields, nil
+	}
 	if len(projection) == 0 {
 		return nil, fmt.Errorf("orm: SELECT projection for %s must contain at least one mapped scalar field", descriptor.Name())
 	}
@@ -212,14 +238,7 @@ func compileSelectProjection(descriptor *model.Descriptor, projection []string) 
 		seen[name] = true
 		fields[index] = field
 	}
-	scanPlan, err := compileScanPlanFields(descriptor, fields)
-	if err != nil {
-		return nil, err
-	}
-	return &selectStatement{
-		sql:      renderSelect(descriptor.TableName(), scanPlan.columns),
-		scanPlan: scanPlan,
-	}, nil
+	return fields, nil
 }
 
 func compileDefaultSelect(descriptor *model.Descriptor) (*selectStatement, error) {

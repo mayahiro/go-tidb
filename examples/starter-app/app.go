@@ -281,6 +281,26 @@ func ListVideos(ctx context.Context, executor orm.QueryExecutor) ([]Video, error
 	return orm.Query[Video]().OrderBy(orm.Asc("ID")).All(ctx, executor)
 }
 
+// VideoSummary receives selected source Go fields without duplicating metadata.
+type VideoSummary struct {
+	ID    int64
+	Title string
+}
+
+// ListVideoIDs reads one column while retaining Video's soft-delete scope.
+func ListVideoIDs(ctx context.Context, executor orm.QueryExecutor) ([]int64, error) {
+	var ids []int64
+	err := orm.Query[Video]().Select("ID").OrderBy(orm.Asc("ID")).ScanAll(ctx, executor, &ids)
+	return ids, err
+}
+
+// ListVideoSummaries scans selected fields into a smaller result type directly.
+func ListVideoSummaries(ctx context.Context, executor orm.QueryExecutor) ([]VideoSummary, error) {
+	var summaries []VideoSummary
+	err := orm.Query[Video]().Select("ID", "Title").OrderBy(orm.Asc("ID")).ScanAll(ctx, executor, &summaries)
+	return summaries, err
+}
+
 // ListVideosWithDeleted returns active and logically deleted videos.
 func ListVideosWithDeleted(ctx context.Context, executor orm.QueryExecutor) ([]Video, error) {
 	return orm.Query[Video]().WithDeleted().OrderBy(orm.Asc("ID")).All(ctx, executor)

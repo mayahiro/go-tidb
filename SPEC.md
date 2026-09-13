@@ -125,9 +125,13 @@ The currently implemented surface provides:
 - Deterministic validation of invalid or duplicate field mappings
 - Offline scalar SELECT construction with explicit projections, predicates,
   ordering, offset pagination, and keyset pagination
-- Public `Build` compilation without database access and public `All`, `First`,
-  `Only`, `Exists`, and `Count` execution through an explicitly supplied
+- Public `Build` compilation without database access and public `All`, `ScanAll`,
+  `First`, `Only`, `Exists`, and `Count` execution through an explicitly supplied
   `*sql.DB`, `*sql.Conn`, or `*sql.Tx`
+- `ScanAll` writes one selected column into a scalar slice or selected source
+  Go fields into a separate struct slice, with exact Go-name mapping and no
+  destination metadata. It preserves source SQL and diagnostics, rejects
+  `Preload`, and replaces the destination only after successful row completion
 - Nested `BelongsTo` and `HasOne` preloading through inline `LEFT JOIN`s, and
   `HasMany` and pure `ManyToMany` preloading through deterministic full-source
   or bounded keyed secondary SELECTs, with automatic key projection, target
@@ -249,6 +253,10 @@ otherwise unresolved flows produce no projection warning. Text and JSON output
 always include recognized, explicitly projected, analyzed, and uncertain
 coverage counts. The command executes no application code and performs no
 database access.
+
+`ScanAll` participates in query-pattern and schema-aware index analysis. Its
+explicit `Select` counts as an explicit projection; default-projection
+destination-pointer flows remain uncertain for `SRC001`.
 
 `RuntimeCapture` is an opt-in reusable observer configured once at a request,
 job, or test-operation boundary. It records only go-tidb statements using the

@@ -152,7 +152,9 @@ captureは完了statementごとに1個のJSON objectを書き込みます
 
 recordにはformat version、captureとscopeのidentity、bind valueを含まないfingerprint、SQL template、operation、terminal、判明しているmodelまたはRelation identity、start time、対象statement duration、returnedまたはaffected row count、error、自動bulkまたはpreload batch位置を含めます
 
-model rowを返す `All`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+`All`、`ScanAll`、`First`、`Only` とtyped plan recordにはbind valueを含まないquery shapeとcompiler rewriteまたはfallback decisionも記録します
+
+`ScanAll`は`scan_all` terminalを使い、受け取り先の型に関係なく取得元modelとprojectionを維持します
 
 LIMITとOFFSETのbind valueは除外したまま、offline ruleがzero LIMITを区別できるよう指定の有無と正数かどうかだけをshapeへ記録します
 

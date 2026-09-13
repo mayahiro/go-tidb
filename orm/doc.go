@@ -6,9 +6,11 @@
 // serialization follows the database driver and connection settings. Build does
 // not invoke driver.Valuer. The package does not change connection time zones.
 //
-// Query.Build compiles SQL offline. All, First, Only, Exists, and Count perform
-// I/O only through an explicitly supplied database/sql executor. Has compiles
-// relation existence conditions without implicit loading.
+// Query.Build compiles SQL offline. All, ScanAll, First, Only, Exists, and Count
+// perform I/O only through an explicitly supplied database/sql executor. Has
+// compiles relation existence conditions without implicit loading.
+// ScanAll reads a single column into a scalar slice or selected Go fields into
+// a separate struct slice, retaining the source model's SQL and diagnostics.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root

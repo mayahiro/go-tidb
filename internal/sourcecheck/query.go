@@ -225,7 +225,7 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 
 func sourceQueryPatternTerminal(name string) bool {
 	switch name {
-	case "All", "First", "Only", "Build", "Explain", "ExplainAnalyze":
+	case "All", "ScanAll", "First", "Only", "Build", "Explain", "ExplainAnalyze":
 		return true
 	default:
 		return false
@@ -234,7 +234,7 @@ func sourceQueryPatternTerminal(name string) bool {
 
 func sourceResultTerminal(name string) bool {
 	switch name {
-	case "All", "First", "Only":
+	case "All", "ScanAll", "First", "Only":
 		return true
 	default:
 		return false
@@ -249,6 +249,12 @@ func (analyzer *sourceAnalyzer) recordResultQuery(context sourceFunctionContext,
 	}
 	if summary.projection == queryProjectionExplicit {
 		analyzer.analysis.Statistics.ExplicitProjections++
+		return
+	}
+	// ScanAll returns an error and writes through a destination pointer. The
+	// model-result flow analysis cannot prove that destination's later uses.
+	if terminal == "ScanAll" {
+		analyzer.analysis.Statistics.Uncertain++
 		return
 	}
 	if summary.projection != queryProjectionDefault || summary.preload || !modelFound || model.ambiguous || len(model.fields) == 0 {
