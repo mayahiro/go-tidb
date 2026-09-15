@@ -6,6 +6,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 [English](README.md) | [Struct model](docs/models_ja.md) |
 [Query](docs/queries_ja.md) | [Mutationとraw SQL](docs/mutations_ja.md) |
+[集計とTiFlash](docs/aggregates_ja.md) |
 [解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
 [Development](docs/development_ja.md)
 
@@ -22,6 +23,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
+- HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えた単一テーブルの集計builder
 - terminalの自動色付きshared-executor statement observation
 - actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析
 - typed query builderによるSELECT限定のTiDB execution plan取得
@@ -438,7 +440,8 @@ soft-delete modelのSELECTとUPDATEにはactive-row guardを追加します
 
 `Upsert` と `UpsertMany` のzero-valued soft-delete fieldはNULLを書き込むため、conflictしたrowをrestoreします
 
-scalar builderの範囲外となるJOIN、CTE、aggregateなどには `Raw[T]` を使います
+単一テーブルのgroupingには [`Aggregate[T]`](docs/aggregates_ja.md) を使います
+scalar／aggregate builderの範囲外となるJOIN、CTEなどには `Raw[T]` を使います
 
 result column名を `computed` fieldを含むmodel columnへmappingします
 

@@ -5,6 +5,61 @@
 This guide contains contributor-facing commands, repository structure,
 integration-test setup, and benchmark procedures for `go-tidb`
 
+## Aggregate and TiFlash verification
+
+The [aggregate API](aggregates.md) has offline contract tests for grouping,
+aliases, NULL/conversion errors, destination ownership, hint conflicts,
+unknown plan tasks, warning failures, and connection/callback ordering:
+
+```sh
+go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+```
+
+The benchmark compares identical SQL and result values through the same local
+test driver: aggregate `ScanAll`, typed `Raw`, and a direct `database/sql`
+collector. It covers 0, 1, 100, and 10,000 output groups. It excludes TiDB,
+network, driver argument conversion, and RU; building SQL and validating the
+aggregate's output mapping adds per-call work relative to a fixed raw query.
+
+Profile the representative path and compare it with `raw` or `database_sql`:
+
+```sh
+aggregate_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -benchtime=2s -cpuprofile "$aggregate_profile_dir/cpu" -memprofile "$aggregate_profile_dir/mem" -o "$aggregate_profile_dir/orm.test"
+go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
+```
+
+With `TIDBGO_TEST_DSN` configured for the dedicated database described below:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlash$' -count=1 -v
+```
+
+This opt-in test creates only its owned `tidbgo_it_tiflash_aggregates` table,
+seeds 20,000 rows with nullable DECIMAL values, analyzes statistics, requests two
+TiFlash replicas, and waits for initial `AVAILABLE=1`. An existing table is
+never removed. The test cleans up its own table, including on failure.
+
+The fixed `aggregate_v1` dataset covers a broad scan, a 20-row primary-key
+range, a selective secondary index, and 20,000 output groups. Auto, TiKV, and
+TiFlash MPP are compared using hand-written SQL and the aggregate builder.
+Both implementations warm up twice; three rounds rotate engine and method
+order. Full result values, NULLs, and ordering must match. Latency ends after
+row closure; the immediate same-session RU probe is outside that interval.
+Warnings and runtime plans come from separate explicit plan executions. There
+is no universal latency/RU threshold. Free-plan limits, caches, statistics,
+network conditions, and shared service load can affect measurements.
+
+The test also checks missing-replica warnings, empty inputs, nullable outputs,
+all seven aggregate functions, HAVING/paging, source soft deletion, physical
+table resolution, and restoration of MPP session settings. Ordinary and
+EXPLAIN ANALYZE executions are distinct observations. These samples are not
+billed RU or a guarantee that TiFlash is faster or cheaper. Replica setup,
+storage, seeding, warm-up, probes, and cleanup add costs outside reported
+SELECT measurements. Do not run connected suites concurrently on this database.
+
 ## Local checks
 
 Run the complete offline verification from the repository root:
@@ -39,7 +94,7 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 ## Package boundaries
 
 - `model`: cached offline metadata for application-owned Go structs
-- `orm`: offline query and mutation building, explicit `database/sql`
+- `orm`: offline query, aggregate, and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
 - `check`: shared diagnostic data types and offline model and physical schema

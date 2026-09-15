@@ -2,6 +2,14 @@
 
 [日本語](observability_ja.md)
 
+For single-table aggregate query policy, same-session plan warnings, and
+TiFlash/MPP task interpretation, see [Aggregates and TiFlash](aggregates.md).
+Aggregate SELECT capture uses `source=typed_aggregate` and a hint-sensitive
+`s1:` statement fingerprint. It carries no scalar query shape or bind values.
+Explicit aggregate plan calls capture the target EXPLAIN statement; their
+auxiliary `SHOW WARNINGS` is returned by the plan API and is not a separate
+capture record or part of the ServerRU auxiliary count.
+
 Configure opt-in observation once on the caller-owned executor and share the
 returned executor with repositories:
 

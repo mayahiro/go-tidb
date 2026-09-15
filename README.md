@@ -7,6 +7,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
+[Aggregates and TiFlash](docs/aggregates.md) |
 [Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
 [Development](docs/development.md)
 
@@ -25,6 +26,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
+- Single-table aggregate builders with HAVING, output-struct scanning, and
+  explicit TiKV/TiFlash and MPP hints with plan and warning inspection
 - Shared-executor statement observation with automatic terminal colors
 - Observer-only structured runtime capture of actual root, preload, and
   split-bulk statements, with offline N+1 analysis
@@ -427,7 +430,8 @@ Soft-delete models add active-row guards to SELECT and UPDATE statements.
 models continue to use physical DELETE. Zero-valued soft-delete fields in
 `Upsert` and `UpsertMany` write NULL and therefore restore conflicting rows.
 
-Use `Raw[T]` for joins, CTEs, aggregates, and other SQL outside the scalar
+Use [`Aggregate[T]`](docs/aggregates.md) for single-table grouped queries.
+Use `Raw[T]` for joins, CTEs, and other SQL outside the scalar or aggregate
 builder. Returned column names map to model columns, including fields tagged
 `computed`. Use `RawExec` only when a mutation expression cannot be represented
 by the typed API. See the [mutation and raw SQL guide](docs/mutations.md).

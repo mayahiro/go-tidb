@@ -21,13 +21,14 @@ const statementFingerprintPrefix = "s1:"
 type Source string
 
 const (
-	SourceTypedSelect   Source = "typed_select"
-	SourcePreload       Source = "preload"
-	SourceTypedMutation Source = "typed_mutation"
-	SourceRaw           Source = "raw"
-	SourceTransaction   Source = "transaction"
-	SourcePlan          Source = "plan"
-	SourceUnknown       Source = "unknown"
+	SourceTypedSelect    Source = "typed_select"
+	SourceTypedAggregate Source = "typed_aggregate"
+	SourcePreload        Source = "preload"
+	SourceTypedMutation  Source = "typed_mutation"
+	SourceRaw            Source = "raw"
+	SourceTransaction    Source = "transaction"
+	SourcePlan           Source = "plan"
+	SourceUnknown        Source = "unknown"
 )
 
 // Batch identifies one statement within an automatically split ORM operation.

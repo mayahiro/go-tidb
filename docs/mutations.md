@@ -363,7 +363,8 @@ report when `Exec` would require automatic batching.
 
 ## Typed raw results
 
-Use `Raw[T]` for joins, CTEs, aggregates, and other SQL outside the scalar
+Use [`Aggregate[T]`](aggregates.md) for single-table aggregate queries.
+Use `Raw[T]` for joins, CTEs, and other SQL outside the scalar or aggregate
 builder:
 
 ```go

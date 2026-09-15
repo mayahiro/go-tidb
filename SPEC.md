@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-03
+- Last updated: 2026-09-15
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -154,6 +154,14 @@ The currently implemented surface provides:
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
+- Single-table `Aggregate[T]` queries with validated fields and aggregate
+  expressions, `GROUP BY`, output-name `HAVING` and ordering, soft-delete scope,
+  paging, and scalar/struct `ScanAll` results
+- Explicit aggregate `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
+  with statement-scoped settings and no `SET SESSION` or replica provisioning
+- Aggregate plan reports separate requested hints, planned operators, explicit
+  EXPLAIN ANALYZE execution, and same-session warnings; see
+  [aggregate contracts](docs/aggregates.md)
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   explicit color overrides for any writer, argument values excluded by default,

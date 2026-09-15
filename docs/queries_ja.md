@@ -772,4 +772,4 @@ public query surfaceは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists
 
 IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 
-scalar builderの範囲外となるJOIN、CTE、aggregateなどにはtyped `Raw[T]` を使います
+単一テーブルの集計には [`Aggregate[T]`](aggregates_ja.md)、builderの範囲外となるJOINやCTEなどにはtyped `Raw[T]` を使います

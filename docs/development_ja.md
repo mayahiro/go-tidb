@@ -4,6 +4,52 @@
 
 このguideは `go-tidb` contributor向けのcommand、repository構成、integration test設定、benchmark手順を記載します
 
+## 集計とTiFlashの検証
+
+[集計API](aggregates_ja.md)のoffline testはgrouping、alias、NULLと型変換error、結果の所有権、hintの競合、未知のplan task、警告回収の失敗、connectionとcallbackの順序を確認します
+
+```sh
+go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+```
+
+benchmarkは同じSQLと結果値を使い、同じlocal test driverで集計の `ScanAll`、typed `Raw`、直接の `database/sql` collectorを比較します
+出力group数は0、1、100、10,000です
+TiDB、network、driverのargument変換、RUは測定しません
+固定raw queryに対し、集計SQLの構築と結果mapping検証のcallごとの処理が加わります
+
+代表経路のprofileを取得し、`raw` または `database_sql` と比較できます
+
+```sh
+aggregate_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -benchtime=2s -cpuprofile "$aggregate_profile_dir/cpu" -memprofile "$aggregate_profile_dir/mem" -o "$aggregate_profile_dir/orm.test"
+go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
+```
+
+後述の専用database用に `TIDBGO_TEST_DSN` を設定して実行します
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlash$' -count=1 -v
+```
+
+このopt-in testは自分が所有する `tidbgo_it_tiflash_aggregates` tableを作り、NULLを含むDECIMALの20,000行を投入し、statisticsを解析してTiFlash replicaを2つ要求し、初期 `AVAILABLE=1` を待ちます
+既存tableは削除しません。作成したtableは失敗時もcleanupします
+
+固定した `aggregate_v1` datasetで、広いscan、主キーの20行range、選択性の高いsecondary index、20,000出力groupを比較します
+Auto、TiKV、TiFlash MPPに対し、手書きSQLと集計builderを使います
+両実装を2回warm-upし、3 roundでengineと実装の順序を交代します
+全結果値、NULL、順序の一致を要求します
+latencyはrowsのcloseまでを測定し、同じconnectionで直後に読むRU probeはその区間に含めません
+警告とruntime planは別の明示的なplan実行から取得します
+普遍的なlatency／RU閾値は設けません。free planの制約、cache、statistics、network、共有serviceの負荷が測定へ影響します
+
+レプリカ不在の警告、空入力、nullable結果、7種類の集計関数、HAVINGとpaging、sourceのsoft-delete、physical tableの解決、MPPのsession設定復元も確認します
+通常実行とEXPLAIN ANALYZEは別の観測です
+sampleは請求RUやTiFlashが速い・安いことの保証ではありません
+レプリカ準備、storage、seed、warm-up、probe、cleanupは報告するSELECT測定外のcostを生みます
+このdatabaseで複数の接続testを同時に実行しないでください
+
 ## Local check
 
 repository rootからofflineで完結する全確認を実行します
@@ -38,7 +84,7 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 ## Package boundary
 
 - `model`: application-owned Go structのcached offline metadata
-- `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
+- `orm`: offline query、aggregateとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
 - `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
 - `check`: shared diagnostic data typeとoffline modelおよびphysical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界

@@ -284,7 +284,16 @@ func (observation *statementObservation) finishOutcome(affected int64, affectedK
 	if observation == nil {
 		return
 	}
-	observation.event.Duration = time.Since(observation.event.StartedAt)
+	observation.finishOutcomeDuration(affected, affectedKnown, returned, returnedKnown, err, time.Since(observation.event.StartedAt))
+}
+
+// finishOutcomeDuration permits an explicit plan terminal to collect warnings
+// and release its connection before callbacks, while measuring only the target.
+func (observation *statementObservation) finishOutcomeDuration(affected int64, affectedKnown bool, returned int64, returnedKnown bool, err error, elapsed time.Duration) {
+	if observation == nil {
+		return
+	}
+	observation.event.Duration = elapsed
 	observation.event.RowsAffected = affected
 	observation.event.RowsAffectedKnown = affectedKnown
 	observation.event.Error = err

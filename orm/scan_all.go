@@ -126,55 +126,72 @@ func compileScanAllPlan(source, slice reflect.Type, projection []string) (*scanA
 	if err != nil {
 		return nil, err
 	}
+	columns := make([]scanProjectionColumn, len(fields))
+	sourcePlan := &scanPlan{modelType: source, columns: make([]string, len(fields)), fields: make([]scanField, len(fields))}
+	for i, field := range fields {
+		columns[i] = scanProjectionColumn{name: field.GoName(), softDelete: field.IsSoftDelete()}
+		sourcePlan.columns[i] = field.ColumnName()
+		sourcePlan.fields[i] = scanField{goName: field.GoName(), index: field.Index(), softDeleteIndex: -1}
+	}
+	targetPlan, scalar, err := compileProjectionScanPlan(slice, columns)
+	if err != nil {
+		return nil, err
+	}
+	targetPlan.columns = sourcePlan.columns
+	// Keep source metadata attached to SQL; only the collector uses destination fields.
+	return &scanAllPlan{
+		source: descriptor, slice: slice, scalar: scalar, target: targetPlan,
+		statement: &selectStatement{sql: renderSelect(descriptor.TableName(), sourcePlan.columns), scanPlan: sourcePlan},
+	}, nil
+}
+
+type scanProjectionColumn struct {
+	name       string
+	softDelete bool
+}
+
+func compileProjectionScanPlan(slice reflect.Type, columns []scanProjectionColumn) (*scanPlan, bool, error) {
 	element := slice.Elem()
 	base := element
 	seen := make(map[reflect.Type]bool)
 	for base.Kind() == reflect.Pointer {
 		if seen[base] {
-			return nil, fmt.Errorf("orm: ScanAll unsupported recursive pointer element %s", element)
+			return nil, false, fmt.Errorf("orm: ScanAll unsupported recursive pointer element %s", element)
 		}
 		seen[base] = true
 		base = base.Elem()
 	}
 	scalar := scanAllScalarType(element)
-	if scalar && len(fields) != 1 {
-		return nil, fmt.Errorf("orm: ScanAll scalar destination %s requires exactly one selected column, got %d", slice, len(fields))
+	if scalar && len(columns) != 1 {
+		return nil, false, fmt.Errorf("orm: ScanAll scalar destination %s requires exactly one selected column, got %d", slice, len(columns))
 	}
 	if !scalar && base.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("orm: ScanAll unsupported slice element %s", element)
+		return nil, false, fmt.Errorf("orm: ScanAll unsupported slice element %s", element)
 	}
-	sourcePlan := &scanPlan{modelType: source, columns: make([]string, len(fields)), fields: make([]scanField, len(fields))}
-	targetPlan := &scanPlan{modelType: base, columns: sourcePlan.columns, fields: make([]scanField, len(fields))}
-	for i, field := range fields {
-		sourcePlan.columns[i] = field.ColumnName()
-		sourcePlan.fields[i] = scanField{goName: field.GoName(), index: field.Index(), softDeleteIndex: -1}
-		mapped := scanField{goName: field.GoName(), softDeleteIndex: -1}
+	targetPlan := &scanPlan{modelType: base, fields: make([]scanField, len(columns))}
+	for i, field := range columns {
+		mapped := scanField{goName: field.name, softDeleteIndex: -1}
 		fieldType := element
 		if !scalar {
-			targetField, ok := base.FieldByName(field.GoName())
+			targetField, ok := base.FieldByName(field.name)
 			if !ok || targetField.PkgPath != "" {
-				return nil, fmt.Errorf("orm: ScanAll destination %s must have an unambiguous exported Go field %s", element, field.GoName())
+				return nil, false, fmt.Errorf("orm: ScanAll destination %s must have an unambiguous exported Go field %s", element, field.name)
 			}
 			if !scanAllExportedPath(base, targetField.Index) {
-				return nil, fmt.Errorf("orm: ScanAll destination field %s.%s has an unexported embedded path", base, field.GoName())
+				return nil, false, fmt.Errorf("orm: ScanAll destination field %s.%s has an unexported embedded path", base, field.name)
 			}
 			mapped.index, fieldType = targetField.Index, targetField.Type
 			if !scanAllScalarType(fieldType) {
-				return nil, fmt.Errorf("orm: ScanAll destination field %s.%s has unsupported scan type %s", base, field.GoName(), fieldType)
+				return nil, false, fmt.Errorf("orm: ScanAll destination field %s.%s has unsupported scan type %s", base, field.name, fieldType)
 			}
 		}
-		if field.IsSoftDelete() && fieldType == scanAllTimeType {
+		if field.softDelete && fieldType == scanAllTimeType {
 			mapped.softDeleteIndex = targetPlan.softDeleteCount
 			targetPlan.softDeleteCount++
 		}
 		targetPlan.fields[i] = mapped
 	}
-	// Keep the source plan attached to SQL and diagnostics. Only the collector
-	// uses the destination plan; source field Scanner support is irrelevant here.
-	return &scanAllPlan{
-		source: descriptor, slice: slice, scalar: scalar, target: targetPlan,
-		statement: &selectStatement{sql: renderSelect(descriptor.TableName(), sourcePlan.columns), scanPlan: sourcePlan},
-	}, nil
+	return targetPlan, scalar, nil
 }
 
 func scanAllScalarType(value reflect.Type) bool {

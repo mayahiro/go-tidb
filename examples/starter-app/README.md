@@ -48,6 +48,8 @@ It demonstrates the current struct-first foundation:
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
+- Single-table aggregate SQL in `Example_aggregate`, with output aliases,
+  HAVING, ordering, and paging through public APIs
 - Shared-executor statement logging with automatic terminal colors and no bind
   argument values
 - Structured runtime capture of actual root, relation, and split-bulk
@@ -277,6 +279,8 @@ mapping boundary. The [scalar query guide](../../docs/queries.md) documents the
 public query API, and the [mutation guide](../../docs/mutations.md) documents
 writes and raw SQL. The [statement observation guide](../../docs/observability.md)
 documents query logging and custom observers.
+The [aggregate guide](../../docs/aggregates.md) covers typed grouping, result
+structs, optional TiFlash/MPP policy, and explicit plan/warning inspection.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
 The [analysis guide](../../docs/checks.md) documents each evidence boundary,

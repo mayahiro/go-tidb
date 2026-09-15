@@ -780,5 +780,6 @@ The public query surface includes `Build`, `All`, `ScanAll`, `First`, `Only`, `E
 many-to-many relation predicates, and nested direct or many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.
-Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice, and typed `Raw[T]`
-for joins, CTEs, aggregates, and other SQL outside the scalar builder surface.
+Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice and
+[`Aggregate[T]`](aggregates.md) for single-table aggregate queries. Use typed
+`Raw[T]` for joins, CTEs, and SQL beyond these builders.

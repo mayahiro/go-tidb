@@ -11,6 +11,10 @@
 // compiles relation existence conditions without implicit loading.
 // ScanAll reads a single column into a scalar slice or selected Go fields into
 // a separate struct slice, retaining the source model's SQL and diagnostics.
+// Aggregate builds single-table grouped queries with validated expressions,
+// output aliases, HAVING, and optional TiKV/TiFlash and MPP hints. Its ScanAll
+// maps output Go names to scalar or struct slices. Aggregate Explain and
+// ExplainAnalyze return requested policy, plan rows, and same-session warnings.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root
