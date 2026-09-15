@@ -28,6 +28,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
 - Single-table aggregate builders with HAVING, output-struct scanning, and
   explicit TiKV/TiFlash and MPP hints with plan and warning inspection
+- [Aggregate policy comparison](docs/aggregate-comparison.md) with result checks,
+  latency/ServerRU samples, separate plans, and baseline capture export
 - Shared-executor statement observation with automatic terminal colors
 - Observer-only structured runtime capture of actual root, preload, and
   split-bulk statements, with offline N+1 analysis

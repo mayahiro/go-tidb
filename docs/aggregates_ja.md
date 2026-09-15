@@ -3,7 +3,7 @@
 [English](aggregates.md)
 
 `Aggregate[T]` はsource modelから単一テーブルの集計SELECTを構築します
-`Build` はofflineです。`ScanAll`、`Explain`、`ExplainAnalyze` は明示的なexecutorを使います
+`Build` はofflineです。`ScanAll`、`Explain`、`ExplainAnalyze`、`Compare` は明示的なexecutorを使います
 sourceに主キーは不要で、結果structにmodel tagは不要です
 
 ```go
@@ -143,6 +143,9 @@ root taskにstorage engineはありません。kindが `mpp` の場合にMPP使�
 
 ## 測定と現在の範囲
 
+[`Compare`](aggregate-comparison_ja.md) はauto、TiKV、TiFlash MPPを実行し、結果値の照合、順序を交代するwarmupとsample、通常latency／ServerRU、独立したruntime planと警告、測定だけのcapture出力を提供します
+policyを選ぶ前に、固定したcaseで1つのqueryを測定するために使います
+
 各variantに同じ入力と固定datasetまたは適切なread snapshotを使います
 結果値と順序を比較し、浮動小数点の結果には許容誤差を明示します
 広いscanに加え、選択性が高いqueryと多数groupを返すqueryも含めます
@@ -158,7 +161,7 @@ RuntimeCaptureは集計SELECTを `typed_aggregate` として記録します
 scalar query metadataは生成せず、scalar/source query lintは集計shapeを解析しません
 既存のServerRU集計とbaselineではこのrecordを使えます
 fingerprintは入力の選択性やdatasetの版を識別しないため、比較可能な条件ごとにbenchmark case IDとbaselineを管理します
-engine間のlogical fingerprint比較APIは未実装です
+baseline CLIはfingerprintごとのpolicyを維持します。engine要求をまたぐ測定比較には比較reportを使います
 
 ServerRUは請求RUではありません。server測定値はegressを含まず、採用costは列指向ストレージと実行頻度にも依存します
 [Starter FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/)と[再現可能な確認](development_ja.md#集計とtiflashの検証)を参照してください

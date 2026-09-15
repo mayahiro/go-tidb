@@ -3,7 +3,7 @@
 [日本語](aggregates_ja.md)
 
 `Aggregate[T]` builds a single-table aggregate SELECT from a source model.
-`Build` is offline. `ScanAll`, `Explain`, and `ExplainAnalyze` use an explicit
+`Build` is offline. `ScanAll`, `Explain`, `ExplainAnalyze`, and `Compare` use an explicit
 executor. The source needs no primary key and the result needs no model tags.
 
 ```go
@@ -153,6 +153,11 @@ Ordinary `ExplainAnalyzePlan.Diagnostics` retains its existing severities.
 
 ## Measurement and current scope
 
+[`Compare`](aggregate-comparison.md) runs auto, TiKV, and TiFlash MPP with
+result-value checks, rotated warmups and samples, ordinary latency/ServerRU,
+separate runtime plans and warnings, and measurement-only capture export.
+Use it to measure one query against a fixed case before choosing a policy.
+
 Use the same inputs and fixed dataset or appropriate read snapshot for every
 variant. Compare result values and ordering, with explicit tolerances for
 floating-point results. Include selective queries and many output groups as
@@ -171,7 +176,8 @@ not emit scalar-query metadata, so scalar/source query lint does not analyze
 aggregate shapes. Existing ServerRU summaries and baselines can use these
 records. A fingerprint does not identify input selectivity or dataset version:
 maintain separate benchmark case IDs and baselines for comparable conditions.
-Cross-engine logical-fingerprint comparison is not an implemented API.
+The baseline CLI retains its per-fingerprint policy; use the comparison report
+for measurements across engine requests.
 
 ServerRU is not billed RU: server measurements exclude egress, and adoption
 cost also depends on columnar storage and execution frequency. See the

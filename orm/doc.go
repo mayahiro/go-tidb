@@ -15,6 +15,9 @@
 // output aliases, HAVING, and optional TiKV/TiFlash and MPP hints. Its ScanAll
 // maps output Go names to scalar or struct slices. Aggregate Explain and
 // ExplainAnalyze return requested policy, plan rows, and same-session warnings.
+// Aggregate Compare explicitly compares auto, TiKV, and TiFlash MPP with result
+// checks, latency/ServerRU samples, and separate plans. Complete comparisons can
+// export measured samples through WriteCapture for existing baseline checks.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root

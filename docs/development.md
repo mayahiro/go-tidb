@@ -14,6 +14,7 @@ unknown plan tasks, warning failures, and connection/callback ordering:
 ```sh
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
 The benchmark compares identical SQL and result values through the same local
@@ -21,6 +22,13 @@ test driver: aggregate `ScanAll`, typed `Raw`, and a direct `database/sql`
 collector. It covers 0, 1, 100, and 10,000 output groups. It excludes TiDB,
 network, driver argument conversion, and RU; building SQL and validating the
 aggregate's output mapping adds per-call work relative to a fixed raw query.
+
+The comparison benchmarks use the same 0/1/100/10,000-row driver data, 21
+SELECT/RU pairs, and three plan/warning pairs. The manual alternative uses
+typed `ScanAll` and result equality; `Compare` freezes inputs, compiles before
+the loop, reuses raw result buffers, and returns sample statistics. These
+measure complete diagnostic orchestration, not a change in ordinary ORM
+query performance or the cost of equivalent destination mapping.
 
 Profile the representative path and compare it with `raw` or `database_sql`:
 
@@ -30,6 +38,12 @@ go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -be
 go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
 go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
 ```
+
+For comparison profiles, use
+`-bench '^BenchmarkAggregateComparison$/^rows_100$'` and then
+`-bench '^BenchmarkAggregateComparisonManual$/^rows_100$'` with separate output
+files and the same profile commands. Remove your temporary profile directory
+after inspection.
 
 With `TIDBGO_TEST_DSN` configured for the dedicated database described below:
 
@@ -51,6 +65,13 @@ row closure; the immediate same-session RU probe is outside that interval.
 Warnings and runtime plans come from separate explicit plan executions. There
 is no universal latency/RU threshold. Free-plan limits, caches, statistics,
 network conditions, and shared service load can affect measurements.
+
+Each workload also runs public `Compare` with two warmups and five measured
+rounds. It checks complete result coverage and exports all three variants into
+the existing baseline analyzer. The missing-replica case checks incomplete
+comparison status and retained warnings. Offline comparison tests additionally
+cover changed values/order, frozen Valuers, float tolerances, driver numeric
+types, row limits, cancellation, partial reports, and capture writer errors.
 
 The test also checks missing-replica warnings, empty inputs, nullable outputs,
 all seven aggregate functions, HAVING/paging, source soft deletion, physical

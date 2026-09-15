@@ -6,6 +6,9 @@
 集計SELECTのcaptureは `source=typed_aggregate` とhintを含む `s1:` statement fingerprintを使い、scalar query shapeとbind値を含みません
 明示的な集計plan callは対象EXPLAIN statementをcaptureします。補助的な `SHOW WARNINGS` はplan APIから返し、別のcapture recordやServerRUのauxiliary countには含みません
 
+[`AggregateQuery.Compare`](aggregate-comparison_ja.md) は `CollectServerRU` がなくてもRUを明示的に取得し、callbackを比較と内部で固定したconnectionの解放後に実行します
+外側のcaptureはwarmupと独立planを含み、`AggregateComparison.WriteCapture` は1つのvariantの測定SELECTだけをbaseline入力として出力します
+
 caller-owned executorへopt-inの観測設定を一度行い、返されたexecutorをrepositoryで共有します
 
 ```go

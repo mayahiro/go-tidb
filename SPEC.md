@@ -162,6 +162,10 @@ The currently implemented surface provides:
 - Aggregate plan reports separate requested hints, planned operators, explicit
   EXPLAIN ANALYZE execution, and same-session warnings; see
   [aggregate contracts](docs/aggregates.md)
+- Explicit aggregate auto/TiKV/TiFlash MPP comparison with frozen arguments,
+  full result checks, rotated latency/ServerRU samples, separate runtime plans
+  and warnings, and complete measurement-only RuntimeCapture export; see
+  [comparison contracts](docs/aggregate-comparison.md)
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   explicit color overrides for any writer, argument values excluded by default,

@@ -50,6 +50,9 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Single-table aggregate SQL in `Example_aggregate`, with output aliases,
   HAVING, ordering, and paging through public APIs
+- Explicit `CompareOrderTotals` for auto/TiKV/TiFlash MPP result checks,
+  latency/ServerRU measurements, and separate plan/warning inspection over a
+  caller-provided fixed fixture with TiFlash replicas
 - Shared-executor statement logging with automatic terminal colors and no bind
   argument values
 - Structured runtime capture of actual root, relation, and split-bulk
@@ -281,6 +284,9 @@ writes and raw SQL. The [statement observation guide](../../docs/observability.m
 documents query logging and custom observers.
 The [aggregate guide](../../docs/aggregates.md) covers typed grouping, result
 structs, optional TiFlash/MPP policy, and explicit plan/warning inspection.
+The [comparison guide](../../docs/aggregate-comparison.md) explains the
+`CompareOrderTotals` report and `WriteCapture` baseline export. This diagnostic
+is an explicit call and is not part of application startup.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
 The [analysis guide](../../docs/checks.md) documents each evidence boundary,

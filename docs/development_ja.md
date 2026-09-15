@@ -11,12 +11,17 @@
 ```sh
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
 benchmarkは同じSQLと結果値を使い、同じlocal test driverで集計の `ScanAll`、typed `Raw`、直接の `database/sql` collectorを比較します
 出力group数は0、1、100、10,000です
 TiDB、network、driverのargument変換、RUは測定しません
 固定raw queryに対し、集計SQLの構築と結果mapping検証のcallごとの処理が加わります
+
+比較benchmarkは同じ0／1／100／10,000行のdriver data、21組のSELECT／RU取得、3組のplan／警告を使います
+代替となる手書き方式はtypedな `ScanAll` と結果照合を使い、`Compare` は入力固定、loop前のcompile、raw結果bufferの再利用、sample統計を含みます
+診断全体の処理を測定し、通常ORM queryの性能変化や同じ結果mappingのcostを測るものではありません
 
 代表経路のprofileを取得し、`raw` または `database_sql` と比較できます
 
@@ -26,6 +31,9 @@ go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -be
 go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
 go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
 ```
+
+比較のprofileは `-bench '^BenchmarkAggregateComparison$/^rows_100$'` と `-bench '^BenchmarkAggregateComparisonManual$/^rows_100$'` を別fileへ出力し、同じprofile commandで確認します
+確認後は自分で作成した一時profile directoryを削除してください
 
 後述の専用database用に `TIDBGO_TEST_DSN` を設定して実行します
 
@@ -43,6 +51,11 @@ Auto、TiKV、TiFlash MPPに対し、手書きSQLと集計builderを使います
 latencyはrowsのcloseまでを測定し、同じconnectionで直後に読むRU probeはその区間に含めません
 警告とruntime planは別の明示的なplan実行から取得します
 普遍的なlatency／RU閾値は設けません。free planの制約、cache、statistics、network、共有serviceの負荷が測定へ影響します
+
+各workloadでは公開 `Compare` も2回warmupし、5 round測定します
+全結果の照合と、3 variantのexportから既存baseline analyzerへの連携を確認します
+レプリカ欠如時は未完了statusと警告の保持を確認します
+offlineの比較testでは値と順序の変化、Valuerの固定、float許容誤差、driver数値型、行数上限、cancel、部分report、capture writerのerrorも確認します
 
 レプリカ不在の警告、空入力、nullable結果、7種類の集計関数、HAVINGとpaging、sourceのsoft-delete、physical tableの解決、MPPのsession設定復元も確認します
 通常実行とEXPLAIN ANALYZEは別の観測です

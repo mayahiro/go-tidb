@@ -1,6 +1,7 @@
 package tidbcloud
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/redact"
+	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
 )
@@ -66,6 +68,10 @@ func TestTiDBCloudStarterTiFlash(t *testing.T) {
 	}
 	if missing.WarningsError != nil || len(missing.Warnings) == 0 {
 		t.Fatal("missing replica must retain hint warnings")
+	}
+	missingComparison, compareErr := starterAggregateQuery("wide_scan", "auto").Compare(ctx, db, orm.AggregateCompareOptions{Case: "aggregate-v1-missing-replica"})
+	if compareErr == nil || missingComparison.Complete || missingComparison.Variants[2].PlanStatus != "mismatch" || len(missingComparison.Variants[2].Plan.Warnings) == 0 {
+		t.Fatalf("missing replica comparison was accepted: complete=%t status=%s error=%s", missingComparison.Complete, missingComparison.Variants[2].PlanStatus, redact.Error(compareErr, dsn))
 	}
 	if _, err := db.ExecContext(ctx, "ALTER TABLE "+table+" SET TIFLASH REPLICA 2"); err != nil {
 		fatalDatabaseError(t, dsn, "enable owned TiFlash replica", err)
@@ -206,6 +212,38 @@ func TestTiDBCloudStarterTiFlash(t *testing.T) {
 					t.Fatal("execution did not match requested engine")
 				}
 			}
+			t.Run("comparison_api", func(t *testing.T) {
+				q := starterAggregateQuery(workload.name, "auto")
+				report, err := q.Compare(ctx, conn, orm.AggregateCompareOptions{Case: "aggregate-v1-" + workload.name})
+				if err != nil {
+					fatalDatabaseError(t, dsn, "compare aggregate variants", err)
+				}
+				if !report.Complete {
+					t.Fatal("comparison incomplete")
+				}
+				for _, variant := range report.Variants {
+					if variant.Rows != int64(len(want)) || len(variant.Samples) != 5 || variant.ServerRU.Count != 5 {
+						t.Fatal("comparison did not preserve expected results and samples")
+					}
+					var artifact bytes.Buffer
+					if err := report.WriteCapture(&artifact, variant.Name); err != nil {
+						t.Fatal(err)
+					}
+					analysis, err := runtimecapture.AnalyzeReader(&artifact, runtimecapture.WithWorkload(report.Options.Case))
+					if err != nil {
+						t.Fatal(err)
+					}
+					baseline, err := runtimecapture.NewServerRUBaseline(analysis)
+					if err != nil {
+						t.Fatal(err)
+					}
+					comparison, err := runtimecapture.CompareServerRU(analysis, baseline)
+					if err != nil || comparison.Summary.Passed != 1 {
+						t.Fatal("comparison capture cannot use the existing baseline", err)
+					}
+					t.Logf("case=%s variant=%s rows=%d median_ms=%.3f mean_ServerRU=%.6f separate_plan=%s", report.Options.Case, variant.Name, variant.Rows, variant.LatencyMS.Median, variant.ServerRU.Mean, variant.PlanStatus)
+				}
+			})
 		})
 	}
 	t.Run("aggregate_contracts", func(t *testing.T) { testStarterAggregateContracts(t, ctx, conn, dsn) })

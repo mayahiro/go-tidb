@@ -10,6 +10,12 @@ Explicit aggregate plan calls capture the target EXPLAIN statement; their
 auxiliary `SHOW WARNINGS` is returned by the plan API and is not a separate
 capture record or part of the ServerRU auxiliary count.
 
+[`AggregateQuery.Compare`](aggregate-comparison.md) explicitly collects RU
+even without `CollectServerRU`. It defers callbacks until comparison and release
+of an internally pinned connection. Enclosing captures include warmups and
+separate plans; `AggregateComparison.WriteCapture` exports only one variant's
+measured SELECTs for baseline input.
+
 Configure opt-in observation once on the caller-owned executor and share the
 returned executor with repositories:
 
