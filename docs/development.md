@@ -14,6 +14,7 @@ unknown plan tasks, warning failures, and connection/callback ordering:
 ```sh
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -22,6 +23,13 @@ test driver: aggregate `ScanAll`, typed `Raw`, and a direct `database/sql`
 collector. It covers 0, 1, 100, and 10,000 output groups. It excludes TiDB,
 network, driver argument conversion, and RU; building SQL and validating the
 aggregate's output mapping adds per-call work relative to a fixed raw query.
+
+`BenchmarkAggregatePeriod` uses the same group counts to compare `Date` and
+`YearMonth`, including HAVING on the calendar key, against equivalent typed
+raw and direct collectors. All paths use identical SQL and destination types;
+the local driver does not evaluate date expressions. Profile its daily path
+with `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` and use
+`raw` for the alternative.
 
 The comparison benchmarks use the same 0/1/100/10,000-row driver data, 21
 SELECT/RU pairs, and three plan/warning pairs. The manual alternative uses
@@ -80,6 +88,29 @@ EXPLAIN ANALYZE executions are distinct observations. These samples are not
 billed RU or a guarantee that TiFlash is faster or cheaper. Replica setup,
 storage, seeding, warm-up, probes, and cleanup add costs outside reported
 SELECT measurements. Do not run connected suites concurrently on this database.
+
+The calendar integration test uses the same dedicated-database guards:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterPeriodAggregates$' -count=1 -v
+```
+
+It creates and cleans up its owned `tidbgo_it_period_aggregates` table with
+20,000 rows and two TiFlash replicas. It checks daily/monthly results against
+independently computed Go keys across UTC/JST session and driver locations,
+both interpolation settings, NULLs, year/month/leap-day boundaries, alias
+collisions, HAVING/paging, `parseTime=false`, and empty results. TIMESTAMP and
+DATETIME are checked separately.
+
+The four workloads cover a one-week timestamp range, all non-NULL days, all
+months, and date/store groups. Original-column range predicates keep the
+input filter separate from calendar extraction. `DATE` and
+`EXTRACT(YEAR_MONTH ...)` are compared with equivalent `DATE_FORMAT` plus casts
+using two warmups and five rounds with rotating method order. Both alternatives
+use typed raw scanning, compare every result, and read immediate same-session
+ServerRU. Each workload also runs public `Compare`; its plans and storage
+aggregation operators are separate observations from ordinary execution.
+These workloads do not establish a universal latency or RU advantage.
 
 ## Local checks
 

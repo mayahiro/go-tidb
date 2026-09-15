@@ -269,7 +269,7 @@ func starterAggregateQuery(workload, variant string) *orm.AggregateQuery[starter
 	if workload == "many_groups" {
 		group = "ID"
 	}
-	q := orm.Aggregate[starterAggregateSource]().Select(orm.Field(group).As("Key"), orm.CountAll().As("Count"), orm.Sum("Amount").As("Sum")).GroupBy(group).OrderBy(orm.Asc("Key"))
+	q := orm.Aggregate[starterAggregateSource]().Select(orm.Field(group).As("Key"), orm.CountAll().As("Count"), orm.Sum("Amount").As("Sum")).GroupBy("Key").OrderBy(orm.Asc("Key"))
 	if workload == "small_range" {
 		q.Where(orm.LessThanOrEqual("ID", int64(20)))
 	}
@@ -325,7 +325,7 @@ func testStarterAggregateContracts(t *testing.T, ctx context.Context, conn *sql.
 			Sum   starterDecimal
 		}
 		// Both output names shadow SQL function names; source IDs are not grouped.
-		q2 := orm.Aggregate[starterAggregateSource]().Select(orm.Field("ShopID").As("Key"), orm.CountAll().As("Count"), orm.Sum("Amount").As("Sum")).GroupBy("ShopID").Having(orm.GreaterThan("Count", int64(10))).OrderBy(orm.Desc("Sum"), orm.Asc("Key")).Limit(2).Offset(1).ReadFrom(engine)
+		q2 := orm.Aggregate[starterAggregateSource]().Select(orm.Field("ShopID").As("Key"), orm.CountAll().As("Count"), orm.Sum("Amount").As("Sum")).GroupBy("Key").Having(orm.GreaterThan("Count", int64(10))).OrderBy(orm.Desc("Sum"), orm.Asc("Key")).Limit(2).Offset(1).ReadFrom(engine)
 		if err := q2.ScanAll(ctx, conn, &paged); err != nil {
 			fatalDatabaseError(t, dsn, "HAVING and paging", err)
 		}

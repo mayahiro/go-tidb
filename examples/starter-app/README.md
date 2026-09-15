@@ -50,6 +50,9 @@ It demonstrates the current struct-first foundation:
 - Typed raw aggregate scanning into a computed field
 - Single-table aggregate SQL in `Example_aggregate`, with output aliases,
   HAVING, ordering, and paging through public APIs
+- Daily/monthly registration counts in `Example_calendarAggregation`, using
+  a reporting source for the existing database-managed timestamp and grouping
+  by selected output names
 - Explicit `CompareOrderTotals` for auto/TiKV/TiFlash MPP result checks,
   latency/ServerRU measurements, and separate plan/warning inspection over a
   caller-provided fixed fixture with TiFlash replicas

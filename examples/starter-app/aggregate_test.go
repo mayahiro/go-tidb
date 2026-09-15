@@ -2,7 +2,9 @@ package starterapp
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
 )
 
@@ -24,4 +26,25 @@ func Example_aggregate() {
 	// Output:
 	// SELECT `a`.`user_id` AS `UserID`, COUNT(*) AS `OrderCount`, SUM(`a`.`total`) AS `Total` FROM `orders` AS `a` GROUP BY `a`.`user_id` HAVING COUNT(*) > ? ORDER BY SUM(`a`.`total`) DESC, `a`.`user_id` ASC LIMIT ?
 	// [1 10]
+}
+
+// A reporting source can map the database-managed registration timestamp
+// without adding it to the ordinary User model or its write operations.
+func Example_calendarAggregation() {
+	type Registration struct {
+		model.Meta `tidbgo:"table=users"`
+		CreatedAt  time.Time
+	}
+	for _, key := range []orm.AggregateExpression{orm.Date("CreatedAt"), orm.YearMonth("CreatedAt")} {
+		q := orm.Aggregate[Registration]().Select(key.As("Period"), orm.CountAll().As("Count")).
+			GroupBy("Period").OrderBy(orm.Asc("Period"))
+		statement, _, err := q.Build()
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(statement)
+	}
+	// Output:
+	// SELECT DATE(`a`.`created_at`) AS `Period`, COUNT(*) AS `Count` FROM `users` AS `a` GROUP BY DATE(`a`.`created_at`) ORDER BY DATE(`a`.`created_at`) ASC
+	// SELECT EXTRACT(YEAR_MONTH FROM `a`.`created_at`) AS `Period`, COUNT(*) AS `Count` FROM `users` AS `a` GROUP BY EXTRACT(YEAR_MONTH FROM `a`.`created_at`) ORDER BY EXTRACT(YEAR_MONTH FROM `a`.`created_at`) ASC
 }

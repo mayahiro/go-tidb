@@ -11,6 +11,7 @@ type Order struct {
     model.Meta `tidbgo:"table=orders"`
     ShopID     int64
     Amount     int64
+    CreatedAt  *time.Time
     Status     string
     DeletedAt  time.Time `tidbgo:",soft_delete"`
 }
@@ -40,24 +41,30 @@ err := q.ScanAll(ctx, db, &stats)
 
 | 式 | 意味 |
 | --- | --- |
-| `Field("ShopID")` | sourceのGo field、`GroupBy` にも指定する |
+| `Field("ShopID")` | sourceのGo field、選択した出力名でgroupingする |
+| `Date("CreatedAt")` | SQL DATE型の日付key、groupingが必要 |
+| `YearMonth("CreatedAt")` | 整数 `YYYYMM` の年月key、groupingが必要 |
 | `CountAll()` | NULLを含む行も数える `COUNT(*)` |
 | `Count("Amount")` | NULL以外の値の件数 |
 | `CountDistinct("ShopID")` | 1 fieldのNULL以外の異なる値の件数 |
 | `Sum`、`Avg`、`Min`、`Max` | sourceの1 fieldのNULL以外の値を集計 |
 
-集計関数にはscalar sliceへ読む場合も `As` が必要です
+期間keyと集計関数にはscalar sliceへ読む場合も `As` が必要です
 `Field` はsourceのGo名を既定の出力名とし、`As` も使えます
 出力名は64 byte以内のexported Go識別子で、大文字小文字を区別せず一意である必要があります
 sourceの参照には正確なGo field名を使い、SQL column名やraw式は使いません
 
 `Where` はsource modelに対する既存のscalar predicateを使います
 `WithDeleted` を呼ばない限りsoft-delete済みの行を除外します
-`Having` と `OrderBy` は選択済み出力の正確なGo名を参照します
-出力名とsource column名の衝突を避けるため、compilerは参照を式へ展開します
+`GroupBy`、`Having`、`OrderBy` は選択済み出力の正確なGo名を参照します
+compilerは出力名とsource column名が衝突しても曖昧にならない式の参照を生成します
+例えば `Field("ShopID").As("Store")` は `GroupBy("Store")` でgroupingします
 `Having` は比較、`In`、`NotIn`、`Between`、NULL判定、`And`／`Or`／`Not` を扱います
 
-選択するすべての `Field` を `GroupBy` に指定します
+選択するすべての非集計式を `GroupBy` に指定します
+group keyには選択済みの `Field`、`Date`、`YearMonth` の出力を使います
+同じ式を別名で選択した場合は1つのkeyを共有でき、重複したgroup式は拒否します
+異なる式の間の関数従属性は推定しません
 groupingは結果順を保証しません。安定した結果には `OrderBy` と同順位を解消できる条件を使います
 `Limit` と `Offset` はgroupingと `Having` の後の結果に適用し、`Offset` には `Limit` が必要です
 builder methodはqueryを変更します。構築後の並行読み取りは可能ですが、並行変更は扱いません
@@ -77,6 +84,64 @@ scanとrowsのcloseが成功してからdestinationを置き換え、errorでは
 通常のsource fieldの `ScanAll` と異なり、集計結果ではsoft-deleteのNULLをzero `time.Time` へ変換しません
 
 [TiDB集計関数](https://docs.pingcap.com/tidb/stable/aggregate-group-by-functions/)も参照してください
+
+## 日別・月別の集計
+
+日別合計には `Date`、月別合計には `YearMonth` を使います
+月のkeyには年を含めるため、異なる年の1月は別のgroupになります
+
+```go
+q := orm.Aggregate[Order]().
+    Select(orm.Date("CreatedAt").As("Day"), orm.CountAll().As("Count"), orm.Sum("Amount").As("Total")).
+    GroupBy("Day").Having(orm.IsNotNull("Day")).OrderBy(orm.Asc("Day"))
+
+var days []struct {
+    Day   sql.NullTime
+    Count int64
+    Total sql.NullString
+}
+err := q.ScanAll(ctx, db, &days)
+
+monthly := orm.Aggregate[Order]().
+    Select(orm.YearMonth("CreatedAt").As("Month"), orm.CountAll().As("Count")).
+    GroupBy("Month").OrderBy(orm.Asc("Month"))
+var months []struct {
+    Month sql.NullInt64
+    Count int64
+}
+err = monthly.ScanAll(ctx, db, &months)
+```
+
+`Date` は `DATE(column)`、`YearMonth` は `EXTRACT(YEAR_MONTH FROM column)` へcompileします
+2024年2月の年月keyは整数 `202402` です
+両方ともNULLを保持し、filterしなければNULL入力は1つのgroupになります
+空入力は0 groupとなり、入力に存在しない日付を0で補完することはありません
+DATE、DATETIME、TIMESTAMPへmappingされたfieldを使います
+offline検証はfield参照を確認し、SQLの物理型、型変換、無効な日付やzero dateの挙動はTiDBが決めます
+
+`go-sql-driver/mysql` の `parseTime=true` では、SQL DATEを `time.Time`、`*time.Time`、`sql.NullTime` へscanできます
+driverはその日の午前0時へ `loc` を付けます。結果は暦上のkeyであり、UTCへ正規化したeventの瞬間ではありません
+`parseTime` がない場合、DATEはbyteとして返り、`string` または `sql.NullString` へscanできます
+年月keyは `int64`、`*int64`、`sql.NullInt64` へscanできます
+結果変換errorでは元のsliceを維持します
+
+TIMESTAMPの日付境界はsession timezoneに従い、DATETIMEとDATEは保存された暦上の値を維持します
+driverの `loc` はGo値の変換に使い、serverのtimezoneは設定しません
+整合するconnection設定と日付の保存規約を明示してください
+期間式はsession SETや自動UTC変換を追加しません
+[TiDB timezone](https://docs.pingcap.com/tidb/stable/configure-time-zone/)と[日時関数](https://docs.pingcap.com/tidb/stable/date-and-time-functions/)も参照してください
+
+入力期間の指定には、driver／session設定と整合した値を使い、元fieldへ開始を含み終了を含まない範囲を指定します
+
+```go
+q.Where(orm.GreaterThanOrEqual("CreatedAt", start), orm.LessThan("CreatedAt", end))
+```
+
+期間の出力は `Having`、順序、pagination、scalar／structへのscan、明示的plan、[`Compare`](aggregate-comparison_ja.md) で使えます
+期間keyのHAVING参照には `MIN(key式)` を使います
+group内のkeyはNULLを含め同じ値なので結果を維持でき、列以外のgroup式を繰り返した場合のTiDBのsource column名前解決の問題を避けられます
+groupingしたsource columnと出力名が同じ場合も曖昧になりません
+日付と整数の月keyを明示的な境界値と比較でき、ORMが `"February 2024"` のような表示labelをkeyへparseすることはありません
 
 ## 明示的なストレージとMPP方針
 

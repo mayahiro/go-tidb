@@ -89,7 +89,19 @@ func (c *aggregatePredicateCompiler) write(p predicate) error {
 		}
 		return nil
 	}
+	// TiDB can reject a repeated non-column group expression in HAVING when
+	// its source column is not selected. A calendar key is constant within
+	// its group, including the all-NULL group, so MIN(key) preserves its value
+	// while resolving the source column inside an aggregate. Referencing a
+	// user alias instead could bind to a different grouped source column.
+	calendar := output.function == "DATE" || output.function == "YEAR_MONTH"
+	if calendar {
+		c.query.WriteString("MIN(")
+	}
 	output.write(c.query)
+	if calendar {
+		c.query.WriteByte(')')
+	}
 	c.query.WriteString(operator)
 	for i, value := range p.values {
 		if i != 0 {

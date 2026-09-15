@@ -13,7 +13,7 @@ import (
 	"github.com/mayahiro/go-tidb/model"
 )
 
-// AggregateExpression is an immutable model field or aggregate function.
+// AggregateExpression is an immutable model field, calendar key, or aggregate function.
 // Fields use exported source Go names; As names an exported destination field.
 type AggregateExpression struct {
 	function string
@@ -22,9 +22,27 @@ type AggregateExpression struct {
 	aliased  bool
 }
 
-// Field selects a source Go field that must also occur in GroupBy.
+// Field selects a source Go field whose output must also occur in GroupBy.
 // Its default output name is the source Go field name.
 func Field(name string) AggregateExpression { return AggregateExpression{field: name} }
+
+// Date extracts the calendar date of a source Go field as SQL DATE. Use As to
+// name its output and GroupBy that name. NULL remains NULL. TIMESTAMP follows
+// the session time zone; DATETIME retains its stored calendar fields. The ORM
+// does not change time zones or infer the physical column type from the Go type.
+// With go-sql-driver/mysql, parseTime=true returns time.Time in the driver's loc;
+// use sql.NullTime or *time.Time for nullable results.
+func Date(field string) AggregateExpression {
+	return AggregateExpression{function: "DATE", field: field}
+}
+
+// YearMonth extracts a source Go field's calendar year and month as SQL integer
+// year*100+month, for example 202609. It includes the year, not just month number.
+// Use As to name its output and GroupBy that name. NULL remains NULL; scan into
+// int64 or sql.NullInt64. It follows Date's session and physical-type semantics.
+func YearMonth(field string) AggregateExpression {
+	return AggregateExpression{function: "YEAR_MONTH", field: field}
+}
 
 // CountAll counts input rows, including rows containing NULL values.
 func CountAll() AggregateExpression { return AggregateExpression{function: "COUNT(*)"} }
@@ -54,7 +72,7 @@ func Min(field string) AggregateExpression { return AggregateExpression{function
 func Max(field string) AggregateExpression { return AggregateExpression{function: "MAX", field: field} }
 
 // As returns an expression with an explicit output Go field name.
-// Aggregate functions require As, including when scanning a scalar slice.
+// Calendar keys and aggregate functions require As, including scalar slices.
 func (e AggregateExpression) As(name string) AggregateExpression {
 	e.alias, e.aliased = name, true
 	return e
@@ -87,12 +105,14 @@ func (q *AggregateQuery[T]) Select(expressions ...AggregateExpression) *Aggregat
 	return q
 }
 
-// GroupBy appends source Go field names in grouping order.
-// Every selected non-aggregate field must be listed, even when a physical key
-// could imply a functional dependency. GroupBy does not imply result ordering.
-func (q *AggregateQuery[T]) GroupBy(fields ...string) *AggregateQuery[T] {
+// GroupBy appends selected output Go names in grouping order, as Having and
+// OrderBy do. Outputs must be Field, Date, or YearMonth expressions, not aggregate
+// functions. Every non-aggregate expression must be grouped; equivalent selected
+// expressions can share one group key. No physical functional dependency is
+// inferred. Duplicate group expressions are rejected. GroupBy does not order rows.
+func (q *AggregateQuery[T]) GroupBy(outputs ...string) *AggregateQuery[T] {
 	if q != nil {
-		q.groupBy = append(q.groupBy, fields...)
+		q.groupBy = append(q.groupBy, outputs...)
 	}
 	return q
 }
@@ -263,19 +283,6 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	if predicatesHaveRelation(q.predicates) {
 		return compiledAggregate{}, fmt.Errorf("orm: aggregate Where does not support Has or relations")
 	}
-	groups := make([]string, len(q.groupBy))
-	for i, name := range q.groupBy {
-		field, err := aggregateSourceField(d, name)
-		if err != nil {
-			return compiledAggregate{}, err
-		}
-		for _, earlier := range q.groupBy[:i] {
-			if earlier == name {
-				return compiledAggregate{}, fmt.Errorf("orm: aggregate GroupBy repeats field %s", name)
-			}
-		}
-		groups[i] = field.ColumnName()
-	}
 	outputs := make([]aggregateOutput, len(q.expressions))
 	for i, expr := range q.expressions {
 		name := expr.alias
@@ -299,16 +306,41 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 			}
 			output.column = field.ColumnName()
 		}
-		if expr.function == "" {
-			grouped := false
-			for _, group := range q.groupBy {
-				grouped = grouped || group == expr.field
-			}
-			if !grouped {
-				return compiledAggregate{}, fmt.Errorf("orm: aggregate selected field %s must occur in GroupBy", expr.field)
+		outputs[i] = output
+	}
+	groups := make([]int, len(q.groupBy))
+	for i, name := range q.groupBy {
+		index := -1
+		for j, output := range outputs {
+			if output.name == name {
+				index = j
+				break
 			}
 		}
-		outputs[i] = output
+		if index < 0 {
+			return compiledAggregate{}, fmt.Errorf("orm: aggregate GroupBy references unknown output %q", name)
+		}
+		if !outputs[index].isGroupKey() {
+			return compiledAggregate{}, fmt.Errorf("orm: aggregate GroupBy output %s is an aggregate function", name)
+		}
+		for _, earlier := range groups[:i] {
+			if outputs[index].sameExpression(outputs[earlier]) {
+				return compiledAggregate{}, fmt.Errorf("orm: aggregate GroupBy repeats expression for output %s", name)
+			}
+		}
+		groups[i] = index
+	}
+	for _, output := range outputs {
+		if !output.isGroupKey() {
+			continue
+		}
+		grouped := false
+		for _, group := range groups {
+			grouped = grouped || output.sameExpression(outputs[group])
+		}
+		if !grouped {
+			return compiledAggregate{}, fmt.Errorf("orm: aggregate selected output %s must occur in GroupBy", output.name)
+		}
 	}
 	argumentCount, capacity := predicateCompileCapacity(q.predicates)
 	havingArgs, havingCapacity := predicateCompileCapacity(q.having)
@@ -350,7 +382,7 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		} else {
 			sql.WriteString(", ")
 		}
-		writeQualifiedIdentifier(&sql, aggregateRootAlias, group)
+		outputs[group].write(&sql)
 	}
 	having := aggregatePredicateCompiler{query: &sql, outputs: outputs, arguments: compiler.arguments}
 	for i, p := range q.having {
@@ -412,12 +444,22 @@ func aggregateOutputByName(outputs []aggregateOutput, name string) (aggregateOut
 	return aggregateOutput{}, false
 }
 
+func (output aggregateOutput) isGroupKey() bool {
+	return output.function == "" || output.function == "DATE" || output.function == "YEAR_MONTH"
+}
+
+func (output aggregateOutput) sameExpression(other aggregateOutput) bool {
+	return output.function == other.function && output.column == other.column
+}
+
 func (output aggregateOutput) write(sql *strings.Builder) {
 	if output.function == "COUNT(*)" {
 		sql.WriteString("COUNT(*)")
 		return
 	}
-	if output.function == "COUNT DISTINCT" {
+	if output.function == "YEAR_MONTH" {
+		sql.WriteString("EXTRACT(YEAR_MONTH FROM ")
+	} else if output.function == "COUNT DISTINCT" {
 		sql.WriteString("COUNT(DISTINCT ")
 	} else if output.function != "" {
 		sql.WriteString(output.function)

@@ -11,6 +11,7 @@
 ```sh
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -18,6 +19,10 @@ benchmarkは同じSQLと結果値を使い、同じlocal test driverで集計の
 出力group数は0、1、100、10,000です
 TiDB、network、driverのargument変換、RUは測定しません
 固定raw queryに対し、集計SQLの構築と結果mapping検証のcallごとの処理が加わります
+
+`BenchmarkAggregatePeriod` は同じgroup数で、期間keyへのHAVINGを含む `Date` と `YearMonth` を、同等のtyped rawと直接collectorで比較します
+すべて同じSQLと結果型を使い、local driverは日時式を評価しません
+日別経路のprofileには `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` を使い、代替経路では `raw` を指定します
 
 比較benchmarkは同じ0／1／100／10,000行のdriver data、21組のSELECT／RU取得、3組のplan／警告を使います
 代替となる手書き方式はtypedな `ScanAll` と結果照合を使い、`Compare` は入力固定、loop前のcompile、raw結果bufferの再利用、sample統計を含みます
@@ -62,6 +67,23 @@ offlineの比較testでは値と順序の変化、Valuerの固定、float許容�
 sampleは請求RUやTiFlashが速い・安いことの保証ではありません
 レプリカ準備、storage、seed、warm-up、probe、cleanupは報告するSELECT測定外のcostを生みます
 このdatabaseで複数の接続testを同時に実行しないでください
+
+期間集計のintegration testは同じ専用databaseのguardを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterPeriodAggregates$' -count=1 -v
+```
+
+自分が所有する `tidbgo_it_period_aggregates` tableを作成し、20,000行と2つのTiFlash replicaを準備して、終了時にcleanupします
+日別・月別の結果を独立したGoの計算と比較し、UTC／JSTのsessionとdriver location、interpolationの有無、NULL、年末・月末・うるう日、alias衝突、HAVINGとpaging、`parseTime=false`、空結果を確認します
+TIMESTAMPとDATETIMEは分けて検証します
+
+4 workloadは1週間のtimestamp範囲、NULL以外の全日、全月、日付と店舗のgroupを扱います
+元のcolumnへのrange条件により、入力filterと期間抽出を分けます
+`DATE` と `EXTRACT(YEAR_MONTH ...)` を同等の `DATE_FORMAT` とcastに対し、2回のwarmupと実装順を交代する5 roundで比較します
+両実装ともtyped rawでscanし、全結果を照合して同じsessionで直後にServerRUを読みます
+各workloadで公開 `Compare` も実行します。そのplanとstorage側の集計operatorは通常実行とは別の観測です
+これらのworkloadは普遍的なlatencyやRUの優位性を示すものではありません
 
 ## Local check
 

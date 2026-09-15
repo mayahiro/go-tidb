@@ -155,8 +155,8 @@ The currently implemented surface provides:
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
 - Single-table `Aggregate[T]` queries with validated fields and aggregate
-  expressions, `GROUP BY`, output-name `HAVING` and ordering, soft-delete scope,
-  paging, and scalar/struct `ScanAll` results
+  expressions, `Date` and `YearMonth` calendar keys, output-name `GROUP BY`,
+  `HAVING` and ordering, soft-delete scope, paging, and scalar/struct `ScanAll` results
 - Explicit aggregate `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
   with statement-scoped settings and no `SET SESSION` or replica provisioning
 - Aggregate plan reports separate requested hints, planned operators, explicit

@@ -49,6 +49,9 @@ data stayed unchanged. The caller owns that requirement and any snapshot setup.
 
 `report.Options` retains the effective defaults and tolerances. Grouped queries
 require `OrderBy`; provide enough tie-breakers to make it deterministic.
+Selected [`Date` and `YearMonth` keys](aggregates.md#calendar-grouping) work
+with the same result checks. Keep session time zone, driver `loc`, and
+`parseTime` consistent within a case.
 `Limit`, `Offset`, predicates, grouping, and soft-delete scope stay as built.
 Exceeding `MaxRows` fails the comparison; it does not truncate a successful
 result or rewrite LIMIT. Memory holds a reference result and a reusable current

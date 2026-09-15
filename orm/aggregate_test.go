@@ -141,7 +141,7 @@ func TestAggregateRejectsInvalidStructureOffline(t *testing.T) {
 		{"duplicate alias", Aggregate[aggregateOrder]().Select(CountAll().As("Total"), Sum("Amount").As("TOTAL")), "collides"},
 		{"group missing", Aggregate[aggregateOrder]().Select(Field("ShopID"), CountAll().As("Count")), "GroupBy"},
 		{"group repeated", aggregateStatsQuery().GroupBy("ShopID"), "repeats"},
-		{"SQL field", aggregateStatsQuery().GroupBy("shop_key"), "base-table field"},
+		{"SQL field", aggregateStatsQuery().GroupBy("shop_key"), "unknown output"},
 		{"computed", Aggregate[aggregateOrder]().Select(Sum("Computed").As("Total")), "base-table field"},
 		{"unknown where", aggregateStatsQuery().Where(Equal("unknown", 1)), "mapped scalar"},
 		{"relation", aggregateStatsQuery().Where(Not(Has("Orders"))), "relations"},

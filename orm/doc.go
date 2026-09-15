@@ -12,7 +12,8 @@
 // ScanAll reads a single column into a scalar slice or selected Go fields into
 // a separate struct slice, retaining the source model's SQL and diagnostics.
 // Aggregate builds single-table grouped queries with validated expressions,
-// output aliases, HAVING, and optional TiKV/TiFlash and MPP hints. Its ScanAll
+// daily/monthly calendar keys, output-name grouping, HAVING, and optional
+// TiKV/TiFlash and MPP hints. Its ScanAll
 // maps output Go names to scalar or struct slices. Aggregate Explain and
 // ExplainAnalyze return requested policy, plan rows, and same-session warnings.
 // Aggregate Compare explicitly compares auto, TiKV, and TiFlash MPP with result
