@@ -52,6 +52,9 @@ require `OrderBy`; provide enough tie-breakers to make it deterministic.
 Selected [`Date` and `YearMonth` keys](aggregates.md#calendar-grouping) work
 with the same result checks. Keep session time zone, driver `loc`, and
 `parseTime` consistent within a case.
+[`CountIf` and `SumIf`](aggregates.md#conditional-aggregation) use the same
+result and NULL checks. Conditional-expression parameters, including repeated
+references in HAVING/ordering, are frozen once per SQL parameter before warmup.
 `Limit`, `Offset`, predicates, grouping, and soft-delete scope stay as built.
 Exceeding `MaxRows` fails the comparison; it does not truncate a successful
 result or rewrite LIMIT. Memory holds a reference result and a reusable current

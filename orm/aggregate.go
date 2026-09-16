@@ -16,10 +16,11 @@ import (
 // AggregateExpression is an immutable model field, calendar key, or aggregate function.
 // Fields use exported source Go names; As names an exported destination field.
 type AggregateExpression struct {
-	function string
-	field    string
-	alias    string
-	aliased  bool
+	function  string
+	field     string
+	alias     string
+	aliased   bool
+	condition *predicate
 }
 
 // Field selects a source Go field whose output must also occur in GroupBy.
@@ -47,6 +48,14 @@ func YearMonth(field string) AggregateExpression {
 // CountAll counts input rows, including rows containing NULL values.
 func CountAll() AggregateExpression { return AggregateExpression{function: "COUNT(*)"} }
 
+// CountIf counts input rows for which condition is SQL TRUE. FALSE and NULL
+// conditions do not count. Empty inputs and groups without matches return zero.
+// The condition uses source Go fields and existing scalar predicates, including
+// And, Or, and Not; Has is not supported. Use As to name the output.
+func CountIf(condition Predicate) AggregateExpression {
+	return AggregateExpression{function: "COUNT(*)", condition: &condition.value}
+}
+
 // Count counts non-NULL values of a source Go field.
 func Count(field string) AggregateExpression {
 	return AggregateExpression{function: "COUNT", field: field}
@@ -60,6 +69,15 @@ func CountDistinct(field string) AggregateExpression {
 // Sum sums non-NULL values of a source Go field. Empty inputs produce SQL NULL.
 // TiDB determines the result's SQL numeric type; use a Scanner for exact decimals.
 func Sum(field string) AggregateExpression { return AggregateExpression{function: "SUM", field: field} }
+
+// SumIf sums non-NULL field values in rows for which condition is SQL TRUE.
+// It returns SQL NULL when no matching non-NULL value exists, including empty
+// inputs. Field and condition use source Go names; condition supports the same
+// scalar predicates as CountIf. Use As and a nullable destination when needed.
+// TiDB determines the SQL numeric type, as for Sum.
+func SumIf(field string, condition Predicate) AggregateExpression {
+	return AggregateExpression{function: "SUM", field: field, condition: &condition.value}
+}
 
 // Avg averages non-NULL values of a source Go field. Empty inputs produce SQL NULL.
 // TiDB determines the result's SQL numeric type; use a Scanner for exact decimals.
@@ -246,7 +264,10 @@ func (q *AggregateQuery[T]) ScanAll(ctx context.Context, executor QueryExecutor,
 	return nil
 }
 
-type aggregateOutput struct{ name, function, column string }
+type aggregateOutput struct {
+	name, function, column string
+	condition              *predicate
+}
 type compiledAggregate struct {
 	source    *model.Descriptor
 	sql       string
@@ -284,6 +305,7 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		return compiledAggregate{}, fmt.Errorf("orm: aggregate Where does not support Has or relations")
 	}
 	outputs := make([]aggregateOutput, len(q.expressions))
+	conditionalArgs, conditionalCapacity := 0, 0
 	for i, expr := range q.expressions {
 		name := expr.alias
 		if !expr.aliased && expr.function == "" {
@@ -298,7 +320,16 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 				return compiledAggregate{}, fmt.Errorf("orm: aggregate output name %q collides with %q", name, earlier.name)
 			}
 		}
-		output := aggregateOutput{name: name, function: expr.function}
+		output := aggregateOutput{name: name, function: expr.function, condition: expr.condition}
+		if expr.condition != nil {
+			conditions := []predicate{*expr.condition}
+			if predicatesHaveRelation(conditions) {
+				return compiledAggregate{}, fmt.Errorf("orm: conditional aggregate %s does not support Has or relations", name)
+			}
+			args, capacity := predicateCompileCapacity(conditions)
+			conditionalArgs += args
+			conditionalCapacity += capacity
+		}
 		if expr.function != "COUNT(*)" {
 			field, err := aggregateSourceField(d, expr.field)
 			if err != nil {
@@ -345,22 +376,24 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	argumentCount, capacity := predicateCompileCapacity(q.predicates)
 	havingArgs, havingCapacity := predicateCompileCapacity(q.having)
 	var sql strings.Builder
-	sql.Grow(128 + capacity + havingCapacity + len(outputs)*64 + len(groups)*32 + len(q.orderBy)*64)
+	sql.Grow(128 + capacity + havingCapacity + conditionalCapacity + len(outputs)*64 + len(groups)*32 + len(q.orderBy)*64)
+	args := make([]any, 0, argumentCount+havingArgs+conditionalArgs+2)
+	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias}
 	sql.WriteString("SELECT ")
 	q.policy.write(&sql)
 	for i, output := range outputs {
 		if i != 0 {
 			sql.WriteString(", ")
 		}
-		output.write(&sql)
+		if err := output.write(&compiler); err != nil {
+			return compiledAggregate{}, err
+		}
 		sql.WriteString(" AS ")
 		writeQuotedIdentifier(&sql, output.name)
 	}
 	sql.WriteString(" FROM ")
 	writeQuotedIdentifier(&sql, d.TableName())
 	sql.WriteString(" AS `a`")
-	args := make([]any, 0, argumentCount+havingArgs+2)
-	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias}
 	softDelete, active := activeSoftDeleteField(d, q.withDeleted)
 	if active {
 		sql.WriteString(" WHERE ")
@@ -382,9 +415,11 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		} else {
 			sql.WriteString(", ")
 		}
-		outputs[group].write(&sql)
+		if err := outputs[group].write(&compiler); err != nil {
+			return compiledAggregate{}, err
+		}
 	}
-	having := aggregatePredicateCompiler{query: &sql, outputs: outputs, arguments: compiler.arguments}
+	having := aggregatePredicateCompiler{predicateCompiler: &compiler, outputs: outputs}
 	for i, p := range q.having {
 		if i == 0 {
 			sql.WriteString(" HAVING ")
@@ -408,14 +443,16 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		} else {
 			sql.WriteString(", ")
 		}
-		output.write(&sql)
+		if err := output.write(&compiler); err != nil {
+			return compiledAggregate{}, err
+		}
 		if order.direction == orderAscending {
 			sql.WriteString(" ASC")
 		} else {
 			sql.WriteString(" DESC")
 		}
 	}
-	args = having.arguments
+	args = compiler.arguments
 	if q.pagination.limitSet {
 		sql.WriteString(" LIMIT ?")
 		args = append(args, q.pagination.limit)
@@ -452,10 +489,29 @@ func (output aggregateOutput) sameExpression(other aggregateOutput) bool {
 	return output.function == other.function && output.column == other.column
 }
 
-func (output aggregateOutput) write(sql *strings.Builder) {
+func (output aggregateOutput) write(compiler *predicateCompiler) error {
+	sql := compiler.query
+	if output.condition != nil {
+		if output.function == "COUNT(*)" {
+			sql.WriteString("COUNT(CASE WHEN ")
+		} else {
+			sql.WriteString("SUM(CASE WHEN ")
+		}
+		if err := compiler.write(*output.condition); err != nil {
+			return fmt.Errorf("orm: conditional aggregate %s: %w", output.name, err)
+		}
+		sql.WriteString(" THEN ")
+		if output.function == "COUNT(*)" {
+			sql.WriteByte('1')
+		} else {
+			writeQualifiedIdentifier(sql, aggregateRootAlias, output.column)
+		}
+		sql.WriteString(" END)")
+		return nil
+	}
 	if output.function == "COUNT(*)" {
 		sql.WriteString("COUNT(*)")
-		return
+		return nil
 	}
 	if output.function == "YEAR_MONTH" {
 		sql.WriteString("EXTRACT(YEAR_MONTH FROM ")
@@ -469,4 +525,5 @@ func (output aggregateOutput) write(sql *strings.Builder) {
 	if output.function != "" {
 		sql.WriteByte(')')
 	}
+	return nil
 }

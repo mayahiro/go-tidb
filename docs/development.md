@@ -15,6 +15,7 @@ unknown plan tasks, warning failures, and connection/callback ordering:
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -30,6 +31,13 @@ raw and direct collectors. All paths use identical SQL and destination types;
 the local driver does not evaluate date expressions. Profile its daily path
 with `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` and use
 `raw` for the alternative.
+
+`BenchmarkAggregateConditional` uses the same group counts and result types as
+`BenchmarkAggregate`, with conditional count/sum expressions and a repeated
+conditional output in HAVING. The alternatives use the same SQL and bind
+values. The driver does not evaluate SQL conditions. Profile it with
+`-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` and compare
+with `raw`.
 
 The comparison benchmarks use the same 0/1/100/10,000-row driver data, 21
 SELECT/RU pairs, and three plan/warning pairs. The manual alternative uses
@@ -111,6 +119,35 @@ use typed raw scanning, compare every result, and read immediate same-session
 ServerRU. Each workload also runs public `Compare`; its plans and storage
 aggregation operators are separate observations from ordinary execution.
 These workloads do not establish a universal latency or RU advantage.
+
+The conditional aggregate integration test also uses the dedicated-database
+guards and requires explicit TiFlash opt-in:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterConditionalAggregates$' -count=1 -v
+```
+
+It creates and cleans up its owned `tidbgo_it_conditional_aggregates` table,
+seeds 20,000 rows, analyzes statistics, and requests two TiFlash replicas. It
+checks TRUE/FALSE/NULL conditions, empty and unmatched groups, exact decimals,
+soft deletion, escaped LIKE, alias collisions, HAVING/ordering, daily/monthly
+paging, and both interpolation settings against explicit expected values.
+
+Four workloads cover combined metrics, daily groups, monthly groups, and rare
+matches with a status index. Each compares independent hand-written CASE, IF,
+and filtered SQL through the same typed raw collector. Filtered SQL uses one
+query for all input counts and one for matching counts/sums, merging missing
+groups as zero counts and NULL sums. The rare-match workload requests only
+filtered metrics, so its alternative is a single WHERE query on the indexed
+status column.
+
+Each method warms up twice and measures five rounds with rotating method order
+for auto, TiKV, and TiFlash MPP requests. Latency sums SELECT/row-close time and
+any result merging; it excludes the immediate same-session RU probes. ServerRU
+is summed across the statements needed for one result. Full result values and
+ordering must match. Public `Compare` runs separately for every workload and
+records its own plans and storage aggregation operators. These results do not
+guarantee that combining metrics or using TiFlash reduces latency or RU.
 
 ## Local checks
 

@@ -48,3 +48,23 @@ func Example_calendarAggregation() {
 	// SELECT DATE(`a`.`created_at`) AS `Period`, COUNT(*) AS `Count` FROM `users` AS `a` GROUP BY DATE(`a`.`created_at`) ORDER BY DATE(`a`.`created_at`) ASC
 	// SELECT EXTRACT(YEAR_MONTH FROM `a`.`created_at`) AS `Period`, COUNT(*) AS `Count` FROM `users` AS `a` GROUP BY EXTRACT(YEAR_MONTH FROM `a`.`created_at`) ORDER BY EXTRACT(YEAR_MONTH FROM `a`.`created_at`) ASC
 }
+
+// Per-user totals and metrics for large orders share the same input groups.
+// ScanAll can read the outputs into a struct slice; use a nullable decimal
+// Scanner for LargeTotal because a user can have no matching order.
+func Example_conditionalAggregation() {
+	large := orm.GreaterThanOrEqual("Total", "100.00")
+	q := orm.Aggregate[Order]().
+		Select(orm.Field("UserID"), orm.CountAll().As("AllCount"),
+			orm.CountIf(large).As("LargeCount"), orm.SumIf("Total", large).As("LargeTotal")).
+		GroupBy("UserID").OrderBy(orm.Asc("UserID"))
+	statement, args, err := q.Build()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(statement)
+	fmt.Println(args)
+	// Output:
+	// SELECT `a`.`user_id` AS `UserID`, COUNT(*) AS `AllCount`, COUNT(CASE WHEN `a`.`total` >= ? THEN 1 END) AS `LargeCount`, SUM(CASE WHEN `a`.`total` >= ? THEN `a`.`total` END) AS `LargeTotal` FROM `orders` AS `a` GROUP BY `a`.`user_id` ORDER BY `a`.`user_id` ASC
+	// [100.00 100.00]
+}

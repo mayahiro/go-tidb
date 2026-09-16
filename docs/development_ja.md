@@ -12,6 +12,7 @@
 go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -23,6 +24,10 @@ TiDB、network、driverのargument変換、RUは測定しません
 `BenchmarkAggregatePeriod` は同じgroup数で、期間keyへのHAVINGを含む `Date` と `YearMonth` を、同等のtyped rawと直接collectorで比較します
 すべて同じSQLと結果型を使い、local driverは日時式を評価しません
 日別経路のprofileには `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` を使い、代替経路では `raw` を指定します
+
+`BenchmarkAggregateConditional` は `BenchmarkAggregate` と同じgroup数と結果型を使い、条件付き件数／合計とHAVINGでの条件付き出力の再参照を含みます
+代替方式は同じSQLとbind値を使い、driverはSQL条件を評価しません
+profileには `-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` を使い、`raw` と比較します
 
 比較benchmarkは同じ0／1／100／10,000行のdriver data、21組のSELECT／RU取得、3組のplan／警告を使います
 代替となる手書き方式はtypedな `ScanAll` と結果照合を使い、`Compare` は入力固定、loop前のcompile、raw結果bufferの再利用、sample統計を含みます
@@ -84,6 +89,27 @@ TIMESTAMPとDATETIMEは分けて検証します
 両実装ともtyped rawでscanし、全結果を照合して同じsessionで直後にServerRUを読みます
 各workloadで公開 `Compare` も実行します。そのplanとstorage側の集計operatorは通常実行とは別の観測です
 これらのworkloadは普遍的なlatencyやRUの優位性を示すものではありません
+
+条件付き集計のintegration testも専用databaseのguardと明示的なTiFlash opt-inを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterConditionalAggregates$' -count=1 -v
+```
+
+自分が所有する `tidbgo_it_conditional_aggregates` tableを作成・cleanupし、20,000行の投入とstatistics解析、2つのTiFlash replicaの準備を行います
+TRUE／FALSE／NULLの条件、空と一致行のないgroup、正確なDECIMAL、soft-delete、escape付きLIKE、alias衝突、HAVING／順序、日別・月別のpaging、interpolationの有無を明示した期待値と照合します
+
+4 workloadは複数指標、日別group、月別group、status indexに対する少数の一致行を扱います
+独立した手書きCASE、IF、filter付きSQLを同じtyped raw collectorで比較します
+filter付きSQLは全入力件数のqueryと条件一致の件数／合計のqueryを使い、欠けたgroupを件数0・合計NULLとして統合します
+少数一致のworkloadは条件付き指標だけを要求するため、代替はindexを持つstatus columnへ条件を指定する1つのWHERE queryになります
+
+auto、TiKV、TiFlash MPPの指定ごとに各方式を2回warmupし、方式の順序を交代する5 roundを測定します
+latencyはSELECTからrowsのcloseまでと結果統合の時間を合計し、直後の同じsessionでのRU probeは含みません
+ServerRUは1つの結果に必要なstatementの分を合計します
+全結果値と順序の一致を要求します
+公開 `Compare` はworkloadごとに別途実行し、そのplanとstorage側の集計operatorを記録します
+指標の統合やTiFlashによるlatency／RUの削減は保証しません
 
 ## Local check
 

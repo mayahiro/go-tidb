@@ -26,9 +26,9 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
-- Single-table aggregate builders with daily/monthly grouping, HAVING,
-  output-struct scanning, and explicit TiKV/TiFlash and MPP hints with plan and
-  warning inspection
+- Single-table aggregate builders with conditional counts and sums,
+  daily/monthly grouping, HAVING, output-struct scanning, and explicit
+  TiKV/TiFlash and MPP hints with plan and warning inspection
 - [Aggregate policy comparison](docs/aggregate-comparison.md) with result checks,
   latency/ServerRU samples, separate plans, and baseline capture export
 - Shared-executor statement observation with automatic terminal colors

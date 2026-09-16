@@ -23,7 +23,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
-- 日別・月別のgrouping、HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えた単一テーブルの集計builder
+- 条件付きの件数・合計、日別・月別のgrouping、HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えた単一テーブルの集計builder
 - 結果照合、latency／ServerRU測定、独立plan、baseline用capture出力を備えた[集計の実行方針比較](docs/aggregate-comparison_ja.md)
 - terminalの自動色付きshared-executor statement observation
 - actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析

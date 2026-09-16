@@ -45,6 +45,8 @@ err := q.ScanAll(ctx, db, &stats)
 | `Date("CreatedAt")` | Calendar date as SQL DATE; requires grouping |
 | `YearMonth("CreatedAt")` | Calendar year and month as integer `YYYYMM`; requires grouping |
 | `CountAll()` | `COUNT(*)`, including rows with NULL fields |
+| `CountIf(condition)` | Count rows where a source-model condition is true |
+| `SumIf("Amount", condition)` | Sum non-NULL amounts where the condition is true |
 | `Count("Amount")` | Count non-NULL values |
 | `CountDistinct("ShopID")` | Count distinct non-NULL values of one field |
 | `Sum`, `Avg`, `Min`, `Max` | Aggregate non-NULL values of one source field |
@@ -90,6 +92,58 @@ normal source-field `ScanAll`, aggregate outputs never convert a soft-delete
 NULL to a zero `time.Time`.
 
 See [TiDB aggregate functions](https://docs.pingcap.com/tidb/stable/aggregate-group-by-functions/).
+
+## Conditional aggregation
+
+Use `CountIf` and `SumIf` when different metrics need different input conditions.
+For example, return all orders and paid orders together for each day:
+
+```go
+paid := orm.Equal("Status", "paid")
+q := orm.Aggregate[Order]().
+    Select(orm.Date("CreatedAt").As("Day"), orm.CountAll().As("AllCount"),
+        orm.CountIf(paid).As("PaidCount"), orm.SumIf("Amount", paid).As("PaidTotal")).
+    GroupBy("Day").OrderBy(orm.Asc("Day"))
+
+var days []struct {
+    Day       sql.NullTime
+    AllCount  int64
+    PaidCount int64
+    PaidTotal sql.NullString
+}
+err := q.ScanAll(ctx, db, &days)
+```
+
+Each function takes one existing scalar `Predicate`; combine conditions with
+`And`, `Or`, and `Not`. Conditions reference source Go fields, using the same
+validation, parameter binding, and escaped string matching as `Where`.
+Relations and `Has` are unsupported. Both functions require `As` and work with
+output-name `Having`, ordering, calendar grouping, and [`Compare`](aggregate-comparison.md).
+
+`CountIf(p)` generates `COUNT(CASE WHEN p THEN 1 END)`, and `SumIf("Amount", p)`
+generates `SUM(CASE WHEN p THEN amount END)`. Only SQL TRUE matches; FALSE and
+NULL do not. Count includes matching rows whose amount is NULL. Sum ignores
+NULL amounts and returns NULL when no matching non-NULL amount exists; a
+matching amount of zero returns a non-NULL zero. SQL numeric types and exact
+decimal scanning follow `Sum`.
+
+`Where` and the soft-delete scope filter the input to every metric. Conditions
+inside a metric leave other metrics and groups intact. A group with no matching
+rows therefore has count zero and sum NULL. Empty input with no `GroupBy` returns
+one row with those values; empty grouped input returns no rows.
+
+Reusing a conditional output in `Having` or `OrderBy` repeats its expression and
+parameters in SQL order, avoiding alias/source-column ambiguity. `Build` never
+calls `driver.Valuer`; ordinary execution delegates parameter conversion to the
+driver. `Compare` evaluates each SQL parameter once before its measurement loop
+and keeps that value for all variants and separate plans.
+
+Use query-level `Where` when every metric shares the same input filter. A
+selective indexed filter can cost less than scanning all inputs for conditional
+metrics. Combining several metrics into one statement does not guarantee lower
+latency or RU; compare representative inputs and separately filtered queries.
+See [TiDB control flow](https://docs.pingcap.com/tidb/stable/control-flow-functions/)
+and [TiFlash pushdown support](https://docs.pingcap.com/tidb/stable/tiflash-supported-pushdown-calculations/).
 
 ## Calendar grouping
 

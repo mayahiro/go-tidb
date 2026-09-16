@@ -45,6 +45,8 @@ err := q.ScanAll(ctx, db, &stats)
 | `Date("CreatedAt")` | SQL DATE型の日付key、groupingが必要 |
 | `YearMonth("CreatedAt")` | 整数 `YYYYMM` の年月key、groupingが必要 |
 | `CountAll()` | NULLを含む行も数える `COUNT(*)` |
+| `CountIf(condition)` | source modelの条件が真の行を数える |
+| `SumIf("Amount", condition)` | 条件が真の行でNULL以外の金額を合計する |
 | `Count("Amount")` | NULL以外の値の件数 |
 | `CountDistinct("ShopID")` | 1 fieldのNULL以外の異なる値の件数 |
 | `Sum`、`Avg`、`Min`、`Max` | sourceの1 fieldのNULL以外の値を集計 |
@@ -84,6 +86,52 @@ scanとrowsのcloseが成功してからdestinationを置き換え、errorでは
 通常のsource fieldの `ScanAll` と異なり、集計結果ではsoft-deleteのNULLをzero `time.Time` へ変換しません
 
 [TiDB集計関数](https://docs.pingcap.com/tidb/stable/aggregate-group-by-functions/)も参照してください
+
+## 条件付き集計
+
+指標ごとに異なる入力条件が必要な場合は `CountIf` と `SumIf` を使います
+例えば、全注文と支払済み注文を日別にまとめて取得できます
+
+```go
+paid := orm.Equal("Status", "paid")
+q := orm.Aggregate[Order]().
+    Select(orm.Date("CreatedAt").As("Day"), orm.CountAll().As("AllCount"),
+        orm.CountIf(paid).As("PaidCount"), orm.SumIf("Amount", paid).As("PaidTotal")).
+    GroupBy("Day").OrderBy(orm.Asc("Day"))
+
+var days []struct {
+    Day       sql.NullTime
+    AllCount  int64
+    PaidCount int64
+    PaidTotal sql.NullString
+}
+err := q.ScanAll(ctx, db, &days)
+```
+
+各関数は既存のscalar `Predicate` を1つ受け取り、複数条件は `And`、`Or`、`Not` で組み合わせます
+条件はsourceのGo fieldを参照し、検証、parameter binding、escape付き文字列検索は `Where` と同じです
+Relationと `Has` は扱いません
+両関数とも `As` が必要で、出力名を使う `Having`、順序、期間集計、[`Compare`](aggregate-comparison_ja.md) と組み合わせられます
+
+`CountIf(p)` は `COUNT(CASE WHEN p THEN 1 END)`、`SumIf("Amount", p)` は `SUM(CASE WHEN p THEN amount END)` を生成します
+SQLでTRUEになる行だけが一致し、FALSEとNULLは一致しません
+件数には金額がNULLの一致行も含みます
+合計はNULLの金額を除外し、一致する非NULL金額がなければNULL、金額0の一致行があれば非NULLの0になります
+SQLの数値型と正確なDECIMALのscanは `Sum` と同じです
+
+`Where` とsoft-delete scopeは全指標の入力を絞ります
+指標内の条件は他の指標やgroupを削除しません
+一致行がないgroupは件数0、合計NULLになります
+空入力で `GroupBy` がなければその値の1行を返し、groupingした空入力は0行を返します
+
+条件付き出力を `Having` や `OrderBy` で参照すると、aliasとsource columnの曖昧さを避けるため式とparameterをSQL内の順序で繰り返します
+`Build` は `driver.Valuer` を呼ばず、通常実行ではparameter変換をdriverへ委ねます
+`Compare` は測定loop前に各SQL parameterを1回評価し、全variantと別実行のplanで同じ値を維持します
+
+全指標が同じ入力filterを共有する場合はquery全体の `Where` を使います
+選択性の高いindex filterは、条件付き指標のために全入力をscanするよりcostが小さい場合があります
+複数指標を1 statementにまとめてもlatencyやRUの削減は保証されず、代表入力と条件別queryで比較します
+[TiDBの制御フロー](https://docs.pingcap.com/tidb/stable/control-flow-functions/)と[TiFlash pushdown対応](https://docs.pingcap.com/tidb/stable/tiflash-supported-pushdown-calculations/)も参照してください
 
 ## 日別・月別の集計
 

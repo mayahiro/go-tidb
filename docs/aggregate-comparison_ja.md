@@ -47,6 +47,8 @@ hintによって未対応の処理を実行可能にしたり、不足するレ�
 groupingを使うqueryには `OrderBy` が必須で、順序が一意になるtie-breakerを指定します
 選択した [`Date` と `YearMonth` のkey](aggregates_ja.md#日別月別の集計) にも同じ結果照合を適用できます
 case内でsession timezone、driverの `loc`、`parseTime` を揃えてください
+[`CountIf` と `SumIf`](aggregates_ja.md#条件付き集計) にも同じ結果とNULLの照合を適用します
+HAVING／順序で繰り返す参照を含め、条件式の各SQL parameterをwarmup前に1回ずつ評価して固定します
 `Limit`、`Offset`、predicate、grouping、soft-delete scopeは元の指定を維持します
 `MaxRows` 超過は失敗とし、結果の切り詰めによる成功やLIMITの書き換えは行いません
 memoryには基準結果と再利用する現在結果、およびsampleのmetadataを保持します

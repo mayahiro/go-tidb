@@ -53,6 +53,9 @@ It demonstrates the current struct-first foundation:
 - Daily/monthly registration counts in `Example_calendarAggregation`, using
   a reporting source for the existing database-managed timestamp and grouping
   by selected output names
+- Per-user order counts and conditional counts/sums for large orders in
+  `Example_conditionalAggregation`, retaining groups with no order reaching
+  the value threshold
 - Explicit `CompareOrderTotals` for auto/TiKV/TiFlash MPP result checks,
   latency/ServerRU measurements, and separate plan/warning inspection over a
   caller-provided fixed fixture with TiFlash replicas

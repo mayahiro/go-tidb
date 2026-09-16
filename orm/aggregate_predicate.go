@@ -2,13 +2,11 @@ package orm
 
 import (
 	"fmt"
-	"strings"
 )
 
 type aggregatePredicateCompiler struct {
-	query     *strings.Builder
-	outputs   []aggregateOutput
-	arguments []any
+	*predicateCompiler
+	outputs []aggregateOutput
 }
 
 func (c *aggregatePredicateCompiler) write(p predicate) error {
@@ -98,7 +96,9 @@ func (c *aggregatePredicateCompiler) write(p predicate) error {
 	if calendar {
 		c.query.WriteString("MIN(")
 	}
-	output.write(c.query)
+	if err := output.write(c.predicateCompiler); err != nil {
+		return err
+	}
 	if calendar {
 		c.query.WriteByte(')')
 	}
