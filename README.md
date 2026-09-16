@@ -8,10 +8,16 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
 [Aggregates and TiFlash](docs/aggregates.md) |
+[Windows](docs/windows.md) | [Vector search](docs/vector-search.md) |
+[TiFlash preparation](docs/tiflash.md) |
 [Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
 [Development](docs/development.md)
 
 ## Available features
+
+- To-one related aggregates, conditional relation metrics, and windows over groups
+- Exact/approximate vector search, vector values, and schema/plan diagnostics
+- Explicit TiFlash replica preparation and capability probes
 
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction

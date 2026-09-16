@@ -826,3 +826,32 @@ nested to-one join, and one has-many batch with its nested to-one join
 It uses one pinned connection and reports elapsed time, Go allocations, and
 sampled statement RU summed per operation. Setup, RU-sampling queries, and
 cleanup are outside the timed and statement-counted operation
+
+## Window, vector, and preparation checks
+
+```sh
+go test ./orm ./schema ./tiflash ./vector ./internal/sourcecheck ./examples/starter-app
+go test ./orm -run '^$' -bench '^(BenchmarkAggregateWindow|BenchmarkAggregateRelatedBuild|BenchmarkVectorSearchBuild)$' -benchmem -count=3
+go test ./vector -run '^$' -bench '^(BenchmarkVectorRoundTrip|BenchmarkVectorDecoderAlternatives)$' -benchmem -count=3
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlashExtensions$' -count=1 -v
+```
+
+The connected extension test requires the same dedicated DSN safeguards as the
+other Starter tests. It owns and removes `tidbgo_it_tiflash_extensions`, seeds
+5,000 rows with missing/deleted relations, requests two replicas, and creates an
+L2 vector index. It verifies capability probes and replica waiting; ordinary
+queries/preloads; related grouping and conditional EXISTS metrics; grouped
+ROW_NUMBER/LAG/running SUM against a manual JOIN; prepared/interpolated parameters;
+exact vector results against a TiKV reference; ANN plan selection and prefilter
+fallback; nullable cosine distance and atomic dimension-error handling; and actual
+SHOW CREATE TABLE vector metadata. It retains server warnings instead of claiming
+that every window operator supports MPP. Logged single samples are observations,
+not repeatable performance guarantees or recall benchmarks.
+
+The fake-driver window benchmark covers 0, 1, 100, and 10,000 result groups using
+identical builder/Raw/database/sql results. Vector decoder alternatives cover
+3, 768, and 16,383 dimensions and compare bounded typed-array parsing with token
+parsing. These isolate client CPU/allocation; they do not measure ANN quality,
+TiFlash indexing, network cost, or production throughput. Use the profile workflow
+above with these benchmark names. Test large embeddings and representative
+filters on application data before choosing approximate search.

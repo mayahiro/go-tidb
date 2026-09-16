@@ -783,3 +783,11 @@ scope.
 Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice and
 [`Aggregate[T]`](aggregates.md) for source-model aggregates with optional `Has` filters. Use typed
 `Raw[T]` for joins, CTEs, and SQL beyond these builders.
+
+## Storage and MPP requests
+
+Ordinary query builders support `ReadFrom(orm.TiKV/orm.TiFlash)` and
+`MPP(orm.MPPAuto/orm.MPPEnforce)` across terminals and relation preloads.
+The compiler hints physical aliases after rewrites and preserves the default
+path when no policy is requested. `ForceIndex` conflicts with TiFlash.
+These are requests, not execution guarantees; see [TiFlash policy](tiflash.md).

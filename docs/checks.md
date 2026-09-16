@@ -250,3 +250,21 @@ Invalid input returns status `2`, and I/O or internal failures return status
   recognized DML statement
 - Query plans and RU depend on current statistics, data distribution, and
   workload
+
+## Aggregate and vector evidence
+
+Source lint recognizes aggregate `Build`, `ScanAll`, `Explain`, `ExplainAnalyze`,
+and `Compare` terminals. `AGG001` checks statically known base projection names
+and GROUP BY contracts: exported/unique aliases, required grouping, and valid
+group outputs. Equivalent selected expressions can share one group key.
+`aggregate_patterns`, `analyzed_aggregate_patterns`, and
+`uncertain_aggregate_patterns` report this limited coverage. Dynamic expression
+lists/names and escaped, aliased, or separately mutated builders remain uncertain.
+Predicates, physical types, relation uniqueness, window specifications, and
+optimizer support still require `Build`, schema checks, or explicit execution.
+
+Explicit TiFlash requests skip scalar row-index-prefix advice. Dynamic storage
+choices remain uncertain for index coverage. Aggregate/vector runtime records
+carry SQL fingerprints rather than inferred scalar QueryShapes. See
+[vector diagnostics](vector-search.md#index-definition-and-evidence) for VEC001 through VEC003
+and [plan summaries](tiflash.md#capabilities-and-plan-evidence) for operator facts.

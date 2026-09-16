@@ -39,26 +39,37 @@ type ReadPolicy struct {
 
 func (p ReadPolicy) validate() error {
 	if (p.engineSet || p.Engine != "") && p.Engine != TiKV && p.Engine != TiFlash {
-		return fmt.Errorf("orm: aggregate ReadFrom requires TiKV or TiFlash")
+		return fmt.Errorf("orm: ReadFrom requires TiKV or TiFlash")
 	}
 	if (p.mppSet || p.MPP != "") && p.MPP != MPPAuto && p.MPP != MPPEnforce {
-		return fmt.Errorf("orm: aggregate MPP requires MPPAuto or MPPEnforce")
+		return fmt.Errorf("orm: MPP requires MPPAuto or MPPEnforce")
 	}
 	if p.Engine == TiKV && p.MPP == MPPEnforce {
-		return fmt.Errorf("orm: aggregate MPPEnforce conflicts with TiKV")
+		return fmt.Errorf("orm: MPPEnforce conflicts with TiKV")
 	}
 	return nil
 }
 
 func (p ReadPolicy) write(sql *strings.Builder) {
+	p.writeTables(sql, []string{aggregateRootAlias})
+}
+
+func (p ReadPolicy) writeTables(sql *strings.Builder, tables []string) {
 	if p.Engine == "" && p.MPP == "" {
 		return
 	}
 	sql.WriteString("/*+ ")
-	if p.Engine != "" {
+	if p.Engine != "" && len(tables) != 0 {
 		sql.WriteString("READ_FROM_STORAGE(")
 		sql.WriteString(strings.ToUpper(string(p.Engine)))
-		sql.WriteString("[a]) ")
+		sql.WriteByte('[')
+		for i, table := range tables {
+			if i != 0 {
+				sql.WriteByte(',')
+			}
+			sql.WriteString(table)
+		}
+		sql.WriteString("]) ")
 	}
 	if p.MPP != "" {
 		sql.WriteString("SET_VAR(tidb_allow_mpp=1) SET_VAR(tidb_enforce_mpp=")

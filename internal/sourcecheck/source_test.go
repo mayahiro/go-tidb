@@ -1146,7 +1146,7 @@ func TestFormatStatistics(t *testing.T) {
 	t.Parallel()
 
 	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, QueryPatterns: 6, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2, AnalyzedPatterns: 4, UncertainPatterns: 2}
-	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 relation_topn_patterns=0 analyzed_relation_topn_patterns=0 uncertain_relation_topn_patterns=0 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0"
+	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 relation_topn_patterns=0 analyzed_relation_topn_patterns=0 uncertain_relation_topn_patterns=0 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0 aggregate_patterns=0 analyzed_aggregate_patterns=0 uncertain_aggregate_patterns=0"
 	if got := FormatStatistics(statistics); got != want {
 		t.Fatalf("FormatStatistics() = %q, want %q", got, want)
 	}

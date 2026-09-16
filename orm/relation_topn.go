@@ -131,6 +131,13 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	writeRelationTopNColumns(&query, inlinePreloadRootAlias, base.scanPlan.columns)
 	writeInlinePreloadColumns(&query, inline)
 	query.WriteString(" FROM (SELECT ")
+	if engine := selection.policy().Engine; engine != "" {
+		tables := []string{relationTopNAssociationAlias}
+		if metadata.junction != nil && !plan.junctionOnly {
+			tables = append(tables, relationTopNManyTargetAlias)
+		}
+		ReadPolicy{Engine: engine}.writeTables(&query, tables)
+	}
 	writeRelationTopNColumns(&query, relationTopNAssociationAlias, associationColumns)
 	query.WriteString(" FROM ")
 	writeQuotedIdentifier(&query, associationTable)
@@ -161,10 +168,11 @@ func compileRelationTopNSelect(descriptor *model.Descriptor, base *selectStateme
 	}
 	wroteWhere = writeRelationTopNJunctionScope(&query, relationTopNAssociationAlias, metadata.junction, wroteWhere)
 	targetPredicates := predicateCompiler{
-		descriptor: metadata.target,
-		query:      &query,
-		arguments:  arguments,
-		qualifier:  predicateAlias,
+		descriptor:     metadata.target,
+		query:          &query,
+		arguments:      arguments,
+		qualifier:      predicateAlias,
+		relationEngine: selection.policy().Engine,
 	}
 	for index := range plan.predicate.children {
 		if wroteWhere {

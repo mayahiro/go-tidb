@@ -751,3 +751,25 @@ benchmarkは5個のinline to-one joinを持つparent SELECT、nested to-one join
 1本のpinned connectionを使い、elapsed time、Go allocation、statement単位のsampled RUをoperationごとに合計します
 
 setup、RU sampling query、cleanupは計測時間とapplication statement countに含めません
+
+## Window、vector、準備機能の検証
+
+```sh
+go test ./orm ./schema ./tiflash ./vector ./internal/sourcecheck ./examples/starter-app
+go test ./orm -run '^$' -bench '^(BenchmarkAggregateWindow|BenchmarkAggregateRelatedBuild|BenchmarkVectorSearchBuild)$' -benchmem -count=3
+go test ./vector -run '^$' -bench '^(BenchmarkVectorRoundTrip|BenchmarkVectorDecoderAlternatives)$' -benchmem -count=3
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlashExtensions$' -count=1 -v
+```
+
+接続する拡張testにも他のStarter testと同じ専用DSNの制約があります
+`tidbgo_it_tiflash_extensions` を所有・削除し、不在／削除済み関連を含む5,000行、2レプリカ、L2 vector indexを用意します
+capability確認とreplica待機、通常query／preload、関連groupingと条件付きEXISTS指標、group後のROW_NUMBER／LAG／累積SUMと手動JOINの一致を確認します
+prepared／interpolationの両方式、TiKV参照との正確vector結果一致、ANN planと事前filter時のfallback、nullable cosine距離、次元エラー時の宛先保持、実際のSHOW CREATE TABLE metadataも確認します
+全window operatorのMPP対応を仮定せずserver警告を残します
+記録する単発sampleは観測値であり、再現可能な性能保証や再現率benchmarkではありません
+
+fake driverのwindow benchmarkは0、1、100、10,000groupでbuilder／Raw／database/sqlの同一結果を比較します
+vector decoder比較は3、768、16,383次元で上限付きtyped-array解析とtoken解析を比較します
+これはclient CPU／allocationの測定であり、ANN品質、TiFlash indexing、network cost、production throughputは測りません
+上記profile手順のbenchmark名を置き換えて利用できます
+近似検索の採用前にapplication dataの大きいembeddingと代表的なfilterを測定します

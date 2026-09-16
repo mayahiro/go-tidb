@@ -117,13 +117,27 @@ keyの全要素をSQLの等価比較で照合し、NULL keyや存在しないtar
 
 targetと `via` edgeはactiveなsoft-delete scopeを維持します
 `WithDeleted` が含めるのは削除済みsource行だけです
-関連先のcolumnを出力やgroup keyに使うこと、および `CountIf`、`SumIf`、`Having` 内の `Has` は未対応です
+宣言済みunique target keyを持つto-one関連fieldはdotted pathで出力／group keyに利用できます
+`CountIf` と `SumIf` 内の `Has` に対応しますが、`Having` 内に直接書く `Has` は未対応です
 scalarの条件付き集計、期間key、paging、`ScanAll`、`Compare` は `Where` を通過したsource行に対して利用できます
 
 条件付きのpositive collectionには既存の `SEMI_JOIN_REWRITE()` hintを使い、`Or` または `Not` 配下は通常の `EXISTS` を維持します
 集計compilerはsource tableを保持し、通常queryのTopN／Count書き換えは適用しません
 [Relation predicate](queries_ja.md#relation-predicate)と[optimizer hint](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite)を参照してください
 代表入力と選択性の高い入力を測定してください。関連条件によるlatencyやRUの低下は保証しません
+
+## To-one関連field
+
+`Field("User.Plan").As("Plan")` と `GroupBy("Plan")`、または `Min("User.ID").As("FirstUser")` のような集計を使えます
+dotted pathは入れ子のto-one関連を辿れます
+各target keyは宣言済みprimary／candidate unique keyと一致する必要があり、物理schemaでもその制約を維持します
+has-one宣言だけでは一意性を証明しません。collection pathは拒否します
+
+compilerは同じpathのLEFT JOINを共有し、source行ごとの寄与を1回に保ちます
+不在／削除済みtargetはNULLです。targetの削除条件はONに置き、`WithDeleted` はsourceだけに作用します
+関連式には `As` が必須です。storage hintは関連先の物理aliasにも適用します
+不在targetを扱う出力はnullableにします
+`CountIf(Has(...))` と `SumIf("Amount", Has(...))` は複数一致でsource行を増やさず、指標ごとの対象集合を選びます
 
 ## 条件付き集計
 
@@ -146,9 +160,9 @@ var days []struct {
 err := q.ScanAll(ctx, db, &days)
 ```
 
-各関数は既存のscalar `Predicate` を1つ受け取り、複数条件は `And`、`Or`、`Not` で組み合わせます
+各関数は既存のscalarまたはRelation存在条件の `Predicate` を1つ受け取り、複数条件は `And`、`Or`、`Not` で組み合わせます
 条件はsourceのGo fieldを参照し、検証、parameter binding、escape付き文字列検索は `Where` と同じです
-この2つの関数の内部では `Has` を扱いません
+条件付き `Has` は通常のEXISTSを使い、WHERE向けのsemi-join rewrite hintを付けません
 両関数とも `As` が必要で、出力名を使う `Having`、順序、期間集計、[`Compare`](aggregate-comparison_ja.md) と組み合わせられます
 
 `CountIf(p)` は `COUNT(CASE WHEN p THEN 1 END)`、`SumIf("Amount", p)` は `SUM(CASE WHEN p THEN amount END)` を生成します
@@ -312,7 +326,8 @@ plan callbackのtarget durationは警告probeとconnection固定の時間を除�
 
 RuntimeCaptureは集計SELECTを `typed_aggregate` として記録します
 `s1:` のSQL template fingerprintはhintを含み、bind値を含みません
-scalar query metadataは生成せず、scalar/source query lintは集計shapeを解析しません
+scalar query metadataは生成しません
+source lintは静的に確定した集計出力／groupingを `AGG001` で別途検証します。[coverage](checks_ja.md)を参照してください
 既存のServerRU集計とbaselineではこのrecordを使えます
 fingerprintは入力の選択性やdatasetの版を識別しないため、比較可能な条件ごとにbenchmark case IDとbaselineを管理します
 baseline CLIはfingerprintごとのpolicyを維持します。engine要求をまたぐ測定比較には比較reportを使います
@@ -320,6 +335,10 @@ baseline CLIはfingerprintごとのpolicyを維持します。engine要求をま
 ServerRUは請求RUではありません。server測定値はegressを含まず、採用costは列指向ストレージと実行頻度にも依存します
 [Starter FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/)と[再現可能な確認](development_ja.md#集計とtiflashの検証)を参照してください
 
-明示的なJOIN、関連先の出力field、Preload、window関数、raw式、vector検索、レプリカ自動管理は扱いません
-対応する集計式を超えるSQLには `Raw[T]` を使います
-レプリカはquery実行とは独立して、[Starterの手順](https://docs.pingcap.com/tidb/stable/create-tiflash-replicas/)で明示的に準備します
+to-one関連出力と[groupに対するwindow](windows_ja.md)に対応します
+任意のJOIN、Preload、raw式には `Raw[T]` または別builderを使います
+[ベクトル検索](vector-search_ja.md)は独立したbuilderです
+[レプリカ準備と機能確認](tiflash_ja.md)は明示的な操作として提供します
+
+`Summary()` はoperatorの処理位置、推定／実測出力行数、直下の子の出力と未確定状態を返します
+[summaryの契約](tiflash_ja.md#機能とplanの確認)を参照してください

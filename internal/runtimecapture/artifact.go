@@ -23,6 +23,7 @@ type Source string
 const (
 	SourceTypedSelect    Source = "typed_select"
 	SourceTypedAggregate Source = "typed_aggregate"
+	SourceTypedVector    Source = "typed_vector"
 	SourcePreload        Source = "preload"
 	SourceTypedMutation  Source = "typed_mutation"
 	SourceRaw            Source = "raw"

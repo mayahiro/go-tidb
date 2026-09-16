@@ -16,10 +16,14 @@ func (analyzer *sourceAnalyzer) recordSchemaIndexPattern(
 	relationTopN sourceRelationTopNAnalysis,
 ) {
 	pattern := summary.pattern
-	if pattern.limit.state != sourceBoundPositive || pattern.order == sourceOrderAbsent {
+	if pattern.columnar == sourceTogglePresent || pattern.limit.state != sourceBoundPositive || pattern.order == sourceOrderAbsent {
 		return
 	}
 	analyzer.analysis.Statistics.IndexPatterns++
+	if pattern.columnar == sourceToggleUnknown {
+		analyzer.analysis.Statistics.UncertainIndexPatterns++
+		return
+	}
 
 	var access queryshape.IndexAccess
 	var ok bool

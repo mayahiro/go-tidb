@@ -62,7 +62,14 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	if err != nil {
 		return result, err
 	}
-	result.Requested = ReadPolicy{Engine: q.policy.Engine, MPP: q.policy.MPP}
+	return inspectReadPlan(ctx, executor, c, resolver, q.policy, analyze, "aggregate")
+}
+
+func inspectReadPlan(ctx context.Context, executor QueryExecutor, c compiledAggregate, resolver planAccessResolver, policy ReadPolicy, analyze bool, terminal string) (result AggregatePlan, err error) {
+	if err = validateQueryExecution(ctx, executor); err != nil {
+		return result, err
+	}
+	result.Requested = ReadPolicy{Engine: policy.Engine, MPP: policy.MPP}
 	ctx = executorStatementContext(ctx, executor)
 	var session QueryExecutor
 	var release func() error
@@ -70,7 +77,7 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	case *sql.DB:
 		conn, pinErr := raw.Conn(ctx)
 		if pinErr != nil {
-			return result, fmt.Errorf("orm: pin aggregate plan connection: %w", pinErr)
+			return result, fmt.Errorf("orm: pin read plan connection: %w", pinErr)
 		}
 		session, release = conn, conn.Close
 	case *sql.Conn:
@@ -78,7 +85,7 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	case *sql.Tx:
 		session = raw
 	default:
-		return result, fmt.Errorf("orm: aggregate plan requires *sql.DB, *sql.Conn, or *sql.Tx executor")
+		return result, fmt.Errorf("orm: read plan requires *sql.DB, *sql.Conn, or *sql.Tx executor")
 	}
 	if release != nil {
 		defer func() {
@@ -92,17 +99,17 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 		operation, prefix = StatementExplainAnalyze, explainAnalyzePrefix
 	}
 	statement := prefix + c.sql
-	metadata := statementRuntimeMetadata{source: runtimecapture.SourcePlan, terminal: "aggregate_explain", model: c.source.Name()}
+	metadata := statementRuntimeMetadata{source: runtimecapture.SourcePlan, terminal: terminal + "_explain", model: c.source.Name()}
 	if analyze {
-		metadata.terminal = "aggregate_explain_analyze"
+		metadata.terminal = terminal + "_explain_analyze"
 	}
 	observation := beginStatementObservationWithMetadata(ctx, operation, statement, c.arguments, metadata)
 	started := time.Now()
 	rows, err := session.QueryContext(ctx, statement, c.arguments...)
 	if err != nil {
-		err = fmt.Errorf("orm: query aggregate plan: %w", err)
+		err = fmt.Errorf("orm: query read plan: %w", err)
 	} else if rows == nil {
-		err = fmt.Errorf("orm: aggregate plan executor returned nil rows")
+		err = fmt.Errorf("orm: read plan executor returned nil rows")
 	} else if analyze {
 		result.Executed, err = collectExplainAnalyzeRows(rows, resolver)
 	} else {
@@ -120,10 +127,11 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	return result, err
 }
 
-func (q *AggregateQuery[T]) planAccessResolver(c compiledAggregate) (planAccessResolver, error) {
-	resolver := planAccessResolver{hasRoot: true, root: planAccessBinding{alias: aggregateRootAlias, physicalTable: c.source.TableName(), model: c.source.Name()}}
-	nextAlias := 0
-	err := resolver.appendRelationPredicates(c.source, q.predicates, "", &nextAlias)
+func (q *AggregateQuery[T]) planAccessResolver(_ compiledAggregate) (planAccessResolver, error) {
+	// Only explicit plan inspection pays for bindings. Collect them in SQL
+	// emission order, including repeated CASE expressions in HAVING/ORDER BY.
+	var resolver planAccessResolver
+	_, err := q.compileWithResolver(&resolver)
 	return resolver, err
 }
 

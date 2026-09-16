@@ -154,12 +154,20 @@ The currently implemented surface provides:
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
+- To-one related aggregate fields with declared unique target keys and conditional
+  `Has` metrics, plus [windows over grouped outputs](docs/windows.md)
+- [Vector values/search](docs/vector-search.md), explicit exact/approximate modes,
+  offline index SQL/schema diagnostics, and observed ANN plan evidence
+- [Explicit replica preparation and capability probes](docs/tiflash.md), including
+  initial-readiness waiting and operator/cardinality summaries
+- Conservative aggregate projection/grouping source lint (`AGG001`) with separate
+  resolved/uncertain coverage; complete validation remains in `Build`
 - Source-model `Aggregate[T]` queries with scalar and relation-existence filters,
   validated fields and aggregate
   expressions including `CountIf` and `SumIf`, `Date` and `YearMonth` calendar
   keys, output-name `GROUP BY`,
   `HAVING` and ordering, soft-delete scope, paging, and scalar/struct `ScanAll` results
-- Explicit aggregate `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
+- Explicit SELECT, aggregate, and vector `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
   covering the source and related target/junction table occurrences, with
   statement-scoped settings and no `SET SESSION` or replica provisioning
 - Aggregate plan reports separate requested hints, planned operators, explicit

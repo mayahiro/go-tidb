@@ -58,11 +58,17 @@ func (q *SelectQuery[T]) ScanAll(ctx context.Context, executor QueryExecutor, de
 	if err := validateForceIndex(&selection); err != nil {
 		return err
 	}
+	if err := selection.validatePolicy(); err != nil {
+		return err
+	}
 	compiled, err := compileSelectFromProjection(plan.source, plan.statement, &selection)
 	if err != nil {
 		return err
 	}
 	ctx = executorStatementContext(ctx, executor)
+	if selection.readPolicy != nil {
+		applySelectReadPolicy(plan.source, &selection, &compiled)
+	}
 	metadata := runtimeSelectMetadata(ctx, &selection, compiled, "scan_all")
 	rows, err := queryRows(ctx, executor, compiled, metadata)
 	if err != nil {

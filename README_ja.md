@@ -7,10 +7,16 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 [English](README.md) | [Struct model](docs/models_ja.md) |
 [Query](docs/queries_ja.md) | [Mutationとraw SQL](docs/mutations_ja.md) |
 [集計とTiFlash](docs/aggregates_ja.md) |
+[ウィンドウ関数](docs/windows_ja.md) | [ベクトル検索](docs/vector-search_ja.md) |
+[TiFlashの準備](docs/tiflash_ja.md) |
 [解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
 [Development](docs/development_ja.md)
 
 ## 利用できる機能
+
+- to-one関連集計、Relation条件付き指標、集計後のウィンドウ関数
+- 正確／近似ベクトル検索、ベクトル型、schema／plan診断
+- 明示的なTiFlashレプリカ準備と機能確認
 
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築

@@ -123,8 +123,9 @@ junction rows do not multiply the source row's contribution. SQL equality
 on every key component excludes NULL keys and missing targets.
 
 Targets and `via` edges retain their active soft-delete scopes. `WithDeleted`
-only includes deleted source rows. Related columns cannot be selected or
-grouped, and `Has` is unsupported inside `CountIf`, `SumIf`, and `Having`.
+only includes deleted source rows. To-one related fields can be selected and
+grouped through dotted paths with declared unique target keys (see below).
+`Has` is supported inside `CountIf` and `SumIf`, but not directly inside `Having`.
 Scalar conditional metrics, calendar keys, paging, `ScanAll`, and `Compare`
 work over the source rows that survive `Where`.
 
@@ -135,6 +136,21 @@ rewrites. See [relation predicates](queries.md#relation-predicates) and
 [optimizer hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite).
 Benchmark representative and selective inputs; a related filter does not
 guarantee lower latency or RU.
+
+## To-one related fields
+
+Use `Field("User.Plan").As("Plan")` with `GroupBy("Plan")`, or an aggregate such
+as `Min("User.ID").As("FirstUser")`. Dotted paths can traverse nested to-one
+relations. Every target key must match a declared primary or candidate unique
+key; maintain those constraints in the physical schema. A has-one declaration
+alone does not prove uniqueness. Collection paths are rejected.
+
+The compiler emits shared LEFT JOINs, preserving one input per source row.
+Missing or soft-deleted targets yield NULL. Target deletion conditions stay in
+ON; `WithDeleted` affects only source rows. Related expressions require `As`.
+Storage hints include the related physical aliases. Use nullable outputs for
+missing targets. `CountIf(Has(...))` and `SumIf("Amount", Has(...))` select
+metric-specific source subsets without multiplying rows for multiple matches.
 
 ## Conditional aggregation
 
@@ -157,10 +173,11 @@ var days []struct {
 err := q.ScanAll(ctx, db, &days)
 ```
 
-Each function takes one existing scalar `Predicate`; combine conditions with
+Each function takes one existing scalar or relation-existence `Predicate`; combine conditions with
 `And`, `Or`, and `Not`. Conditions reference source Go fields, using the same
 validation, parameter binding, and escaped string matching as `Where`.
-`Has` is unsupported inside these two functions. Both require `As` and work with
+Conditional `Has` uses plain EXISTS without a WHERE-only semi-join rewrite hint.
+Both require `As` and work with
 output-name `Having`, ordering, calendar grouping, and [`Compare`](aggregate-comparison.md).
 
 `CountIf(p)` generates `COUNT(CASE WHEN p THEN 1 END)`, and `SumIf("Amount", p)`
@@ -327,6 +344,10 @@ accesses that differ from the requested engine. `PLN006` reports MPPEnforce with
 recognized storage tasks but no MPP; unknown tasks prevent that conclusion.
 Ordinary `ExplainAnalyzePlan.Diagnostics` retains its existing severities.
 
+`Summary()` returns operator locations, estimated/actual output cardinalities,
+and immediate child outputs with explicit unknown states. See the
+[summary contract](tiflash.md#capabilities-and-plan-evidence).
+
 ## Measurement and current scope
 
 [`Compare`](aggregate-comparison.md) runs auto, TiKV, and TiFlash MPP with
@@ -348,8 +369,9 @@ probe EXPLAIN statements. Keep ordinary latency separate from EXPLAIN ANALYZE.
 
 RuntimeCapture records aggregate SELECTs as `typed_aggregate`, with an `s1:`
 SQL-template fingerprint that includes hints and excludes bind values. It does
-not emit scalar-query metadata, so scalar/source query lint does not analyze
-aggregate shapes. Existing ServerRU summaries and baselines can use these
+not emit scalar-query metadata. Source lint separately checks statically known
+aggregate projection/grouping contracts with `AGG001`; see [coverage](checks.md).
+Existing ServerRU summaries and baselines can use these
 records. A fingerprint does not identify input selectivity or dataset version:
 maintain separate benchmark case IDs and baselines for comparable conditions.
 The baseline CLI retains its per-fingerprint policy; use the comparison report
@@ -360,8 +382,7 @@ cost also depends on columnar storage and execution frequency. See the
 [Starter FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/) and
 [reproducible checks](development.md#aggregate-and-tiflash-verification).
 
-This API has no explicit joins, related output fields, preload, window functions,
-raw expressions, vector search, or automatic replica management. Use `Raw[T]`
-for SQL beyond the supported aggregate expressions. Provision replicas
-explicitly outside application query execution using the
-[Starter replica procedure](https://docs.pingcap.com/tidb/stable/create-tiflash-replicas/).
+This API supports to-one related outputs and [windows over groups](windows.md).
+Arbitrary joins, preload, and raw expressions use `Raw[T]` or other builders.
+[Vector search](vector-search.md) is a separate builder.
+[Replica preparation and capability probes](tiflash.md) are explicit operations.

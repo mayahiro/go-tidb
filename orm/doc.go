@@ -13,12 +13,16 @@
 // a separate struct slice, retaining the source model's SQL and diagnostics.
 // Aggregate groups source-model rows with relation filters and validated
 // expressions, conditional counts/sums, daily/monthly calendar keys, output-name grouping,
-// HAVING, and optional TiKV/TiFlash and MPP hints. Its ScanAll
+// HAVING, to-one related fields, grouped windows, and optional TiKV/TiFlash and
+// MPP hints. Its ScanAll
 // maps output Go names to scalar or struct slices. Aggregate Explain and
 // ExplainAnalyze return requested policy, plan rows, and same-session warnings.
 // Aggregate Compare explicitly compares auto, TiKV, and TiFlash MPP with result
 // checks, latency/ServerRU samples, and separate plans. Complete comparisons can
 // export measured samples through WriteCapture for existing baseline checks.
+// Nearest builds exact or explicitly approximate vector Top-K searches with
+// prefilters, vector plan evidence, and offline schema/index checks. ReadFrom
+// and MPP also apply to ordinary SELECTs and all their preload statements.
 // Preload adds explicit nested hydration without lazy loading. Belongs-to and
 // has-one relations use inline LEFT JOINs; has-many and many-to-many
 // relations use deterministic secondary SELECTs, with unrestricted root

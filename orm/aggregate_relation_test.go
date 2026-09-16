@@ -107,11 +107,6 @@ func TestAggregateRelationValidationBeforeIO(t *testing.T) {
 			t.Fatalf("invalid predicate reached I/O: %v", err)
 		}
 	}
-	for _, expr := range []AggregateExpression{CountIf(Has("User")), SumIf("Amount", Not(Has("User")))} {
-		if _, _, err := Aggregate[aggregateRelationOrder]().Select(expr.As("Value")).Build(); err == nil {
-			t.Fatal("relation accepted inside aggregate expression")
-		}
-	}
 }
 
 func TestAggregateRelationPlanResolvesPaths(t *testing.T) {

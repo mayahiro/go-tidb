@@ -285,6 +285,13 @@ Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
 introspection, and migration application are not implemented.
 
+`RankedOrderTotals` demonstrates a to-one related output and ranking over groups.
+`SearchDocuments` demonstrates exact vector search within a tenant using a narrow
+projection. Its `search_documents` schema uses three-dimensional non-NULL vectors.
+The offline preparation example generates replica and vector-index DDL without
+executing it. See [windows](../../docs/windows.md),
+[vector search](../../docs/vector-search.md), and [TiFlash preparation](../../docs/tiflash.md).
+
 The [struct model guide](../../docs/models.md) documents the complete current
 mapping boundary. The [scalar query guide](../../docs/queries.md) documents the
 public query API, and the [mutation guide](../../docs/mutations.md) documents

@@ -32,6 +32,11 @@ func (q Query) Fingerprint() string {
 		encoder.string("force-index")
 		encoder.string(q.ForceIndex)
 	}
+	if q.ReadEngine != "" || q.MPP != "" {
+		encoder.string("read-policy")
+		encoder.string(q.ReadEngine)
+		encoder.string(q.MPP)
+	}
 	var digest [sha256.Size]byte
 	sum := encoder.hash.Sum(digest[:0])
 	var result [len(fingerprintPrefix) + sha256.Size*2]byte

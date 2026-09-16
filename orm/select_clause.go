@@ -96,10 +96,11 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 		arguments = make([]any, 0, argumentCount)
 	}
 	predicates := predicateCompiler{
-		descriptor: descriptor,
-		query:      &query,
-		arguments:  arguments,
-		qualifier:  qualifier,
+		descriptor:     descriptor,
+		query:          &query,
+		arguments:      arguments,
+		qualifier:      qualifier,
+		relationEngine: selection.policy().Engine,
 	}
 	wroteWhere := false
 	if filterSoftDeleted {
@@ -167,6 +168,9 @@ func compileSelectClauses(descriptor *model.Descriptor, base *selectStatement, s
 }
 
 func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selection *selectQuery) (compiledClauses, error) {
+	if err := selection.validatePolicy(); err != nil {
+		return compiledClauses{}, err
+	}
 	if err := validateForceIndex(selection); err != nil {
 		return compiledClauses{}, err
 	}
@@ -229,10 +233,11 @@ func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selec
 		arguments = make([]any, 0, argumentCount)
 	}
 	predicates := predicateCompiler{
-		descriptor: descriptor,
-		query:      &query,
-		arguments:  arguments,
-		qualifier:  qualifier,
+		descriptor:     descriptor,
+		query:          &query,
+		arguments:      arguments,
+		qualifier:      qualifier,
+		relationEngine: selection.policy().Engine,
 	}
 	wroteWhere := false
 	if filterSoftDeleted {
@@ -284,8 +289,16 @@ func compileUnorderedClauses(descriptor *model.Descriptor, baseSQL string, selec
 		predicates.arguments = append(predicates.arguments, selection.pagination.offset)
 	}
 
+	statement := query.String()
+	if policy := selection.policy(); policy.Engine != "" {
+		root := qualifier
+		if root == "" {
+			root = descriptor.TableName()
+		}
+		statement = prependReadPolicy(statement, ReadPolicy{Engine: policy.Engine}, []string{root})
+	}
 	return compiledClauses{
-		sql:       query.String(),
+		sql:       statement,
 		arguments: predicates.arguments,
 	}, nil
 }

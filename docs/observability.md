@@ -635,3 +635,8 @@ are outside this boundary because `go-tidb` does not install a
 
 No observer is installed by default. Offline `Build` and model inspection never
 emit events or perform I/O.
+
+Vector SELECTs use `source=typed_vector` and bind-free, hint-sensitive SQL
+fingerprints. Ordinary SELECT QueryShapes include optional `read_engine` and
+`mpp` fields in their fingerprints, preventing measurements for different
+requests from sharing a baseline. Unspecified-policy fingerprints are unchanged.

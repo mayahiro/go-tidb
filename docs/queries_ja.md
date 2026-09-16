@@ -773,3 +773,10 @@ public query surfaceは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists
 IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 
 必要に応じて `Has` で絞り込むsource modelの集計には [`Aggregate[T]`](aggregates_ja.md)、builderの範囲外となるJOINやCTEなどにはtyped `Raw[T]` を使います
+
+## StorageとMPPの要求
+
+通常query builderの `ReadFrom(orm.TiKV/orm.TiFlash)` と `MPP(orm.MPPAuto/orm.MPPEnforce)` はterminalとRelation preload全体に適用します
+compilerは書き換え後の物理aliasへhintを付け、方針未指定時は通常経路を維持します
+`ForceIndex` とTiFlashは併用できません
+指定は実行保証ではありません。[TiFlashの実行方針](tiflash_ja.md)を参照してください

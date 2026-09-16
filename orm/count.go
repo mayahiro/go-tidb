@@ -48,6 +48,20 @@ func (q *SelectQuery[T]) compileCount() (compiledCount, error) {
 	if q == nil {
 		return compiledCount{}, fmt.Errorf("orm: compile a nil SELECT query")
 	}
+	if err := q.selection.validatePolicy(); err != nil {
+		return compiledCount{}, err
+	}
+	compiled, err := q.compileCountBase()
+	if err == nil && q.selection.readPolicy != nil {
+		compiled.sql = prependReadPolicy(compiled.sql, ReadPolicy{MPP: q.selection.policy().MPP}, nil)
+	}
+	return compiled, err
+}
+
+func (q *SelectQuery[T]) compileCountBase() (compiledCount, error) {
+	if q == nil {
+		return compiledCount{}, fmt.Errorf("orm: compile a nil SELECT query")
+	}
 	modelType := q.selection.modelType
 	if modelType == nil {
 		modelType = reflect.TypeFor[T]()

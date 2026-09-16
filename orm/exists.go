@@ -72,7 +72,7 @@ func (q *SelectQuery[T]) compileExists() (compiledExists, error) {
 	}
 	return compiledExists{
 		modelName: descriptor.Name(),
-		sql:       clauses.sql,
+		sql:       prependReadPolicy(clauses.sql, ReadPolicy{MPP: selection.policy().MPP}, nil),
 		arguments: clauses.arguments,
 	}, nil
 }

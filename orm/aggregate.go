@@ -14,7 +14,8 @@ import (
 )
 
 // AggregateExpression is an immutable model field, calendar key, or aggregate function.
-// Fields use exported source Go names; As names an exported destination field.
+// Fields use exported Go names, optionally prefixed by a to-one relation path;
+// As names an exported destination field.
 type AggregateExpression struct {
 	function  string
 	field     string
@@ -23,8 +24,11 @@ type AggregateExpression struct {
 	condition *predicate
 }
 
-// Field selects a source Go field whose output must also occur in GroupBy.
-// Its default output name is the source Go field name.
+// Field selects a Go field whose output must also occur in GroupBy. A dotted
+// path traverses to-one relations with declared unique target keys using LEFT
+// JOINs. Missing or soft-deleted targets produce NULL. Collection paths are
+// rejected to preserve one input row per source. Related fields require As.
+// A source field's default output name is its Go field name.
 func Field(name string) AggregateExpression { return AggregateExpression{field: name} }
 
 // Date extracts the calendar date of a source Go field as SQL DATE. Use As to
@@ -51,7 +55,8 @@ func CountAll() AggregateExpression { return AggregateExpression{function: "COUN
 // CountIf counts input rows for which condition is SQL TRUE. FALSE and NULL
 // conditions do not count. Empty inputs and groups without matches return zero.
 // The condition uses source Go fields and existing scalar predicates, including
-// And, Or, and Not; Has is not supported. Use As to name the output.
+// And, Or, Not, and Has. Has tests existence without multiplying input rows.
+// Use As to name the output.
 func CountIf(condition Predicate) AggregateExpression {
 	return AggregateExpression{function: "COUNT(*)", condition: &condition.value}
 }
@@ -73,7 +78,7 @@ func Sum(field string) AggregateExpression { return AggregateExpression{function
 // SumIf sums non-NULL field values in rows for which condition is SQL TRUE.
 // It returns SQL NULL when no matching non-NULL value exists, including empty
 // inputs. Field and condition use source Go names; condition supports the same
-// scalar predicates as CountIf. Use As and a nullable destination when needed.
+// predicates as CountIf, including Has. Use As and a nullable destination when needed.
 // TiDB determines the SQL numeric type, as for Sum.
 func SumIf(field string, condition Predicate) AggregateExpression {
 	return AggregateExpression{function: "SUM", field: field, condition: &condition.value}
@@ -98,8 +103,8 @@ func (e AggregateExpression) As(name string) AggregateExpression {
 
 // AggregateQuery builds one read-only aggregate SELECT over source-model rows.
 // Where supports scalar and relation-existence predicates and soft deletion.
-// Outputs use source fields; joins, preload, raw expressions, and window
-// functions are not exposed. Concurrent reads are safe after
+// Output field paths can traverse to-one relations with declared unique keys.
+// Preload and raw expressions are not exposed. Concurrent reads are safe after
 // construction; concurrent mutation is not supported.
 type AggregateQuery[T any] struct {
 	expressions []AggregateExpression
@@ -110,6 +115,7 @@ type AggregateQuery[T any] struct {
 	pagination  pagination
 	withDeleted bool
 	policy      ReadPolicy
+	windows     []WindowExpression
 }
 
 // Aggregate starts an aggregate query over the application-owned source model T.
@@ -196,7 +202,7 @@ func (q *AggregateQuery[T]) WithDeleted() *AggregateQuery[T] {
 }
 
 // ReadFrom requests TiKV or TiFlash for the source and every related target and
-// junction table in Where, using aliases in their respective query blocks.
+// junction table, using aliases in their respective query blocks.
 // It generates an optimizer hint, not an execution guarantee. A later call wins.
 func (q *AggregateQuery[T]) ReadFrom(engine StorageEngine) *AggregateQuery[T] {
 	if q != nil {
@@ -271,6 +277,7 @@ func (q *AggregateQuery[T]) ScanAll(ctx context.Context, executor QueryExecutor,
 
 type aggregateOutput struct {
 	name, function, column string
+	qualifier              string
 	condition              *predicate
 }
 type compiledAggregate struct {
@@ -283,8 +290,15 @@ type compiledAggregate struct {
 const aggregateRootAlias = "a"
 
 func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
+	return q.compileWithResolver(nil)
+}
+
+func (q *AggregateQuery[T]) compileWithResolver(resolver *planAccessResolver) (compiledAggregate, error) {
 	if q == nil {
 		return compiledAggregate{}, fmt.Errorf("orm: compile a nil aggregate query")
+	}
+	if len(q.windows) != 0 {
+		return q.compileWindows(resolver)
 	}
 	modelType := reflect.TypeFor[T]()
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -307,14 +321,14 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		return compiledAggregate{}, fmt.Errorf("orm: aggregate Select requires at least one expression")
 	}
 	outputs := make([]aggregateOutput, len(q.expressions))
+	var joins aggregateJoins
 	conditionalArgs, conditionalCapacity := 0, 0
 	for i, expr := range q.expressions {
 		name := expr.alias
 		if !expr.aliased && expr.function == "" {
 			name = expr.field
 		}
-		first, _ := utf8.DecodeRuneInString(name)
-		if !token.IsIdentifier(name) || !unicode.IsUpper(first) || len(name) > 64 {
+		if !validAggregateOutputName(name) {
 			return compiledAggregate{}, fmt.Errorf("orm: aggregate output %q requires an exported Go name of at most 64 bytes; use As", name)
 		}
 		for _, earlier := range outputs[:i] {
@@ -322,22 +336,23 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 				return compiledAggregate{}, fmt.Errorf("orm: aggregate output name %q collides with %q", name, earlier.name)
 			}
 		}
-		output := aggregateOutput{name: name, function: expr.function, condition: expr.condition}
+		output := aggregateOutput{name: name, function: expr.function, condition: expr.condition, qualifier: aggregateRootAlias}
 		if expr.condition != nil {
 			conditions := []predicate{*expr.condition}
-			if predicatesHaveRelation(conditions) {
-				return compiledAggregate{}, fmt.Errorf("orm: conditional aggregate %s does not support Has or relations", name)
-			}
 			args, capacity := predicateCompileCapacity(conditions)
+			if predicatesHaveRelation(conditions) {
+				capacity += relationPredicateExtraSQLCapacity(d, conditions)
+			}
 			conditionalArgs += args
 			conditionalCapacity += capacity
 		}
 		if expr.function != "COUNT(*)" {
-			field, err := aggregateSourceField(d, expr.field)
+			field, qualifier, err := joins.resolve(d, expr.field)
 			if err != nil {
 				return compiledAggregate{}, err
 			}
 			output.column = field.ColumnName()
+			output.qualifier = qualifier
 		}
 		outputs[i] = output
 	}
@@ -383,9 +398,15 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	var sql strings.Builder
 	sql.Grow(128 + capacity + havingCapacity + conditionalCapacity + len(outputs)*64 + len(groups)*32 + len(q.orderBy)*64)
 	args := make([]any, 0, argumentCount+havingArgs+conditionalArgs+2)
-	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias, relationEngine: q.policy.Engine}
+	if resolver != nil {
+		*resolver = planAccessResolver{hasRoot: true, root: planAccessBinding{alias: aggregateRootAlias, physicalTable: d.TableName(), model: d.Name()}}
+		for _, join := range joins {
+			resolver.add(planAccessBinding{alias: join.alias, physicalTable: join.plan.target.TableName(), model: join.plan.target.Name(), relationPath: join.path})
+		}
+	}
+	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias, relationEngine: q.policy.Engine, planAccess: resolver}
 	sql.WriteString("SELECT ")
-	q.policy.write(&sql)
+	joins.writePolicy(&sql, q.policy)
 	for i, output := range outputs {
 		if i != 0 {
 			sql.WriteString(", ")
@@ -399,6 +420,7 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	sql.WriteString(" FROM ")
 	writeQuotedIdentifier(&sql, d.TableName())
 	sql.WriteString(" AS `a`")
+	joins.write(&sql)
 	softDelete, active := activeSoftDeleteField(d, q.withDeleted)
 	if active {
 		sql.WriteString(" WHERE ")
@@ -469,6 +491,11 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	return compiledAggregate{source: d, sql: sql.String(), arguments: args, outputs: outputs}, nil
 }
 
+func validAggregateOutputName(name string) bool {
+	first, _ := utf8.DecodeRuneInString(name)
+	return token.IsIdentifier(name) && unicode.IsUpper(first) && len(name) <= 64
+}
+
 func aggregateSourceField(d *model.Descriptor, name string) (model.Field, error) {
 	field, ok := d.FieldByGoName(name)
 	if !ok || field.IsComputed() {
@@ -491,7 +518,7 @@ func (output aggregateOutput) isGroupKey() bool {
 }
 
 func (output aggregateOutput) sameExpression(other aggregateOutput) bool {
-	return output.function == other.function && output.column == other.column
+	return output.function == other.function && output.column == other.column && output.qualifier == other.qualifier
 }
 
 func (output aggregateOutput) write(compiler *predicateCompiler) error {
@@ -502,14 +529,20 @@ func (output aggregateOutput) write(compiler *predicateCompiler) error {
 		} else {
 			sql.WriteString("SUM(CASE WHEN ")
 		}
-		if err := compiler.write(*output.condition); err != nil {
+		// An existence value inside CASE must retain unmatched source rows, so
+		// the WHERE-only semi-join rewrite hint does not apply here.
+		previousConditional := compiler.conditional
+		compiler.conditional = true
+		err := compiler.write(*output.condition)
+		compiler.conditional = previousConditional
+		if err != nil {
 			return fmt.Errorf("orm: conditional aggregate %s: %w", output.name, err)
 		}
 		sql.WriteString(" THEN ")
 		if output.function == "COUNT(*)" {
 			sql.WriteByte('1')
 		} else {
-			writeQualifiedIdentifier(sql, aggregateRootAlias, output.column)
+			writeQualifiedIdentifier(sql, output.qualifier, output.column)
 		}
 		sql.WriteString(" END)")
 		return nil
@@ -526,7 +559,7 @@ func (output aggregateOutput) write(compiler *predicateCompiler) error {
 		sql.WriteString(output.function)
 		sql.WriteByte('(')
 	}
-	writeQualifiedIdentifier(sql, aggregateRootAlias, output.column)
+	writeQualifiedIdentifier(sql, output.qualifier, output.column)
 	if output.function != "" {
 		sql.WriteByte(')')
 	}

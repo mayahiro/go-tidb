@@ -661,3 +661,7 @@ callback内で `go-tidb` を通じて実行したstatementは、transaction-boun
 defaultではobserverを設定しません
 
 offlineの `Build` とmodel inspectionはeventを生成せず、I/Oも行いません
+
+vector SELECTは `source=typed_vector` とbind値を含まずhintを区別するSQL fingerprintを使います
+通常SELECTのQueryShapeは任意の `read_engine` と `mpp` をfingerprintに含め、異なる要求の測定が同じbaselineに混ざることを防ぎます
+方針未指定時のfingerprintは変わりません
