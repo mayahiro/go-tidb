@@ -772,4 +772,4 @@ public query surfaceは `Build`、`All`、`ScanAll`、`First`、`Only`、`Exists
 
 IDのsliceは `Select("ID").ScanAll(ctx, db, &ids)` で取得します
 
-単一テーブルの集計には [`Aggregate[T]`](aggregates_ja.md)、builderの範囲外となるJOINやCTEなどにはtyped `Raw[T]` を使います
+必要に応じて `Has` で絞り込むsource modelの集計には [`Aggregate[T]`](aggregates_ja.md)、builderの範囲外となるJOINやCTEなどにはtyped `Raw[T]` を使います

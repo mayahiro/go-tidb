@@ -96,9 +96,10 @@ func (e AggregateExpression) As(name string) AggregateExpression {
 	return e
 }
 
-// AggregateQuery builds one read-only, single-table aggregate SELECT offline.
-// It supports scalar predicates and soft deletion, but not relations, joins,
-// preload, raw expressions, or window functions. Concurrent reads are safe after
+// AggregateQuery builds one read-only aggregate SELECT over source-model rows.
+// Where supports scalar and relation-existence predicates and soft deletion.
+// Outputs use source fields; joins, preload, raw expressions, and window
+// functions are not exposed. Concurrent reads are safe after
 // construction; concurrent mutation is not supported.
 type AggregateQuery[T any] struct {
 	expressions []AggregateExpression
@@ -135,7 +136,9 @@ func (q *AggregateQuery[T]) GroupBy(outputs ...string) *AggregateQuery[T] {
 	return q
 }
 
-// Where appends scalar source-model predicates joined by AND. Has is rejected.
+// Where appends source-model predicates joined by AND. Has filters by related
+// row existence, including nested relations, without multiplying source rows.
+// Related targets and via edges retain their active soft-delete scopes.
 func (q *AggregateQuery[T]) Where(predicates ...Predicate) *AggregateQuery[T] {
 	if q != nil {
 		for _, p := range predicates {
@@ -183,7 +186,8 @@ func (q *AggregateQuery[T]) Offset(value int64) *AggregateQuery[T] {
 	return q
 }
 
-// WithDeleted includes soft-deleted source rows in the aggregation.
+// WithDeleted includes soft-deleted source rows in the aggregation. Related
+// targets and via edges in Has retain their active soft-delete scopes.
 func (q *AggregateQuery[T]) WithDeleted() *AggregateQuery[T] {
 	if q != nil {
 		q.withDeleted = true
@@ -191,7 +195,8 @@ func (q *AggregateQuery[T]) WithDeleted() *AggregateQuery[T] {
 	return q
 }
 
-// ReadFrom requests TiKV or TiFlash for this query's single source table.
+// ReadFrom requests TiKV or TiFlash for the source and every related target and
+// junction table in Where, using aliases in their respective query blocks.
 // It generates an optimizer hint, not an execution guarantee. A later call wins.
 func (q *AggregateQuery[T]) ReadFrom(engine StorageEngine) *AggregateQuery[T] {
 	if q != nil {
@@ -301,9 +306,6 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 	if len(q.expressions) == 0 {
 		return compiledAggregate{}, fmt.Errorf("orm: aggregate Select requires at least one expression")
 	}
-	if predicatesHaveRelation(q.predicates) {
-		return compiledAggregate{}, fmt.Errorf("orm: aggregate Where does not support Has or relations")
-	}
 	outputs := make([]aggregateOutput, len(q.expressions))
 	conditionalArgs, conditionalCapacity := 0, 0
 	for i, expr := range q.expressions {
@@ -374,11 +376,14 @@ func (q *AggregateQuery[T]) compile() (compiledAggregate, error) {
 		}
 	}
 	argumentCount, capacity := predicateCompileCapacity(q.predicates)
+	if predicatesHaveRelation(q.predicates) {
+		capacity += relationPredicateExtraSQLCapacity(d, q.predicates)
+	}
 	havingArgs, havingCapacity := predicateCompileCapacity(q.having)
 	var sql strings.Builder
 	sql.Grow(128 + capacity + havingCapacity + conditionalCapacity + len(outputs)*64 + len(groups)*32 + len(q.orderBy)*64)
 	args := make([]any, 0, argumentCount+havingArgs+conditionalArgs+2)
-	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias}
+	compiler := predicateCompiler{descriptor: d, query: &sql, arguments: args, qualifier: aggregateRootAlias, relationEngine: q.policy.Engine}
 	sql.WriteString("SELECT ")
 	q.policy.write(&sql)
 	for i, output := range outputs {

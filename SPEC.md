@@ -154,12 +154,14 @@ The currently implemented surface provides:
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
-- Single-table `Aggregate[T]` queries with validated fields and aggregate
+- Source-model `Aggregate[T]` queries with scalar and relation-existence filters,
+  validated fields and aggregate
   expressions including `CountIf` and `SumIf`, `Date` and `YearMonth` calendar
   keys, output-name `GROUP BY`,
   `HAVING` and ordering, soft-delete scope, paging, and scalar/struct `ScanAll` results
 - Explicit aggregate `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
-  with statement-scoped settings and no `SET SESSION` or replica provisioning
+  covering the source and related target/junction table occurrences, with
+  statement-scoped settings and no `SET SESSION` or replica provisioning
 - Aggregate plan reports separate requested hints, planned operators, explicit
   EXPLAIN ANALYZE execution, and same-session warnings; see
   [aggregate contracts](docs/aggregates.md)

@@ -193,7 +193,22 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	}
 
 	c.query.WriteString("EXISTS (SELECT ")
-	if relationPredicateUsesSemiJoinRewrite(plan, current, c.negationDepth, c.disjunctionDepth) {
+	semiJoin := relationPredicateUsesSemiJoinRewrite(plan, current, c.negationDepth, c.disjunctionDepth)
+	if c.relationEngine != "" {
+		c.query.WriteString("/*+ READ_FROM_STORAGE(")
+		c.query.WriteString(strings.ToUpper(string(c.relationEngine)))
+		c.query.WriteByte('[')
+		c.query.WriteString(targetAlias)
+		if plan.junction != nil {
+			c.query.WriteByte(',')
+			c.query.WriteString(relationJunctionAlias(aliasIndex))
+		}
+		c.query.WriteString("]) ")
+		if semiJoin {
+			c.query.WriteString("SEMI_JOIN_REWRITE() ")
+		}
+		c.query.WriteString("*/ ")
+	} else if semiJoin {
 		c.query.WriteString(relationSemiJoinRewriteHint)
 	}
 	c.query.WriteString("1 FROM ")

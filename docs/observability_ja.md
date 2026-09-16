@@ -2,7 +2,7 @@
 
 [English](observability.md)
 
-単一テーブル集計の実行方針、同じconnectionでのplan警告取得、TiFlash／MPPのtask判定は[集計とTiFlash](aggregates_ja.md)を参照してください
+sourceと関連tableに適用する集計の実行方針、同じconnectionでのplan警告取得、TiFlash／MPPのtask判定は[集計とTiFlash](aggregates_ja.md)を参照してください
 集計SELECTのcaptureは `source=typed_aggregate` とhintを含む `s1:` statement fingerprintを使い、scalar query shapeとbind値を含みません
 明示的な集計plan callは対象EXPLAIN statementをcaptureします。補助的な `SHOW WARNINGS` はplan APIから返し、別のcapture recordやServerRUのauxiliary countには含みません
 

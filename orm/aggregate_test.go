@@ -144,7 +144,7 @@ func TestAggregateRejectsInvalidStructureOffline(t *testing.T) {
 		{"SQL field", aggregateStatsQuery().GroupBy("shop_key"), "unknown output"},
 		{"computed", Aggregate[aggregateOrder]().Select(Sum("Computed").As("Total")), "base-table field"},
 		{"unknown where", aggregateStatsQuery().Where(Equal("unknown", 1)), "mapped scalar"},
-		{"relation", aggregateStatsQuery().Where(Not(Has("Orders"))), "relations"},
+		{"unknown relation", aggregateStatsQuery().Where(Not(Has("Orders"))), "not a mapped relation"},
 		{"having source", aggregateStatsQuery().Having(Equal("Amount", 1)), "unknown output"},
 		{"having nil", aggregateStatsQuery().Having(Equal("Total", nil)), "NULL argument"},
 		{"having LIKE", aggregateStatsQuery().Having(Contains("Total", "1")), "unsupported"},

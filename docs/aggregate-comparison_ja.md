@@ -99,9 +99,14 @@ compile、connection取得、引数固定、結果照合、RU取得、plan、cal
 | Status | 意味 |
 | --- | --- |
 | `unrequested` | Autoには確認対象となるstorage／MPPの明示要求がない |
-| `matched` | 認識できた対象tableのaccessが要求engineと一致し、MPP強制時はMPP taskもある |
+| `matched` | source storageへのaccessがあり、認識できたsource／関連tableのaccessが要求engineと一致し、MPP強制時はMPP taskもある |
 | `mismatch` | 認識できたaccessが別engineを使うか、強制したMPPがない |
-| `unknown` | Plan取得に失敗した、taskが未知、または対象storageへのaccessがない |
+| `unknown` | Plan取得に失敗した、taskやtableの対応が未知、またはsource storageへのaccessがない |
+
+[`Where(Has(...))`](aggregates_ja.md#関連行による絞り込み) はsource、target、中間tableに同じpolicyを使います
+planではphysical tableとRelation pathを解決し、関連tableが別engineを使う場合もmismatchにします
+照合対象は観測できたaccessです。TiDBの最適化で削除されたtableには確認するaccessがありません
+physical table名だけでは区別できない場合、特に自己参照ではRelation pathが不明のままになることがあります
 
 `TableDual` のようなstorage accessのないplanではengineを確認できず、強制policyは `unknown` になります
 独立planは通常SELECT sampleの実行engineを証明しません

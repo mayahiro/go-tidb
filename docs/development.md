@@ -16,6 +16,7 @@ go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateRelation$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -38,6 +39,12 @@ conditional output in HAVING. The alternatives use the same SQL and bind
 values. The driver does not evaluate SQL conditions. Profile it with
 `-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` and compare
 with `raw`.
+
+`BenchmarkAggregateRelation` compares nested `Has` filters using the same
+0/1/100/10,000 group counts, SQL, bindings, and destination types through
+aggregate, raw, and direct collectors. The driver does not execute relation
+lookups. Profile `-bench '^BenchmarkAggregateRelation$/^rows_100$/^aggregate$'`
+and the corresponding `raw` path with the commands below.
 
 The comparison benchmarks use the same 0/1/100/10,000-row driver data, 21
 SELECT/RU pairs, and three plan/warning pairs. The manual alternative uses
@@ -148,6 +155,28 @@ is summed across the statements needed for one result. Full result values and
 ordering must match. Public `Compare` runs separately for every workload and
 records its own plans and storage aggregation operators. These results do not
 guarantee that combining metrics or using TiFlash reduces latency or RU.
+
+The relation aggregate test also requires the dedicated test database and opt-in:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterAggregateRelations$' -count=1 -v
+```
+
+It owns and cleans up `tidbgo_it_aggregate_relation_nodes` (10,000 source rows
+and 20,000 related rows) and `tidbgo_it_aggregate_relation_edges` (20,000 edges).
+It analyzes statistics and requests two TiFlash replicas per table. Explicit
+contracts cover repeated matches, NULL/missing keys, source/target/edge soft
+deletion, nested and negated conditions, `Or`, empty and all-NULL aggregates,
+calendar keys, conditional metrics, HAVING, paging, and both interpolation modes.
+
+Broad monthly, selective, many-group, and `via` workloads compare independently
+written hinted EXISTS, plain EXISTS, and JOIN against distinct matching keys.
+All use typed Raw, identical result types, and exact result/order checks. Each
+method warms up twice and measures five samples in rotating order for auto,
+TiKV, and TiFlash MPP. Latency includes Raw construction, SELECT, scanning, and
+row closure; immediate same-session RU probes are excluded. Public `Compare`
+runs separately to verify results, related-table plan bindings, engine requests,
+and warnings. Neither a hint nor a rewritten JOIN guarantees a faster plan.
 
 ## Local checks
 

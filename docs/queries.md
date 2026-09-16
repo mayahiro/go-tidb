@@ -781,5 +781,5 @@ many-to-many relation predicates, and nested direct or many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.
 Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice and
-[`Aggregate[T]`](aggregates.md) for single-table aggregate queries. Use typed
+[`Aggregate[T]`](aggregates.md) for source-model aggregates with optional `Has` filters. Use typed
 `Raw[T]` for joins, CTEs, and SQL beyond these builders.

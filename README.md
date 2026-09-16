@@ -26,7 +26,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
-- Single-table aggregate builders with conditional counts and sums,
+- Source-model aggregate builders with relation filters, conditional counts and sums,
   daily/monthly grouping, HAVING, output-struct scanning, and explicit
   TiKV/TiFlash and MPP hints with plan and warning inspection
 - [Aggregate policy comparison](docs/aggregate-comparison.md) with result checks,
@@ -433,7 +433,8 @@ Soft-delete models add active-row guards to SELECT and UPDATE statements.
 models continue to use physical DELETE. Zero-valued soft-delete fields in
 `Upsert` and `UpsertMany` write NULL and therefore restore conflicting rows.
 
-Use [`Aggregate[T]`](docs/aggregates.md) for single-table grouped queries.
+Use [`Aggregate[T]`](docs/aggregates.md) to group source-model rows, optionally
+filtered by related data with `Where(Has(...))`.
 Use `Raw[T]` for joins, CTEs, and other SQL outside the scalar or aggregate
 builder. Returned column names map to model columns, including fields tagged
 `computed`. Use `RawExec` only when a mutation expression cannot be represented

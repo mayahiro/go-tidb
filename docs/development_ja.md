@@ -13,6 +13,7 @@ go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
 go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateRelation$' -benchmem -benchtime=100ms -count=3
 go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
 ```
 
@@ -28,6 +29,10 @@ TiDB、network、driverのargument変換、RUは測定しません
 `BenchmarkAggregateConditional` は `BenchmarkAggregate` と同じgroup数と結果型を使い、条件付き件数／合計とHAVINGでの条件付き出力の再参照を含みます
 代替方式は同じSQLとbind値を使い、driverはSQL条件を評価しません
 profileには `-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` を使い、`raw` と比較します
+
+`BenchmarkAggregateRelation` は入れ子の `Has` を含む集計を、同じ0／1／100／10,000 group、SQL、bind値、結果型でaggregate／raw／直接collectorと比較します
+driverは関連先の検索を実行しません
+profileには以下のcommandで `-bench '^BenchmarkAggregateRelation$/^rows_100$/^aggregate$'` と対応する `raw` 経路を指定します
 
 比較benchmarkは同じ0／1／100／10,000行のdriver data、21組のSELECT／RU取得、3組のplan／警告を使います
 代替となる手書き方式はtypedな `ScanAll` と結果照合を使い、`Compare` は入力固定、loop前のcompile、raw結果bufferの再利用、sample統計を含みます
@@ -110,6 +115,23 @@ ServerRUは1つの結果に必要なstatementの分を合計します
 全結果値と順序の一致を要求します
 公開 `Compare` はworkloadごとに別途実行し、そのplanとstorage側の集計operatorを記録します
 指標の統合やTiFlashによるlatency／RUの削減は保証しません
+
+Relation集計のtestも専用test databaseと明示的なopt-inを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterAggregateRelations$' -count=1 -v
+```
+
+`tidbgo_it_aggregate_relation_nodes` のsource 10,000行と関連20,000行、`tidbgo_it_aggregate_relation_edges` の20,000行を所有し、終了時にcleanupします
+statisticsを解析し、各tableに2つのTiFlash replicaを要求します
+重複一致、NULL／欠落key、source／target／edgeのsoft-delete、入れ子・否定・Or、空／全NULL集計、期間key、条件付き集計、HAVING、paging、interpolationの有無を明示した期待値と照合します
+
+広い月別、選択性の高い条件、多数group、viaの4 workloadで、独立した手書きhint付きEXISTS、通常EXISTS、重複を除いた一致keyとのJOINを比較します
+typed Rawと同じ結果型を使い、全結果値と順序を照合します
+auto、TiKV、TiFlash MPPごとに各方式を2回warmupし、方式順を交代して5 sampleを測定します
+latencyはRaw構築、SELECT、scan、rows closeを含み、直後の同じsessionによるRU probeを除きます
+公開 `Compare` を別途実行し、結果、関連tableのplan対応、engine要求、警告を検証します
+hintやJOINへの書き換えによる高速化は保証しません
 
 ## Local check
 

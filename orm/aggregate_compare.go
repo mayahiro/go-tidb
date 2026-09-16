@@ -50,6 +50,8 @@ type AggregateComparison struct {
 // SQL is a bind-free template. Plan comes from a separate EXPLAIN ANALYZE.
 // PlanStatus is unrequested, matched, mismatch, or unknown; it never labels the
 // ordinary samples' actual engine. Error describes this variant's failure.
+// Policy checks include observed related-table accesses as well as the source;
+// unknown table bindings cannot establish a match.
 type AggregateVariantComparison struct {
 	Name          string
 	Requested     ReadPolicy
@@ -122,6 +124,10 @@ func (q *AggregateQuery[T]) Compare(ctx context.Context, executor QueryExecutor,
 		return report, err
 	}
 	original, err := q.compile()
+	if err != nil {
+		return report, err
+	}
+	resolver, err := q.planAccessResolver(original)
 	if err != nil {
 		return report, err
 	}
@@ -244,7 +250,7 @@ func (q *AggregateQuery[T]) Compare(ctx context.Context, executor QueryExecutor,
 	for index := range compiled {
 		variant := &report.Variants[index]
 		var pending aggregateCompareObservation
-		variant.Plan, pending, variant.Error = inspectAggregateComparisonPlan(ctx, session, compiled[index], arguments, original.arguments, variant.Requested)
+		variant.Plan, pending, variant.Error = inspectAggregateComparisonPlan(ctx, session, compiled[index], arguments, original.arguments, variant.Requested, resolver)
 		if pending.observation != nil {
 			observations = append(observations, pending)
 		}
@@ -304,7 +310,7 @@ func (o *AggregateCompareOptions) normalize() error {
 	return nil
 }
 
-func inspectAggregateComparisonPlan(ctx context.Context, session aggregateCompareSession, c compiledAggregate, arguments, original []any, policy ReadPolicy) (plan AggregatePlan, pending aggregateCompareObservation, err error) {
+func inspectAggregateComparisonPlan(ctx context.Context, session aggregateCompareSession, c compiledAggregate, arguments, original []any, policy ReadPolicy, resolver planAccessResolver) (plan AggregatePlan, pending aggregateCompareObservation, err error) {
 	plan.Requested = policy
 	statement := explainAnalyzePrefix + c.sql
 	pending.observation = beginStatementObservationWithMetadata(ctx, StatementExplainAnalyze, statement, original, statementRuntimeMetadata{source: runtimecapture.SourcePlan, terminal: "aggregate_compare_plan", model: c.source.Name()})
@@ -317,7 +323,6 @@ func inspectAggregateComparisonPlan(ctx context.Context, session aggregateCompar
 		if rows == nil {
 			err = fmt.Errorf("orm: aggregate Compare plan executor returned nil rows")
 		} else {
-			resolver := planAccessResolver{hasRoot: true, root: planAccessBinding{alias: aggregateRootAlias, physicalTable: c.source.TableName(), model: c.source.Name()}}
 			plan.Executed, err = collectExplainAnalyzeRows(rows, resolver)
 		}
 	}
@@ -338,11 +343,14 @@ func aggregateComparisonPlanStatus(plan AggregatePlan, table string) string {
 		task := row.TaskInfo()
 		unknown = unknown || !task.Known
 		mpp = mpp || task.Kind == "mpp"
-		if row.PhysicalTable != table || task.Engine == "" {
+		if task.Engine == "" || planAccessObjectTable(row.AccessObject) == "" {
 			continue
 		}
-		found = true
-		mismatch = mismatch || task.Engine != plan.Requested.Engine
+		if row.PhysicalTable == "" {
+			unknown = true
+		}
+		found = found || row.PhysicalTable == table
+		mismatch = mismatch || (plan.Requested.Engine != "" && task.Engine != plan.Requested.Engine)
 	}
 	if mismatch {
 		return "mismatch"

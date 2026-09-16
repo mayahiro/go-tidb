@@ -68,3 +68,21 @@ func Example_conditionalAggregation() {
 	// SELECT `a`.`user_id` AS `UserID`, COUNT(*) AS `AllCount`, COUNT(CASE WHEN `a`.`total` >= ? THEN 1 END) AS `LargeCount`, SUM(CASE WHEN `a`.`total` >= ? THEN `a`.`total` END) AS `LargeTotal` FROM `orders` AS `a` GROUP BY `a`.`user_id` ORDER BY `a`.`user_id` ASC
 	// [100.00 100.00]
 }
+
+// Nested relation filters restrict orders without counting a matching order
+// more than once. ScanAll can read UserID, Count, and Total into a result slice.
+func Example_relationAggregation() {
+	q := orm.Aggregate[Order]().
+		Where(orm.Has("User", orm.Has("Roles", orm.Equal("Name", "subscriber")))).
+		Select(orm.Field("UserID"), orm.CountAll().As("Count"), orm.Sum("Total").As("Total")).
+		GroupBy("UserID").OrderBy(orm.Asc("UserID"))
+	statement, args, err := q.Build()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(statement)
+	fmt.Println(args)
+	// Output:
+	// SELECT `a`.`user_id` AS `UserID`, COUNT(*) AS `Count`, SUM(`a`.`total`) AS `Total` FROM `orders` AS `a` WHERE EXISTS (SELECT 1 FROM `users` AS `tidbgo_r1` WHERE (`tidbgo_r1`.`id` = `a`.`user_id`) AND EXISTS (SELECT /*+ SEMI_JOIN_REWRITE() */ 1 FROM `user_roles` AS `tidbgo_j2` JOIN `roles` AS `tidbgo_r2` ON (`tidbgo_r2`.`id` = `tidbgo_j2`.`role_id`) WHERE (`tidbgo_j2`.`user_id` = `tidbgo_r1`.`id`) AND `tidbgo_r2`.`name` = ?)) GROUP BY `a`.`user_id` ORDER BY `a`.`user_id` ASC
+	// [subscriber]
+}

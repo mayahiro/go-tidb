@@ -2,7 +2,7 @@
 
 [日本語](aggregates_ja.md)
 
-`Aggregate[T]` builds a single-table aggregate SELECT from a source model.
+`Aggregate[T]` aggregates source-model rows, with optional relation-existence filters.
 `Build` is offline. `ScanAll`, `Explain`, `ExplainAnalyze`, and `Compare` use an explicit
 executor. The source needs no primary key and the result needs no model tags.
 
@@ -13,6 +13,15 @@ type Order struct {
     Amount     int64
     CreatedAt  *time.Time
     Status     string
+    UserID     int64
+    User       *User `tidbgo:"belongs_to,join=UserID:ID"`
+    DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+
+type User struct {
+    model.Meta `tidbgo:"table=users"`
+    ID         int64 `tidbgo:",pk"`
+    Plan       string
     DeletedAt  time.Time `tidbgo:",soft_delete"`
 }
 
@@ -56,7 +65,7 @@ results. `Field` defaults to its source Go name and also accepts `As`. Output na
 exported Go identifiers of at most 64 bytes and unique ignoring case. Source
 references use exact Go field names, never SQL column names or raw expressions.
 
-`Where` uses existing scalar predicates against the source model. Soft-deleted
+`Where` uses existing scalar predicates and `Has` against the source model. Soft-deleted
 rows are excluded unless `WithDeleted` is called. `GroupBy`, `Having`, and
 `OrderBy` refer to exact selected output Go names. The compiler renders
 unambiguous expression references when an output name shadows a source column.
@@ -93,6 +102,40 @@ NULL to a zero `time.Time`.
 
 See [TiDB aggregate functions](https://docs.pingcap.com/tidb/stable/aggregate-group-by-functions/).
 
+## Filtering by related rows
+
+Use `Has` in `Where` to restrict source rows by related data. For example,
+aggregate orders placed by users on a paid plan:
+
+```go
+q := orm.Aggregate[Order]().
+    Where(orm.Has("User", orm.Equal("Plan", "paid"))).
+    Select(orm.YearMonth("CreatedAt").As("Month"),
+        orm.CountAll().As("Count"), orm.Sum("Amount").As("Total")).
+    GroupBy("Month").OrderBy(orm.Asc("Month"))
+```
+
+`Has` accepts direct, many-to-many, and `via` relations, including nested
+`Has` and `And`/`Or`/`Not`. Each `Has` names one relation field; use nested
+calls for longer paths. Its conditions use the target model's Go fields.
+The compiler emits correlated `EXISTS`, so several matching targets or
+junction rows do not multiply the source row's contribution. SQL equality
+on every key component excludes NULL keys and missing targets.
+
+Targets and `via` edges retain their active soft-delete scopes. `WithDeleted`
+only includes deleted source rows. Related columns cannot be selected or
+grouped, and `Has` is unsupported inside `CountIf`, `SumIf`, and `Having`.
+Scalar conditional metrics, calendar keys, paging, `ScanAll`, and `Compare`
+work over the source rows that survive `Where`.
+
+Filtered positive collections use the existing `SEMI_JOIN_REWRITE()` hint;
+conditions under `Or` or `Not` keep plain `EXISTS`. The aggregate compiler
+retains the source table and does not apply scalar-query TopN or Count
+rewrites. See [relation predicates](queries.md#relation-predicates) and
+[optimizer hints](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite).
+Benchmark representative and selective inputs; a related filter does not
+guarantee lower latency or RU.
+
 ## Conditional aggregation
 
 Use `CountIf` and `SumIf` when different metrics need different input conditions.
@@ -117,7 +160,7 @@ err := q.ScanAll(ctx, db, &days)
 Each function takes one existing scalar `Predicate`; combine conditions with
 `And`, `Or`, and `Not`. Conditions reference source Go fields, using the same
 validation, parameter binding, and escaped string matching as `Where`.
-Relations and `Has` are unsupported. Both functions require `As` and work with
+`Has` is unsupported inside these two functions. Both require `As` and work with
 output-name `Having`, ordering, calendar grouping, and [`Compare`](aggregate-comparison.md).
 
 `CountIf(p)` generates `COUNT(CASE WHEN p THEN 1 END)`, and `SumIf("Amount", p)`
@@ -219,7 +262,11 @@ q.ReadFrom(orm.TiFlash).MPP(orm.MPPEnforce)
 
 This adds `READ_FROM_STORAGE(TIFLASH[a])`, `SET_VAR(tidb_allow_mpp=1)`, and
 `SET_VAR(tidb_enforce_mpp=1)` to the outer SELECT. `a` is the compiler-owned
-source-table alias. `ReadFrom(TiKV)` selects row storage. `MPPAuto` enables MPP
+source-table alias. The same engine request is also emitted inside each `Has`
+query block for its target and junction aliases, including nested and self
+relations. Prepare replicas for every referenced table when requesting TiFlash.
+`SET_VAR` appears only on the outer statement. `ReadFrom(TiKV)` requests row
+storage for all these tables. `MPPAuto` enables MPP
 with cost-based selection; `MPPEnforce` bypasses the MPP cost comparison.
 Explicit TiKV plus MPPEnforce is rejected offline. Later calls replace the same
 policy component. Omitting a component generates no corresponding hint and
@@ -313,7 +360,7 @@ cost also depends on columnar storage and execution frequency. See the
 [Starter FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/) and
 [reproducible checks](development.md#aggregate-and-tiflash-verification).
 
-This initial API has no joins, relation predicates, preload, window functions,
+This API has no explicit joins, related output fields, preload, window functions,
 raw expressions, vector search, or automatic replica management. Use `Raw[T]`
 for SQL beyond the supported aggregate expressions. Provision replicas
 explicitly outside application query execution using the

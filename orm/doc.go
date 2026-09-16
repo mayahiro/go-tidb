@@ -11,8 +11,8 @@
 // compiles relation existence conditions without implicit loading.
 // ScanAll reads a single column into a scalar slice or selected Go fields into
 // a separate struct slice, retaining the source model's SQL and diagnostics.
-// Aggregate builds single-table grouped queries with validated expressions,
-// conditional counts/sums, daily/monthly calendar keys, output-name grouping,
+// Aggregate groups source-model rows with relation filters and validated
+// expressions, conditional counts/sums, daily/monthly calendar keys, output-name grouping,
 // HAVING, and optional TiKV/TiFlash and MPP hints. Its ScanAll
 // maps output Go names to scalar or struct slices. Aggregate Explain and
 // ExplainAnalyze return requested policy, plan rows, and same-session warnings.

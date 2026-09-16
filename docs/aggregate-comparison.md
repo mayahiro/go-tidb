@@ -111,9 +111,16 @@ below for measurement-only baseline input.
 | Status | Meaning |
 | --- | --- |
 | `unrequested` | Auto has no explicit storage/MPP request to verify |
-| `matched` | Recognized target-table access matches the requested engine, with an MPP task when enforced |
+| `matched` | Source storage access is observed, all recognized source/related table accesses match the engine, and an MPP task exists when enforced |
 | `mismatch` | Recognized access uses another engine, or enforced MPP is absent |
-| `unknown` | Plan collection failed, tasks are unknown, or target storage access is absent |
+| `unknown` | Plan collection failed, tasks or table bindings are unknown, or source storage access is absent |
+
+[`Where(Has(...))`](aggregates.md#filtering-by-related-rows) uses the same policy
+for the source, targets, and junctions. Plans resolve physical tables and relation
+paths, and a related table using another engine makes the policy a mismatch.
+The check covers observed accesses; a table removed by TiDB optimization has no
+access to verify. An ambiguous physical-table name can leave its relation path
+unknown, especially for self relations.
 
 A storage-free plan such as `TableDual` cannot confirm an engine and yields
 `unknown` for a forced policy. A separate plan never proves which engine served

@@ -23,7 +23,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
-- 条件付きの件数・合計、日別・月別のgrouping、HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えた単一テーブルの集計builder
+- Relation条件、条件付きの件数・合計、日別・月別のgrouping、HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えたsource modelの集計builder
 - 結果照合、latency／ServerRU測定、独立plan、baseline用capture出力を備えた[集計の実行方針比較](docs/aggregate-comparison_ja.md)
 - terminalの自動色付きshared-executor statement observation
 - actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析
@@ -441,7 +441,7 @@ soft-delete modelのSELECTとUPDATEにはactive-row guardを追加します
 
 `Upsert` と `UpsertMany` のzero-valued soft-delete fieldはNULLを書き込むため、conflictしたrowをrestoreします
 
-単一テーブルのgroupingには [`Aggregate[T]`](docs/aggregates_ja.md) を使います
+source modelのgroupingには [`Aggregate[T]`](docs/aggregates_ja.md) を使い、`Where(Has(...))` で関連先のデータを条件に絞り込めます
 scalar／aggregate builderの範囲外となるJOIN、CTEなどには `Raw[T]` を使います
 
 result column名を `computed` fieldを含むmodel columnへmappingします

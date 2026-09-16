@@ -2,7 +2,7 @@
 
 [English](aggregates.md)
 
-`Aggregate[T]` はsource modelから単一テーブルの集計SELECTを構築します
+`Aggregate[T]` はsource modelの行を集計し、関連行の存在条件で絞り込めます
 `Build` はofflineです。`ScanAll`、`Explain`、`ExplainAnalyze`、`Compare` は明示的なexecutorを使います
 sourceに主キーは不要で、結果structにmodel tagは不要です
 
@@ -13,6 +13,15 @@ type Order struct {
     Amount     int64
     CreatedAt  *time.Time
     Status     string
+    UserID     int64
+    User       *User `tidbgo:"belongs_to,join=UserID:ID"`
+    DeletedAt  time.Time `tidbgo:",soft_delete"`
+}
+
+type User struct {
+    model.Meta `tidbgo:"table=users"`
+    ID         int64 `tidbgo:",pk"`
+    Plan       string
     DeletedAt  time.Time `tidbgo:",soft_delete"`
 }
 
@@ -56,7 +65,7 @@ err := q.ScanAll(ctx, db, &stats)
 出力名は64 byte以内のexported Go識別子で、大文字小文字を区別せず一意である必要があります
 sourceの参照には正確なGo field名を使い、SQL column名やraw式は使いません
 
-`Where` はsource modelに対する既存のscalar predicateを使います
+`Where` はsource modelに対する既存のscalar predicateと `Has` を使います
 `WithDeleted` を呼ばない限りsoft-delete済みの行を除外します
 `GroupBy`、`Having`、`OrderBy` は選択済み出力の正確なGo名を参照します
 compilerは出力名とsource column名が衝突しても曖昧にならない式の参照を生成します
@@ -87,6 +96,35 @@ scanとrowsのcloseが成功してからdestinationを置き換え、errorでは
 
 [TiDB集計関数](https://docs.pingcap.com/tidb/stable/aggregate-group-by-functions/)も参照してください
 
+## 関連行による絞り込み
+
+`Where` の `Has` で関連先のデータを条件にsource行を絞り込めます
+例えば有料プランのユーザーによる注文を月別に集計します
+
+```go
+q := orm.Aggregate[Order]().
+    Where(orm.Has("User", orm.Equal("Plan", "paid"))).
+    Select(orm.YearMonth("CreatedAt").As("Month"),
+        orm.CountAll().As("Count"), orm.Sum("Amount").As("Total")).
+    GroupBy("Month").OrderBy(orm.Asc("Month"))
+```
+
+`Has` はdirect、many-to-many、`via` に対応し、入れ子の `Has` と `And`／`Or`／`Not` を使えます
+各 `Has` には1つのRelation field名を指定し、長いpathは入れ子の呼び出しで表します
+内部の条件はtarget modelのGo field名を使います
+compilerは相関 `EXISTS` を生成するため、複数のtargetや中間行が一致してもsource行の寄与は増えません
+keyの全要素をSQLの等価比較で照合し、NULL keyや存在しないtargetは一致しません
+
+targetと `via` edgeはactiveなsoft-delete scopeを維持します
+`WithDeleted` が含めるのは削除済みsource行だけです
+関連先のcolumnを出力やgroup keyに使うこと、および `CountIf`、`SumIf`、`Having` 内の `Has` は未対応です
+scalarの条件付き集計、期間key、paging、`ScanAll`、`Compare` は `Where` を通過したsource行に対して利用できます
+
+条件付きのpositive collectionには既存の `SEMI_JOIN_REWRITE()` hintを使い、`Or` または `Not` 配下は通常の `EXISTS` を維持します
+集計compilerはsource tableを保持し、通常queryのTopN／Count書き換えは適用しません
+[Relation predicate](queries_ja.md#relation-predicate)と[optimizer hint](https://docs.pingcap.com/tidb/stable/optimizer-hints/#semi_join_rewrite)を参照してください
+代表入力と選択性の高い入力を測定してください。関連条件によるlatencyやRUの低下は保証しません
+
 ## 条件付き集計
 
 指標ごとに異なる入力条件が必要な場合は `CountIf` と `SumIf` を使います
@@ -110,7 +148,7 @@ err := q.ScanAll(ctx, db, &days)
 
 各関数は既存のscalar `Predicate` を1つ受け取り、複数条件は `And`、`Or`、`Not` で組み合わせます
 条件はsourceのGo fieldを参照し、検証、parameter binding、escape付き文字列検索は `Where` と同じです
-Relationと `Has` は扱いません
+この2つの関数の内部では `Has` を扱いません
 両関数とも `As` が必要で、出力名を使う `Having`、順序、期間集計、[`Compare`](aggregate-comparison_ja.md) と組み合わせられます
 
 `CountIf(p)` は `COUNT(CASE WHEN p THEN 1 END)`、`SumIf("Amount", p)` は `SUM(CASE WHEN p THEN amount END)` を生成します
@@ -199,7 +237,10 @@ q.ReadFrom(orm.TiFlash).MPP(orm.MPPEnforce)
 
 最外SELECTへ `READ_FROM_STORAGE(TIFLASH[a])`、`SET_VAR(tidb_allow_mpp=1)`、`SET_VAR(tidb_enforce_mpp=1)` を追加します
 `a` はcompilerが所有するsource tableのaliasです
-`ReadFrom(TiKV)` は行指向ストレージを指定します
+同じengine指定を、各 `Has` のquery block内でtargetと中間tableのaliasにも付け、入れ子と自己参照も扱います
+TiFlashを指定する場合は参照するすべてのtableにreplicaを準備してください
+`SET_VAR` は外側のstatementだけに付けます
+`ReadFrom(TiKV)` はこれらすべてのtableに行指向ストレージを要求します
 `MPPAuto` はMPPを許可してcostに基づく選択を使い、`MPPEnforce` はMPPのcost比較を上書きします
 明示的なTiKVとMPPEnforceの組み合わせはofflineで拒否します
 同じ設定項目への後続callは前の値を置き換えます
@@ -279,6 +320,6 @@ baseline CLIはfingerprintごとのpolicyを維持します。engine要求をま
 ServerRUは請求RUではありません。server測定値はegressを含まず、採用costは列指向ストレージと実行頻度にも依存します
 [Starter FAQ](https://docs.pingcap.com/tidbcloud/serverless-faqs/)と[再現可能な確認](development_ja.md#集計とtiflashの検証)を参照してください
 
-初期APIはJOIN、Relation predicate、Preload、window関数、raw式、vector検索、レプリカ自動管理を扱いません
+明示的なJOIN、関連先の出力field、Preload、window関数、raw式、vector検索、レプリカ自動管理は扱いません
 対応する集計式を超えるSQLには `Raw[T]` を使います
 レプリカはquery実行とは独立して、[Starterの手順](https://docs.pingcap.com/tidb/stable/create-tiflash-replicas/)で明示的に準備します

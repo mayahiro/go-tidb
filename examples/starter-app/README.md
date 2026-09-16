@@ -56,6 +56,8 @@ It demonstrates the current struct-first foundation:
 - Per-user order counts and conditional counts/sums for large orders in
   `Example_conditionalAggregation`, retaining groups with no order reaching
   the value threshold
+- Order totals restricted by a user's role in `Example_relationAggregation`,
+  using nested `Has` without multiplying orders by matching related rows
 - Explicit `CompareOrderTotals` for auto/TiKV/TiFlash MPP result checks,
   latency/ServerRU measurements, and separate plan/warning inspection over a
   caller-provided fixed fixture with TiFlash replicas

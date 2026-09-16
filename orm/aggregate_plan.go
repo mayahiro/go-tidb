@@ -58,6 +58,10 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	if err != nil {
 		return result, err
 	}
+	resolver, err := q.planAccessResolver(c)
+	if err != nil {
+		return result, err
+	}
 	result.Requested = ReadPolicy{Engine: q.policy.Engine, MPP: q.policy.MPP}
 	ctx = executorStatementContext(ctx, executor)
 	var session QueryExecutor
@@ -100,7 +104,6 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	} else if rows == nil {
 		err = fmt.Errorf("orm: aggregate plan executor returned nil rows")
 	} else if analyze {
-		resolver := planAccessResolver{hasRoot: true, root: planAccessBinding{alias: aggregateRootAlias, physicalTable: c.source.TableName(), model: c.source.Name()}}
 		result.Executed, err = collectExplainAnalyzeRows(rows, resolver)
 	} else {
 		result.Planned, err = collectExplainRows(rows)
@@ -115,6 +118,13 @@ func (q *AggregateQuery[T]) inspectPlan(ctx context.Context, executor QueryExecu
 	}
 	observation.finishOutcomeDuration(0, false, int64(len(result.Planned)+len(result.Executed)), err == nil, err, elapsed)
 	return result, err
+}
+
+func (q *AggregateQuery[T]) planAccessResolver(c compiledAggregate) (planAccessResolver, error) {
+	resolver := planAccessResolver{hasRoot: true, root: planAccessBinding{alias: aggregateRootAlias, physicalTable: c.source.TableName(), model: c.source.Name()}}
+	nextAlias := 0
+	err := resolver.appendRelationPredicates(c.source, q.predicates, "", &nextAlias)
+	return resolver, err
 }
 
 func collectPlanWarnings(ctx context.Context, session QueryExecutor) ([]PlanWarning, error) {

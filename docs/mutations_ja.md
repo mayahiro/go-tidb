@@ -372,7 +372,7 @@ custom `driver.Valuer` は `Value` methodを実行せずbind argumentとして�
 
 ## Typed raw result
 
-単一テーブルの集計には [`Aggregate[T]`](aggregates_ja.md) を使います
+必要に応じて `Has` で絞り込むsource modelの集計には [`Aggregate[T]`](aggregates_ja.md) を使います
 scalar／aggregate builderの範囲外となるJOIN、CTEなどには `Raw[T]` を使います
 
 ```go

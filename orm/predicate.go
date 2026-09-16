@@ -54,6 +54,7 @@ type predicateCompiler struct {
 	negationDepth    int
 	disjunctionDepth int
 	operation        string
+	relationEngine   StorageEngine
 }
 
 func (c *predicateCompiler) operationName() string {
