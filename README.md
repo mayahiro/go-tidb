@@ -11,6 +11,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 [Windows](docs/windows.md) | [Vector search](docs/vector-search.md) |
 [TiFlash preparation](docs/tiflash.md) |
 [Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
+[Server warnings](docs/warnings.md) |
 [Development](docs/development.md)
 
 ## Available features

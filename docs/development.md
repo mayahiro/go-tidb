@@ -855,3 +855,22 @@ parsing. These isolate client CPU/allocation; they do not measure ANN quality,
 TiFlash indexing, network cost, or production throughput. Use the profile workflow
 above with these benchmark names. Test large embeddings and representative
 filters on application data before choosing approximate search.
+
+## Warning verification
+
+```sh
+go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
+```
+
+The connected test needs the dedicated `TIDBGO_TEST_DSN` described above. It
+creates and removes only its owned `tidbgo_it_warning_state` table. It checks
+warning/RU interference, observed SELECT and mutation warnings, safe capture
+analysis, and rotated small-query latency with collection off/on. The existing
+TiFlash extension test also checks window-plan warning delivery and ordinary
+SELECT warning coverage. The offline benchmark compares no collection, opt-in
+collection, and manual connection pinning plus SHOW WARNINGS for 1/100 rows and
+0/1/1,000 warning rows. It excludes network and TiDB time. Profile its
+`warnings_1/rows_100/collect` and `warnings_1000/rows_1/collect` paths with the
+profile commands above.

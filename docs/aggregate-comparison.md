@@ -168,3 +168,11 @@ the same variant and SQL shape. Cross-engine comparisons use the report's
 measurements; a TiKV baseline cannot silently accept a TiFlash fingerprint.
 See [baseline coverage](workload-baselines.md) and
 [reproducible verification](development.md#aggregate-and-tiflash-verification).
+
+## Warning observation
+
+Separate plan executions publish their existing warnings to observers and
+captures, with value-free summaries for the built-in logger and CLI.
+`CollectWarnings` on ordinary comparison samples reports
+`ErrWarningsWithServerRU`: comparison preserves the immediate RU probe.
+`WriteCapture` remains a measurement-only export. See [warning diagnostics](warnings.md).

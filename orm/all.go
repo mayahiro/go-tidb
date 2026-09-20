@@ -129,8 +129,8 @@ func queryTextRowsWithMetadata(ctx context.Context, executor QueryExecutor, mode
 
 func queryTextRowsOperationWithMetadata(ctx context.Context, executor QueryExecutor, operation StatementOperation, modelName, query string, arguments []any, metadata statementRuntimeMetadata) (queryResultRows, error) {
 	observation := beginStatementObservationWithMetadata(ctx, operation, query, arguments, metadata)
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUQueryExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticQueryExecutor(ctx, executor)
 	}
 	rows, err := executor.QueryContext(ctx, query, arguments...)
 	if err != nil {

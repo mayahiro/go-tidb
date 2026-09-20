@@ -193,6 +193,10 @@ The currently implemented surface provides:
 - Observer-scoped ServerRU capture that temporarily pins `*sql.DB` per
   recognized DML statement and records one auxiliary query without replacing
   target results on diagnostic failure
+- Opt-in ordinary DML warning collection, automatic delivery of already
+  collected aggregate/vector plan warnings, and value-free `WRN001` through
+  `WRN003` summaries in the logger, RuntimeCapture, and CLI; see
+  [warning contracts](docs/warnings.md)
 - Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
   snapshots, including SHOW CREATE TABLE executable comments
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
@@ -306,6 +310,16 @@ the same artifact and writes one versioned, timestamp-free, fingerprint-sorted
 ServerRU aggregate JSON object to standard output. It rejects captures with no
 successful sample or any collection error and does not yet apply a regression
 threshold.
+
+`CollectWarnings` optionally probes ordinary DML warnings on the same connection.
+It distinguishes uncollected, known-empty, and failed observations. Explicit
+aggregate/vector plans publish existing warning results without another probe.
+The logger and capture store only fixed categories and counts, never warning
+messages or auxiliary warning-error text. `tidbgo analyze` aggregates those
+counts by fingerprint and reports `WRN001` through `WRN003`. If ServerRU is also
+requested, it takes precedence and warnings report `ErrWarningsWithServerRU`:
+the two probes overwrite each other's session state on Starter. Some MPP
+warnings require EXPLAIN, so empty ordinary warnings do not establish support.
 
 `ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
 without another database call. Suppressible `PLN001` through `PLN004` warnings

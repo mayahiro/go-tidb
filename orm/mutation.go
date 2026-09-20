@@ -57,8 +57,8 @@ func (q *InsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 		return 0, err
 	}
 	observation := beginTypedMutationStatementObservation(ctx, StatementInsert, compiled.sql, compiled.arguments, compiled.modelName, "insert")
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
@@ -275,8 +275,8 @@ func (q *UpdateQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 		return 0, err
 	}
 	observation := beginTypedMutationStatementObservation(ctx, StatementUpdate, compiled.sql, compiled.arguments, compiled.modelName, "update")
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {
@@ -392,8 +392,8 @@ func (q *DeleteQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 	} else {
 		observation = beginTypedMutationStatementObservation(ctx, inferStatementOperation(compiled.sql), compiled.sql, compiled.arguments, compiled.modelName, "delete")
 	}
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {

@@ -39,6 +39,8 @@ type Statistics struct {
 	MutationIndexUncertainStatements int     `json:"mutation_index_uncertain_statements"`
 	ServerRUSamples                  int     `json:"server_ru_samples"`
 	ServerRUErrors                   int     `json:"server_ru_errors"`
+	WarningCollections               int     `json:"warning_collections"`
+	WarningCollectionErrors          int     `json:"warning_collection_errors"`
 	ServerRUTotal                    float64 `json:"server_ru_total"`
 	TargetDuration                   int64   `json:"target_duration_ns"`
 	DiagnosticDuration               int64   `json:"diagnostic_duration_ns"`
@@ -167,6 +169,7 @@ type analyzer struct {
 	scopes           map[scopeKey]struct{}
 	fingerprints     map[string]int
 	serverRU         map[string]fingerprintServerRUAccumulator
+	warnings         map[string]Warnings
 	batches          map[batchKey]int
 	repeated         map[repeatedQueryKey]int
 	repeatedGroups   []repeatedQueryGroup
@@ -248,6 +251,27 @@ func (analyzer *analyzer) add(record Record) {
 		analyzer.serverRU[record.Fingerprint] = fingerprintStatistics
 	}
 
+	if w := record.Warnings; w != nil {
+		if w.Known {
+			analyzer.analysis.Statistics.WarningCollections++
+		}
+		if w.Failed {
+			analyzer.analysis.Statistics.WarningCollectionErrors++
+		}
+		analyzer.analysis.Statistics.AuxiliaryStatements += w.AuxiliaryStatements
+		analyzer.analysis.Statistics.DiagnosticDuration = addDurationSaturated(analyzer.analysis.Statistics.DiagnosticDuration, w.DiagnosticDurationNS)
+		if w.Failed || w.Summary.MPPBlocked != 0 || w.Summary.Other != 0 || w.Summary.Notes != 0 {
+			if analyzer.warnings == nil {
+				analyzer.warnings = make(map[string]Warnings)
+			}
+			summary := analyzer.warnings[record.Fingerprint]
+			summary.Summary.MPPBlocked = addCountSaturated(summary.Summary.MPPBlocked, w.Summary.MPPBlocked)
+			summary.Summary.Other = addCountSaturated(summary.Summary.Other, w.Summary.Other)
+			summary.Summary.Notes = addCountSaturated(summary.Summary.Notes, w.Summary.Notes)
+			summary.Failed = summary.Failed || w.Failed
+			analyzer.warnings[record.Fingerprint] = summary
+		}
+	}
 	if record.Batch != nil {
 		key := batchKey{capture: record.CaptureID, group: record.Batch.Group}
 		if previous, exists := analyzer.batches[key]; !exists || record.Batch.Count > previous {
@@ -320,6 +344,15 @@ func runtimeQueryPatternKey(record Record) queryPatternKey {
 }
 
 func (analyzer *analyzer) finish() Analysis {
+	var warningFingerprints []string
+	for fingerprint := range analyzer.warnings {
+		warningFingerprints = append(warningFingerprints, fingerprint)
+	}
+	slices.Sort(warningFingerprints)
+	for _, fingerprint := range warningFingerprints {
+		summary := analyzer.warnings[fingerprint]
+		analyzer.appendQueryDiagnostics(Record{Fingerprint: fingerprint}, summary.Summary.Diagnostics(summary.Failed), true)
+	}
 	if analyzer.workload != nil {
 		analyzer.analysis.Workload = analyzer.workload.finish(analyzer.configuration.workloadName)
 	}
@@ -406,6 +439,13 @@ func addDurationSaturated(current, added int64) int64 {
 	return current + added
 }
 
+func addCountSaturated(current, added int) int {
+	if added > math.MaxInt-current {
+		return math.MaxInt
+	}
+	return current + added
+}
+
 func addServerRUSaturated(current, added float64) float64 {
 	if current > math.MaxFloat64-added {
 		return math.MaxFloat64
@@ -480,7 +520,7 @@ func nonEmptyRuntimeValue(value string) string {
 // FormatStatistics renders one stable human-readable runtime summary line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d query_shape_statements=%d schema_checked_statements=%d mutation_shape_statements=%d mutation_index_checked_statements=%d mutation_index_uncertain_statements=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s",
+		"runtime: captures=%d scopes=%d statements=%d fingerprints=%d batch_groups=%d split_batches=%d query_shape_statements=%d schema_checked_statements=%d mutation_shape_statements=%d mutation_index_checked_statements=%d mutation_index_uncertain_statements=%d target_duration=%s auxiliary_statements=%d diagnostic_duration=%s server_ru_samples=%d server_ru_errors=%d server_ru_total=%s warning_collections=%d warning_collection_errors=%d",
 		statistics.Captures,
 		statistics.Scopes,
 		statistics.Statements,
@@ -498,6 +538,8 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.ServerRUSamples,
 		statistics.ServerRUErrors,
 		strconv.FormatFloat(statistics.ServerRUTotal, 'g', -1, 64),
+		statistics.WarningCollections,
+		statistics.WarningCollectionErrors,
 	)
 }
 

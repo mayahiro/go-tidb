@@ -640,3 +640,14 @@ Vector SELECTs use `source=typed_vector` and bind-free, hint-sensitive SQL
 fingerprints. Ordinary SELECT QueryShapes include optional `read_engine` and
 `mpp` fields in their fingerprints, preventing measurements for different
 requests from sharing a baseline. Unspecified-policy fingerprints are unchanged.
+
+## Server warnings
+
+Use `CollectWarnings()` with `Observe`, `WithStatementObserver`, or
+`WithRuntimeCapture` to collect same-session warnings for ordinary DML.
+`StatementEvent.Warnings` separates a successful empty result from missing
+coverage or collection failure. Aggregate/vector explicit plans publish their
+already collected warnings without this option. The built-in logger and capture
+keep only safe `WRN001`-`WRN003` summaries. MPP warnings may require EXPLAIN.
+ServerRU collection takes precedence when both options apply. See
+[server warning diagnostics](warnings.md) for cost, coverage, and examples.

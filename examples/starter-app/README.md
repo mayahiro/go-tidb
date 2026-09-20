@@ -306,3 +306,12 @@ The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
 The [analysis guide](../../docs/checks.md) documents each evidence boundary,
 CLI exit statuses, and reason-carrying suppression for `analyze` and `lint`.
+
+## Server warnings
+
+Configure `orm.Observe(db, orm.NewStatementLogger(os.Stderr), orm.CollectWarnings())`
+to collect ordinary DML warnings. This adds one round trip per statement.
+Explicit aggregate/vector plans also publish their existing warnings.
+`Example_warningDiagnostics` shows value-free MPP warning classification.
+Some MPP warnings are only exposed by EXPLAIN; collect ServerRU separately.
+See [server warning diagnostics](../../docs/warnings.md).

@@ -58,6 +58,9 @@ or unchecked probes remain `Unknown`, with individual errors and a joined error;
 successful results are retained. Errors can contain unredacted server text.
 
 Use aggregate/vector `Explain` or `ExplainAnalyze` to inspect same-session warnings.
+Their safe warning summaries reach observers, captures, and `tidbgo analyze`.
+Some MPP warnings are exposed only by EXPLAIN; ordinary `CollectWarnings` does
+not establish pushdown support. See [warning diagnostics](warnings.md).
 Ordinary Select plan terminals retain their existing return types.
 `AggregatePlan.Summary()` and `VectorPlan.Summary()` describe every operator's
 processing task, estimated/actual output, and immediate child outputs. Actual

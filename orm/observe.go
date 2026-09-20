@@ -8,8 +8,8 @@ import "context"
 // inherit its configuration without per-call context setup.
 //
 // WithStatementObserver overrides this default for one context, including nil
-// to disable it. WithRuntimeCapture remains independent. Arguments and ServerRU
-// collection are opt-in. Wrapping an observed executor replaces its default
+// to disable it. WithRuntimeCapture remains independent. Arguments, ServerRU,
+// and ordinary-statement warning collection are opt-in. Wrapping an observed executor replaces its default
 // observer; passing nil removes that default. Direct database/sql method calls
 // are not observed; use ORM terminals, including Raw and RawExec.
 func Observe(executor Executor, observer StatementObserver, options ...StatementObserverOption) Executor {
@@ -25,7 +25,7 @@ func Observe(executor Executor, observer StatementObserver, options ...Statement
 	if inherited != nil {
 		value.runtimeCapture = inherited.runtimeCapture
 		value.runtimeScope = inherited.runtimeScope
-		value.options = inherited.options & statementRuntimeCollectServerRU
+		value.options = inherited.options & (statementRuntimeCollectServerRU | statementRuntimeCollectWarnings)
 	}
 	for _, option := range options {
 		if option != nil {
@@ -70,14 +70,14 @@ func executorStatementContext(ctx context.Context, executor any) context.Context
 	if parent.observerSet {
 		value.observer = parent.observer
 		value.observerSet = true
-		value.options &^= statementObserverIncludeArguments | statementObserverCollectServerRU
-		value.options |= parent.options & (statementObserverIncludeArguments | statementObserverCollectServerRU)
+		value.options &^= statementObserverIncludeArguments | statementObserverCollectServerRU | statementObserverCollectWarnings
+		value.options |= parent.options & (statementObserverIncludeArguments | statementObserverCollectServerRU | statementObserverCollectWarnings)
 	}
 	if parent.runtimeCapture != nil {
 		value.runtimeCapture = parent.runtimeCapture
 		value.runtimeScope = parent.runtimeScope
-		value.options &^= statementRuntimeCollectServerRU
-		value.options |= parent.options & statementRuntimeCollectServerRU
+		value.options &^= statementRuntimeCollectServerRU | statementRuntimeCollectWarnings
+		value.options |= parent.options & (statementRuntimeCollectServerRU | statementRuntimeCollectWarnings)
 	}
 	return context.WithValue(ctx, statementObserverContextKey{}, &value)
 }

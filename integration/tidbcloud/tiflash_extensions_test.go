@@ -1,6 +1,7 @@
 package tidbcloud
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/redact"
+	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 	"github.com/mayahiro/go-tidb/model"
 	"github.com/mayahiro/go-tidb/orm"
 	"github.com/mayahiro/go-tidb/schema"
@@ -227,13 +229,44 @@ func testTiFlashExtensionWindows(t *testing.T, ctx context.Context, conn *sql.Co
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("window values mismatch: got=%v want=%v", got, want)
 		}
-		plan, err := q.ExplainAnalyze(ctx, conn)
+		var captured bytes.Buffer
+		var observed orm.StatementEvent
+		planCtx := orm.WithRuntimeCapture(ctx, orm.NewRuntimeCapture(&captured))
+		planExecutor := orm.Observe(conn, func(event orm.StatementEvent) { observed = event })
+		plan, err := q.ExplainAnalyze(planCtx, planExecutor)
 		if err != nil {
 			fatalDatabaseError(t, dsn, "window plan", err)
 		}
 		if plan.WarningsError != nil {
 			fatalDatabaseError(t, dsn, "window warnings", plan.WarningsError)
 		}
+		if observed.Warnings == nil || !observed.Warnings.Known || !reflect.DeepEqual(observed.Warnings.Warnings, plan.Warnings) {
+			t.Fatal("plan warnings missing from observer")
+		}
+		analysis, err := runtimecapture.AnalyzeReader(&captured)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mppWarning := false
+		for _, diagnostic := range plan.Diagnostics() {
+			mppWarning = mppWarning || diagnostic.Code == "WRN001"
+		}
+		capturedMPP := false
+		for _, diagnostic := range analysis.Diagnostics {
+			capturedMPP = capturedMPP || diagnostic.Code == "WRN001"
+		}
+		if mppWarning != capturedMPP {
+			t.Fatal("MPP warning missing from capture analysis")
+		}
+		warningCtx := orm.WithStatementObserver(ctx, func(event orm.StatementEvent) { observed = event }, orm.CollectWarnings())
+		var repeated []starterWindowResult
+		if err := q.ScanAll(warningCtx, conn, &repeated); err != nil {
+			fatalDatabaseError(t, dsn, "observed window warnings", err)
+		}
+		if !reflect.DeepEqual(got, repeated) || observed.Warnings == nil || !observed.Warnings.Known {
+			t.Fatal("observed window result mismatch")
+		}
+		t.Logf("window plan MPP warning=%t ordinary warning rows=%d", mppWarning, len(observed.Warnings.Warnings))
 		for _, warning := range plan.Warnings {
 			t.Logf("window warning code=%d message=%s", warning.Code, redact.Error(errors.New(warning.Message), dsn))
 		}

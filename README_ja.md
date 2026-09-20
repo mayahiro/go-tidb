@@ -10,6 +10,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 [ウィンドウ関数](docs/windows_ja.md) | [ベクトル検索](docs/vector-search_ja.md) |
 [TiFlashの準備](docs/tiflash_ja.md) |
 [解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
+[サーバー警告](docs/warnings_ja.md) |
 [Development](docs/development_ja.md)
 
 ## 利用できる機能

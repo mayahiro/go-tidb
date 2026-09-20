@@ -103,6 +103,9 @@ func TestAggregatePlanPinsWarningsBeforeCallbacks(t *testing.T) {
 			if len(events) != 1 || events[0].ServerRU != nil || events[0].Error != nil {
 				t.Fatalf("events=%#v", events)
 			}
+			if events[0].Warnings == nil || !events[0].Warnings.Known || events[0].Warnings.AuxiliaryStatements != 1 {
+				t.Fatal("missing plan warning observation")
+			}
 			if strings.Contains(capture.String(), "private-warning-value") {
 				t.Fatal("warning leaked to runtime capture")
 			}

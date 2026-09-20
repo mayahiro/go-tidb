@@ -113,8 +113,8 @@ func (q *UpdateWhereQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (
 		return 0, err
 	}
 	observation := beginConditionalMutationObservation(ctx, StatementUpdate, compiled, q.predicates, q.withDeleted, "update_where")
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {

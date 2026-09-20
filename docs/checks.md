@@ -268,3 +268,10 @@ choices remain uncertain for index coverage. Aggregate/vector runtime records
 carry SQL fingerprints rather than inferred scalar QueryShapes. See
 [vector diagnostics](vector-search.md#index-definition-and-evidence) for VEC001 through VEC003
 and [plan summaries](tiflash.md#capabilities-and-plan-evidence) for operator facts.
+
+## Server warning diagnostics
+
+`WRN001` reports TiDB's MPP limitation warnings, including partial MPP plans.
+`WRN002` summarizes other warnings/errors or notes without their values.
+`WRN003` reports incomplete warning collection. Plan `Diagnostics()` and
+`tidbgo analyze` expose these suppressible rules. See [server warnings](warnings.md).

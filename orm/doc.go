@@ -43,8 +43,12 @@
 // and bulk splits after it is installed at an
 // operation boundary, without per-query registration. CollectServerRU is an
 // explicit high-cost observer option that pins pooled statements as needed and
-// keeps diagnostic cost separate from target cost. Explain inspects the TiDB
-// execution plan of a typed SELECT without executing it, and ExplainAnalyze
+// keeps diagnostic cost separate from target cost.
+// CollectWarnings adds an optional same-session warning probe, exclusive
+// with ServerRU. Explicit aggregate/vector plans publish existing warning
+// observations; the logger and capture store only safe WRN001-WRN003 summaries.
+// Explain inspects the TiDB execution plan of a typed SELECT without executing
+// it, and ExplainAnalyze
 // explicitly executes that SELECT to collect runtime plan data.
 // ExplainAnalyzePlan.Diagnostics checks the returned
 // plan without another database statement. LastServerRU reads TiDB's ServerRU

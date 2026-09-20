@@ -11,7 +11,7 @@ import (
 	"github.com/mayahiro/go-tidb/internal/runtimecapture"
 )
 
-// PlanWarning is one same-session SHOW WARNINGS row for an explicit plan query.
+// PlanWarning is one same-session SHOW WARNINGS row for an observed statement.
 // Message is unredacted server text and can include SQL values. It is returned
 // to the caller only and is not automatically written to RuntimeCapture.
 type PlanWarning struct {
@@ -116,12 +116,17 @@ func inspectReadPlan(ctx context.Context, executor QueryExecutor, c compiledAggr
 		result.Planned, err = collectExplainRows(rows)
 	}
 	elapsed := time.Since(started)
+	warningStarted, warningAttempts := time.Now(), 0
 	if err == nil {
-		result.Warnings, result.WarningsError = collectPlanWarnings(ctx, session)
+		warningAttempts = 1
+		result.Warnings, result.WarningsError = collectStatementWarnings(ctx, session)
 	}
 	if release != nil {
 		result.WarningsError = errors.Join(result.WarningsError, release())
 		release = nil
+	}
+	if warningAttempts != 0 {
+		observation.recordPlanWarnings(result.Warnings, result.WarningsError, time.Since(warningStarted), warningAttempts)
 	}
 	observation.finishOutcomeDuration(0, false, int64(len(result.Planned)+len(result.Executed)), err == nil, err, elapsed)
 	return result, err
@@ -135,41 +140,14 @@ func (q *AggregateQuery[T]) planAccessResolver(_ compiledAggregate) (planAccessR
 	return resolver, err
 }
 
-func collectPlanWarnings(ctx context.Context, session QueryExecutor) ([]PlanWarning, error) {
-	rows, err := session.QueryContext(ctx, "SHOW WARNINGS")
-	if err != nil {
-		return nil, fmt.Errorf("orm: read plan warnings: %w", err)
-	}
-	if rows == nil {
-		return nil, fmt.Errorf("orm: plan warnings executor returned nil rows")
-	}
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, closeRowsAfterError("plan warnings", rows, err)
-	}
-	if err := validatePlanColumns("SHOW WARNINGS", columns, []string{"Level", "Code", "Message"}); err != nil {
-		return nil, closeRowsAfterError("plan warnings", rows, err)
-	}
-	warnings := make([]PlanWarning, 0)
-	for rows.Next() {
-		var warning PlanWarning
-		if err := rows.Scan(&warning.Level, &warning.Code, &warning.Message); err != nil {
-			return nil, closeRowsAfterError("plan warnings", rows, fmt.Errorf("orm: scan plan warning: %w", err))
-		}
-		warnings = append(warnings, warning)
-	}
-	if err := finishRows("plan warnings", rows); err != nil {
-		return nil, err
-	}
-	return warnings, nil
-}
-
 // Diagnostics examines this returned plan without I/O. Existing runtime facts
 // apply to Executed; large aggregate scans are informational, not suppressed.
 // PLN005 reports recognized table tasks using a different requested engine;
 // PLN006 reports an enforced MPP request with recognized storage tasks but no MPP.
 // Unknown tasks remain unknown and are never treated as proof of fallback.
 // Raw server warning messages are available separately in Warnings.
+// WRN001 reports server MPP limitation warnings even if the plan also uses MPP;
+// WRN002 reports other warnings/notes; WRN003 reports warning collection failure.
 func (p AggregatePlan) Diagnostics() []check.Diagnostic {
 	diagnostics := p.Executed.Diagnostics()
 	for i := range diagnostics {
@@ -207,5 +185,6 @@ func (p AggregatePlan) Diagnostics() []check.Diagnostic {
 	if p.Requested.MPP == MPPEnforce && storage && !mpp && !unknown {
 		diagnostics = append(diagnostics, check.Diagnostic{Code: "PLN006", Severity: check.SeverityWarning, Title: "Plan does not use requested MPP", Message: "Recognized storage tasks do not use MPP despite MPPEnforce", Suggestion: "Inspect same-statement warnings for unsupported operations or missing replicas", Suppressible: true, Reference: "https://docs.pingcap.com/tidb/stable/use-tiflash-mpp-mode/"})
 	}
+	diagnostics = append(diagnostics, summarizeWarnings(p.Warnings).Diagnostics(p.WarningsError != nil)...)
 	return diagnostics
 }

@@ -294,7 +294,9 @@ observer callbackは警告回収と内部で取得したconnectionの解放後�
 どちらも別の `ScanAll` が使ったengineの証拠にはしません
 警告回収成功時は空の場合もnon-nilのsliceを返します
 `WarningsError` は警告queryまたはconnection解放の失敗を示し、取得済みplanは維持します
-警告は値を含む可能性のある未編集のserver textです。自動でログやcaptureへ保存しません
+警告本文は値を含む可能性のある未編集のserver textです
+取得済み警告をobserverへ渡し、組み込みloggerとcaptureには安全な要約だけを保存します
+`Diagnostics()` は `WRN001` から `WRN003` を追加します。[サーバー警告の診断](warnings_ja.md)を参照してください
 
 `TaskInfo` は通常の `ExplainRow` と `ExplainAnalyzeRow` でも使えます
 `root`、`cop[tikv]`、`cop[tiflash]`、`batchCop[tiflash]`、`mpp[tiflash]` を認識します

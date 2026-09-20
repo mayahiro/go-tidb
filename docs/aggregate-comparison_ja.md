@@ -148,3 +148,9 @@ caseの同一性は呼び出し側が指定し、exportするrecordやSQL finger
 fingerprintはhintを含むため、既存regression checkは同じvariantとSQL shapeを要求します
 engine間の比較にはreportの測定値を使い、TiKVのbaselineがTiFlashのfingerprintを暗黙に許容することはありません
 [Baseline coverage](workload-baselines_ja.md)と[再現可能な検証](development_ja.md#集計とtiflashの検証)を参照してください
+
+## 警告の観測
+
+独立したplan実行の取得済み警告をobserverとcaptureへ渡し、組み込みloggerとCLIには値を含まない要約を出力します
+通常の比較sampleで `CollectWarnings` を指定すると、直後のRU取得を維持し `ErrWarningsWithServerRU` を返します
+`WriteCapture` は測定sampleだけのexportです。[警告の診断](warnings_ja.md)を参照してください

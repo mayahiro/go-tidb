@@ -327,8 +327,9 @@ run after warning collection and release of an internally pinned connection.
 `ScanAll`. Successful warning collection returns a non-nil slice, possibly
 empty. `WarningsError` reports warning-query or connection-release failure
 without discarding a successfully collected plan. Warnings contain unredacted
-server text and can include values; they are not automatically logged or
-captured.
+server text and can include values. Observers receive the collected warnings;
+the built-in logger and capture write only safe summaries. `Diagnostics()` adds
+`WRN001` through `WRN003`. See [server warning diagnostics](warnings.md).
 
 `TaskInfo` is also available on ordinary `ExplainRow` and `ExplainAnalyzeRow`.
 It recognizes `root`, `cop[tikv]`, `cop[tiflash]`, `batchCop[tiflash]`, and

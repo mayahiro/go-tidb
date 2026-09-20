@@ -665,3 +665,12 @@ offlineの `Build` とmodel inspectionはeventを生成せず、I/Oも行いま�
 vector SELECTは `source=typed_vector` とbind値を含まずhintを区別するSQL fingerprintを使います
 通常SELECTのQueryShapeは任意の `read_engine` と `mpp` をfingerprintに含め、異なる要求の測定が同じbaselineに混ざることを防ぎます
 方針未指定時のfingerprintは変わりません
+
+## サーバー警告
+
+`Observe`、`WithStatementObserver`、`WithRuntimeCapture` の `CollectWarnings()` で通常DMLの同一session警告を収集します
+`StatementEvent.Warnings` は正常な0件と、未収集や収集失敗を区別します
+集計／vectorの明示planは、このoptionなしで取得済み警告を通知します
+組み込みloggerとcaptureには安全な `WRN001` から `WRN003` の要約だけを保存します
+MPP警告にはEXPLAINが必要な場合があります。両optionの指定時はServerRU収集を優先します
+負荷、確認範囲、利用例は[サーバー警告の診断](warnings_ja.md)を参照してください

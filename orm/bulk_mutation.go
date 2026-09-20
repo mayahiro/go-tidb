@@ -159,8 +159,8 @@ func (plan bulkMutationPlan) exec(ctx context.Context, executor ExecExecutor) (i
 		observation := beginStatementObservation(ctx, statementOperation, compiled.sql, compiled.arguments)
 		plan.attachRuntimeCapture(observation, &statementGroup, statementOperation, statementIndex, statementCount, start, end)
 		statementExecutor := executor
-		if observation != nil && observation.event.ServerRU != nil {
-			statementExecutor = observation.prepareServerRUExecExecutor(ctx, executor)
+		if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+			statementExecutor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 		}
 		result, execErr := statementExecutor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 		if execErr != nil {

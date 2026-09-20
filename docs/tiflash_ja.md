@@ -50,6 +50,9 @@ Relation targetや中間tableを含む全参照tableを準備します
 個別エラーと結合したエラーを返し、成功済みの結果は維持します。エラーは未redactのserver文言を含む場合があります
 
 同一sessionの警告は集計／vectorの `Explain`、`ExplainAnalyze` で確認します
+安全な警告要約をobserver、capture、`tidbgo analyze` へ通知します
+MPP警告にはEXPLAIN時だけ公開されるものがあり、通常の `CollectWarnings` ではpushdown対応を証明できません
+[警告の診断](warnings_ja.md)を参照してください
 通常Selectのplan取得は既存の戻り値型を維持します
 `AggregatePlan.Summary()` と `VectorPlan.Summary()` は各operatorの処理task、推定／実測の出力行数、直下の子operatorの出力を返します
 実測値はAnalyzeだけが持ちます。子の出力は利用可能な入力であり、消費した行数の実測や全子孫scanの合計ではありません

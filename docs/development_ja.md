@@ -773,3 +773,19 @@ vector decoder比較は3、768、16,383次元で上限付きtyped-array解析と
 これはclient CPU／allocationの測定であり、ANN品質、TiFlash indexing、network cost、production throughputは測りません
 上記profile手順のbenchmark名を置き換えて利用できます
 近似検索の採用前にapplication dataの大きいembeddingと代表的なfilterを測定します
+
+## 警告の検証
+
+```sh
+go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
+```
+
+接続testには前述の専用 `TIDBGO_TEST_DSN` が必要です
+自身で作成した `tidbgo_it_warning_state` だけを使用・削除します
+警告とRUの干渉、SELECTとmutationの警告観測、安全なcapture解析、収集有無を交互にした小queryのlatencyを確認します
+既存のTiFlash拡張testでもwindow planの警告通知と通常SELECTの警告確認範囲を検証します
+offline benchmarkは1／100結果行、0／1／1,000警告行で、収集なし、任意収集、手動での接続固定とSHOW WARNINGSを比較します
+networkとTiDBの時間は含みません
+profileは前述のコマンドで `warnings_1/rows_100/collect` と `warnings_1000/rows_1/collect` を対象にします

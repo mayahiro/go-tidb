@@ -1,10 +1,7 @@
 package orm
 
 import (
-	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -28,12 +25,6 @@ type ServerRUObservation struct {
 	Error error
 }
 
-type statementServerRUCollector struct {
-	ctx     context.Context
-	session serverRUQueryer
-	release func() error
-}
-
 func statementServerRUCollectionEnabled(value *statementObserverContextValue) bool {
 	if value == nil {
 		return false
@@ -49,86 +40,6 @@ func serverRUStatementOperation(operation StatementOperation) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (observation *statementObservation) prepareServerRUQueryExecutor(ctx context.Context, executor QueryExecutor) QueryExecutor {
-	prepared := observation.prepareServerRUExecutor(ctx, executor)
-	if queryExecutor, ok := prepared.(QueryExecutor); ok {
-		return queryExecutor
-	}
-	return executor
-}
-
-func (observation *statementObservation) prepareServerRUExecExecutor(ctx context.Context, executor ExecExecutor) ExecExecutor {
-	prepared := observation.prepareServerRUExecutor(ctx, executor)
-	if execExecutor, ok := prepared.(ExecExecutor); ok {
-		return execExecutor
-	}
-	return executor
-}
-
-func (observation *statementObservation) prepareServerRUExecutor(ctx context.Context, executor any) any {
-	if observation == nil || observation.event.ServerRU == nil {
-		return executor
-	}
-	defer func() {
-		observation.event.StartedAt = time.Now()
-	}()
-
-	switch session := unwrapObservedExecutor(executor).(type) {
-	case *sql.DB:
-		startedAt := time.Now()
-		connection, err := session.Conn(ctx)
-		observation.event.ServerRU.DiagnosticDuration += time.Since(startedAt)
-		if err != nil {
-			observation.addServerRUError(fmt.Errorf("orm: pin connection for automatic ServerRU collection: %w", err))
-			return executor
-		}
-		observation.serverRUCollector = &statementServerRUCollector{
-			ctx:     ctx,
-			session: connection,
-			release: connection.Close,
-		}
-		return connection
-	case *sql.Conn:
-		observation.serverRUCollector = &statementServerRUCollector{ctx: ctx, session: session}
-		return session
-	case *sql.Tx:
-		observation.serverRUCollector = &statementServerRUCollector{ctx: ctx, session: session}
-		return session
-	default:
-		observation.addServerRUError(fmt.Errorf("orm: automatic ServerRU collection requires *sql.DB, *sql.Conn, or *sql.Tx executor"))
-		return executor
-	}
-}
-
-func (observation *statementObservation) collectServerRU() {
-	if observation == nil || observation.serverRUCollector == nil {
-		return
-	}
-	collector := observation.serverRUCollector
-	observation.serverRUCollector = nil
-
-	startedAt := time.Now()
-	observation.event.ServerRU.AuxiliaryStatements++
-	value, err := readLastServerRU(collector.ctx, collector.session)
-	observation.event.ServerRU.DiagnosticDuration += time.Since(startedAt)
-	if err != nil {
-		observation.addServerRUError(err)
-	} else {
-		observation.event.ServerRU.Value = value
-		observation.event.ServerRU.Known = true
-	}
-
-	if collector.release == nil {
-		return
-	}
-	startedAt = time.Now()
-	err = collector.release()
-	observation.event.ServerRU.DiagnosticDuration += time.Since(startedAt)
-	if err != nil {
-		observation.addServerRUError(fmt.Errorf("orm: release automatic ServerRU connection: %w", err))
 	}
 }
 

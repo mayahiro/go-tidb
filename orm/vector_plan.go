@@ -106,7 +106,7 @@ func (p VectorPlan) Summary() PlanSummary { return summarizeReadPlan(p.Planned, 
 // an approximate search has recognized scans without a vector index. The latter
 // is informational: approximate mode permits an index but never requires one.
 func (p VectorPlan) Diagnostics() []check.Diagnostic {
-	base := AggregatePlan{Requested: p.Requested, Planned: p.Planned, Executed: p.Executed}
+	base := AggregatePlan{Requested: p.Requested, Planned: p.Planned, Executed: p.Executed, Warnings: p.Warnings, WarningsError: p.WarningsError}
 	result := base.Diagnostics()
 	if p.Mode == VectorApproximate && p.IndexUsage() == VectorIndexNotUsed {
 		result = append(result, vectorDiagnostic("VEC003", "Vector index not used", "The inspected plan has recognized table scans without an ANN index", "Check matching index readiness and prefilters; keep tenant and soft-delete restrictions before Top-K"))

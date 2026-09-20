@@ -225,6 +225,9 @@ func (q *AggregateQuery[T]) Compare(ctx context.Context, executor QueryExecutor,
 			if observation != nil {
 				observation.event.StartedAt = sample.StartedAt
 				observation.event.ServerRU = &ru
+				if observation.event.Warnings != nil {
+					observation.event.Warnings.Error = ErrWarningsWithServerRU
+				}
 				observations = append(observations, aggregateCompareObservation{observation: observation, duration: sample.Duration, rows: rows, err: targetErr})
 			}
 			if err == nil {
@@ -328,7 +331,9 @@ func inspectAggregateComparisonPlan(ctx context.Context, session aggregateCompar
 	}
 	pending.duration, pending.rows, pending.err = time.Since(started), int64(len(plan.Executed)), err
 	if err == nil {
-		plan.Warnings, plan.WarningsError = collectPlanWarnings(ctx, session)
+		warningStarted := time.Now()
+		plan.Warnings, plan.WarningsError = collectStatementWarnings(ctx, session)
+		pending.observation.recordPlanWarnings(plan.Warnings, plan.WarningsError, time.Since(warningStarted), 1)
 		err = plan.WarningsError
 	}
 	return plan, pending, err

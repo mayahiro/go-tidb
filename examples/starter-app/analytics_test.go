@@ -62,3 +62,16 @@ func Example_tiFlashPreparation() {
 	// ALTER TABLE `app`.`search_documents` SET TIFLASH REPLICA 2
 	// CREATE VECTOR INDEX `embedding_l2` ON `search_documents` ((VEC_L2_DISTANCE(`embedding`))) USING HNSW
 }
+
+func Example_warningDiagnostics() {
+	// A captured EXPLAIN warning can coexist with MPP elsewhere in the plan.
+	plan := orm.AggregatePlan{Warnings: []orm.PlanWarning{{
+		Level: "Warning", Code: 1105,
+		Message: "MPP mode may be blocked because window function `sum` or its arguments are not supported now.",
+	}}}
+	for _, diagnostic := range plan.Diagnostics() {
+		fmt.Println(diagnostic.Code, diagnostic.Title)
+	}
+	// Output:
+	// WRN001 Server reported an MPP limitation
+}
