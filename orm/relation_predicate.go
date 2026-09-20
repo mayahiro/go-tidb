@@ -191,9 +191,32 @@ func (c *predicateCompiler) writeRelation(current predicate) error {
 	if sourceAlias == "" {
 		sourceAlias = c.descriptor.TableName()
 	}
+	if c.planAccess != nil {
+		parent, _ := c.planAccess.resolveName(sourceAlias, true)
+		path := joinRelationPath(parent.relationPath, plan.relationName)
+		c.planAccess.add(planAccessBinding{alias: targetAlias, physicalTable: plan.target.TableName(), model: plan.target.Name(), relationPath: path})
+		if plan.junction != nil {
+			c.planAccess.add(planAccessBinding{alias: relationJunctionAlias(aliasIndex), physicalTable: plan.junction.tableName, relationPath: path})
+		}
+	}
 
 	c.query.WriteString("EXISTS (SELECT ")
-	if relationPredicateUsesSemiJoinRewrite(plan, current, c.negationDepth, c.disjunctionDepth) {
+	semiJoin := !c.conditional && relationPredicateUsesSemiJoinRewrite(plan, current, c.negationDepth, c.disjunctionDepth)
+	if c.relationEngine != "" {
+		c.query.WriteString("/*+ READ_FROM_STORAGE(")
+		c.query.WriteString(strings.ToUpper(string(c.relationEngine)))
+		c.query.WriteByte('[')
+		c.query.WriteString(targetAlias)
+		if plan.junction != nil {
+			c.query.WriteByte(',')
+			c.query.WriteString(relationJunctionAlias(aliasIndex))
+		}
+		c.query.WriteString("]) ")
+		if semiJoin {
+			c.query.WriteString("SEMI_JOIN_REWRITE() ")
+		}
+		c.query.WriteString("*/ ")
+	} else if semiJoin {
 		c.query.WriteString(relationSemiJoinRewriteHint)
 	}
 	c.query.WriteString("1 FROM ")

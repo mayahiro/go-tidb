@@ -48,6 +48,19 @@ It demonstrates the current struct-first foundation:
 - Pure many-to-many add, duplicate-ignore add, remove, and clear operations
   through one junction statement
 - Typed raw aggregate scanning into a computed field
+- Single-table aggregate SQL in `Example_aggregate`, with output aliases,
+  HAVING, ordering, and paging through public APIs
+- Daily/monthly registration counts in `Example_calendarAggregation`, using
+  a reporting source for the existing database-managed timestamp and grouping
+  by selected output names
+- Per-user order counts and conditional counts/sums for large orders in
+  `Example_conditionalAggregation`, retaining groups with no order reaching
+  the value threshold
+- Order totals restricted by a user's role in `Example_relationAggregation`,
+  using nested `Has` without multiplying orders by matching related rows
+- Explicit `CompareOrderTotals` for auto/TiKV/TiFlash MPP result checks,
+  latency/ServerRU measurements, and separate plan/warning inspection over a
+  caller-provided fixed fixture with TiFlash replicas
 - Shared-executor statement logging with automatic terminal colors and no bind
   argument values
 - Structured runtime capture of actual root, relation, and split-bulk
@@ -272,12 +285,33 @@ Execution is available only when the caller explicitly passes an existing
 `*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
 introspection, and migration application are not implemented.
 
+`RankedOrderTotals` demonstrates a to-one related output and ranking over groups.
+`SearchDocuments` demonstrates exact vector search within a tenant using a narrow
+projection. Its `search_documents` schema uses three-dimensional non-NULL vectors.
+The offline preparation example generates replica and vector-index DDL without
+executing it. See [windows](../../docs/windows.md),
+[vector search](../../docs/vector-search.md), and [TiFlash preparation](../../docs/tiflash.md).
+
 The [struct model guide](../../docs/models.md) documents the complete current
 mapping boundary. The [scalar query guide](../../docs/queries.md) documents the
 public query API, and the [mutation guide](../../docs/mutations.md) documents
 writes and raw SQL. The [statement observation guide](../../docs/observability.md)
 documents query logging and custom observers.
+The [aggregate guide](../../docs/aggregates.md) covers typed grouping, result
+structs, optional TiFlash/MPP policy, and explicit plan/warning inspection.
+The [comparison guide](../../docs/aggregate-comparison.md) explains the
+`CompareOrderTotals` report and `WriteCapture` baseline export. This diagnostic
+is an explicit call and is not part of application startup.
 The [schema compatibility guide](../../docs/schema-checks.md) documents the
 offline physical-schema boundary.
 The [analysis guide](../../docs/checks.md) documents each evidence boundary,
 CLI exit statuses, and reason-carrying suppression for `analyze` and `lint`.
+
+## Server warnings
+
+Configure `orm.Observe(db, orm.NewStatementLogger(os.Stderr), orm.CollectWarnings())`
+to collect ordinary DML warnings. This adds one round trip per statement.
+Explicit aggregate/vector plans also publish their existing warnings.
+`Example_warningDiagnostics` shows value-free MPP warning classification.
+Some MPP warnings are only exposed by EXPLAIN; collect ServerRU separately.
+See [server warning diagnostics](../../docs/warnings.md).

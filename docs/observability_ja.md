@@ -2,6 +2,13 @@
 
 [English](observability.md)
 
+sourceと関連tableに適用する集計の実行方針、同じconnectionでのplan警告取得、TiFlash／MPPのtask判定は[集計とTiFlash](aggregates_ja.md)を参照してください
+集計SELECTのcaptureは `source=typed_aggregate` とhintを含む `s1:` statement fingerprintを使い、scalar query shapeとbind値を含みません
+明示的な集計plan callは対象EXPLAIN statementをcaptureします。補助的な `SHOW WARNINGS` はplan APIから返し、別のcapture recordやServerRUのauxiliary countには含みません
+
+[`AggregateQuery.Compare`](aggregate-comparison_ja.md) は `CollectServerRU` がなくてもRUを明示的に取得し、callbackを比較と内部で固定したconnectionの解放後に実行します
+外側のcaptureはwarmupと独立planを含み、`AggregateComparison.WriteCapture` は1つのvariantの測定SELECTだけをbaseline入力として出力します
+
 caller-owned executorへopt-inの観測設定を一度行い、返されたexecutorをrepositoryで共有します
 
 ```go
@@ -654,3 +661,16 @@ callback内で `go-tidb` を通じて実行したstatementは、transaction-boun
 defaultではobserverを設定しません
 
 offlineの `Build` とmodel inspectionはeventを生成せず、I/Oも行いません
+
+vector SELECTは `source=typed_vector` とbind値を含まずhintを区別するSQL fingerprintを使います
+通常SELECTのQueryShapeは任意の `read_engine` と `mpp` をfingerprintに含め、異なる要求の測定が同じbaselineに混ざることを防ぎます
+方針未指定時のfingerprintは変わりません
+
+## サーバー警告
+
+`Observe`、`WithStatementObserver`、`WithRuntimeCapture` の `CollectWarnings()` で通常DMLの同一session警告を収集します
+`StatementEvent.Warnings` は正常な0件と、未収集や収集失敗を区別します
+集計／vectorの明示planは、このoptionなしで取得済み警告を通知します
+組み込みloggerとcaptureには安全な `WRN001` から `WRN003` の要約だけを保存します
+MPP警告にはEXPLAINが必要な場合があります。両optionの指定時はServerRU収集を優先します
+負荷、確認範囲、利用例は[サーバー警告の診断](warnings_ja.md)を参照してください

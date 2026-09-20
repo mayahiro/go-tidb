@@ -63,6 +63,11 @@ type Statistics struct {
 	// UncertainIndexPatterns counts candidates that were not safe to convert
 	// to a neutral index access.
 	UncertainIndexPatterns int `json:"uncertain_index_patterns"`
+	// AggregatePatterns counts recognized aggregate terminals. These counters
+	// cover base projection/grouping contracts, not full runtime validation.
+	AggregatePatterns          int `json:"aggregate_patterns"`
+	AnalyzedAggregatePatterns  int `json:"analyzed_aggregate_patterns"`
+	UncertainAggregatePatterns int `json:"uncertain_aggregate_patterns"`
 }
 
 // Analysis contains deterministic source statistics and diagnostics.
@@ -328,7 +333,7 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d aggregate_patterns=%d analyzed_aggregate_patterns=%d uncertain_aggregate_patterns=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
@@ -344,5 +349,8 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.IndexPatterns,
 		statistics.AnalyzedIndexPatterns,
 		statistics.UncertainIndexPatterns,
+		statistics.AggregatePatterns,
+		statistics.AnalyzedAggregatePatterns,
+		statistics.UncertainAggregatePatterns,
 	)
 }

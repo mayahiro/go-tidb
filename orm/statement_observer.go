@@ -74,6 +74,9 @@ type StatementEvent struct {
 	// statement. It is nil when collection was not requested or the operation
 	// is not a recognized DML statement.
 	ServerRU *ServerRUObservation
+	// Warnings contains opt-in DML warnings or already collected explicit-plan
+	// warnings. Nil means not requested or not applicable, not zero warnings.
+	Warnings *WarningObservation
 }
 
 // StatementObserver receives completed statement events synchronously.
@@ -89,6 +92,8 @@ const (
 	statementObserverIncludeArguments statementObserverContextOptions = 1 << iota
 	statementObserverCollectServerRU
 	statementRuntimeCollectServerRU
+	statementObserverCollectWarnings
+	statementRuntimeCollectWarnings
 )
 
 type statementObserverContextValue struct {
@@ -167,6 +172,8 @@ type ServerRUOption interface {
 // for the target statement and its diagnostic query. The target result is
 // never replaced by a collection failure. The option can configure
 // Observe, WithStatementObserver, or WithRuntimeCapture.
+// If CollectWarnings is also enabled, ServerRU takes precedence and warning
+// collection reports ErrWarningsWithServerRU without issuing SHOW WARNINGS.
 func CollectServerRU() ServerRUOption {
 	return collectServerRUOption{}
 }
@@ -182,7 +189,7 @@ func WithStatementObserver(ctx context.Context, observer StatementObserver, opti
 	if parent := statementObserverContext(ctx); parent != nil {
 		value.runtimeCapture = parent.runtimeCapture
 		value.runtimeScope = parent.runtimeScope
-		value.options |= parent.options & statementRuntimeCollectServerRU
+		value.options |= parent.options & (statementRuntimeCollectServerRU | statementRuntimeCollectWarnings)
 	}
 	for _, option := range options {
 		if option != nil {
@@ -193,10 +200,10 @@ func WithStatementObserver(ctx context.Context, observer StatementObserver, opti
 }
 
 type statementObservation struct {
-	observer          StatementObserver
-	event             StatementEvent
-	runtime           *statementRuntimeEvent
-	serverRUCollector *statementServerRUCollector
+	observer            StatementObserver
+	event               StatementEvent
+	runtime             *statementRuntimeEvent
+	diagnosticCollector *statementDiagnosticCollector
 }
 
 func beginStatementObservation(ctx context.Context, operation StatementOperation, statement string, arguments []any) *statementObservation {
@@ -259,6 +266,12 @@ func beginStatementObservationForContext(value *statementObserverContextValue, o
 	if statementServerRUCollectionEnabled(value) && serverRUStatementOperation(operation) {
 		result.event.ServerRU = &ServerRUObservation{}
 	}
+	if statementWarningCollectionEnabled(value) && serverRUStatementOperation(operation) {
+		result.event.Warnings = &WarningObservation{}
+		if result.event.ServerRU != nil {
+			result.event.Warnings.Error = ErrWarningsWithServerRU
+		}
+	}
 	return result
 }
 
@@ -284,11 +297,20 @@ func (observation *statementObservation) finishOutcome(affected int64, affectedK
 	if observation == nil {
 		return
 	}
-	observation.event.Duration = time.Since(observation.event.StartedAt)
+	observation.finishOutcomeDuration(affected, affectedKnown, returned, returnedKnown, err, time.Since(observation.event.StartedAt))
+}
+
+// finishOutcomeDuration permits an explicit plan terminal to collect warnings
+// and release its connection before callbacks, while measuring only the target.
+func (observation *statementObservation) finishOutcomeDuration(affected int64, affectedKnown bool, returned int64, returnedKnown bool, err error, elapsed time.Duration) {
+	if observation == nil {
+		return
+	}
+	observation.event.Duration = elapsed
 	observation.event.RowsAffected = affected
 	observation.event.RowsAffectedKnown = affectedKnown
 	observation.event.Error = err
-	observation.collectServerRU()
+	observation.collectDiagnostics()
 	observer := observation.observer
 	observation.observer = nil
 	runtimeEvent := observation.runtime
@@ -437,6 +459,24 @@ func (logger *statementLogger) observe(event StatementEvent) {
 	}
 	line.WriteByte(' ')
 	line.WriteString(event.Duration.String())
+	if w := event.Warnings; w != nil {
+		line.WriteString(" warnings=")
+		if w.Known {
+			line.WriteString(strconv.Itoa(len(w.Warnings)))
+		} else {
+			line.WriteString("unknown")
+		}
+		line.WriteString(" warning_diagnostic=")
+		line.WriteString(w.DiagnosticDuration.String())
+		line.WriteString(" warning_auxiliary=")
+		line.WriteString(strconv.Itoa(w.AuxiliaryStatements))
+		for _, diagnostic := range w.Diagnostics() {
+			line.WriteByte(' ')
+			line.WriteString(diagnostic.Code)
+			line.WriteByte('=')
+			line.WriteString(diagnostic.Title)
+		}
+	}
 	if event.ServerRU != nil {
 		line.WriteString(" diagnostic=")
 		line.WriteString(event.ServerRU.DiagnosticDuration.String())

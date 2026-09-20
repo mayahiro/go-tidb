@@ -181,8 +181,8 @@ func RawExec(ctx context.Context, executor ExecExecutor, statement string, argum
 	}
 	metadata := runtimeRawMetadata("", "exec")
 	observation := beginStatementObservationWithMetadata(ctx, inferStatementOperation(statement), statement, arguments, metadata)
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, statement, arguments...)
 	if err != nil {

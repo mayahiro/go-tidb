@@ -159,3 +159,8 @@ foreign keyは要求も検査も行いません
 referential-integrity policy、一般的なperformance index、Migration history、live database driftはoffline comparisonの対象外です
 
 現在のTiDB仕様は[`CREATE TABLE` grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)、[`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/)、[unique constraint semantics](https://docs.pingcap.com/tidb/stable/constraints/)、[case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)、[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
+
+`schema.Parse` は固定VECTOR次元数と対応するvector indexのcolumn／metricを保持します
+この特殊indexはscalar lookupや一意性の根拠にはしません
+queryごとの次元／vector index確認は `VectorQuery.SchemaDiagnostics` を使います
+任意のcustom Scanner型のmappingはapplicationの責任です。[ベクトル検索](vector-search_ja.md)を参照してください

@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-03
+- Last updated: 2026-09-15
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -154,6 +154,29 @@ The currently implemented surface provides:
 - Pure `ManyToMany` multi-row add, explicit duplicate-preserving add, selected
   remove, and source clear operations with scalar or composite relation keys
 - Typed raw partial and computed-result scanning plus explicit raw mutation SQL
+- To-one related aggregate fields with declared unique target keys and conditional
+  `Has` metrics, plus [windows over grouped outputs](docs/windows.md)
+- [Vector values/search](docs/vector-search.md), explicit exact/approximate modes,
+  offline index SQL/schema diagnostics, and observed ANN plan evidence
+- [Explicit replica preparation and capability probes](docs/tiflash.md), including
+  initial-readiness waiting and operator/cardinality summaries
+- Conservative aggregate projection/grouping source lint (`AGG001`) with separate
+  resolved/uncertain coverage; complete validation remains in `Build`
+- Source-model `Aggregate[T]` queries with scalar and relation-existence filters,
+  validated fields and aggregate
+  expressions including `CountIf` and `SumIf`, `Date` and `YearMonth` calendar
+  keys, output-name `GROUP BY`,
+  `HAVING` and ordering, soft-delete scope, paging, and scalar/struct `ScanAll` results
+- Explicit SELECT, aggregate, and vector `ReadFrom(TiKV/TiFlash)` and `MPP(MPPAuto/MPPEnforce)` hints,
+  covering the source and related target/junction table occurrences, with
+  statement-scoped settings and no `SET SESSION` or replica provisioning
+- Aggregate plan reports separate requested hints, planned operators, explicit
+  EXPLAIN ANALYZE execution, and same-session warnings; see
+  [aggregate contracts](docs/aggregates.md)
+- Explicit aggregate auto/TiKV/TiFlash MPP comparison with frozen arguments,
+  full result checks, rotated latency/ServerRU samples, separate runtime plans
+  and warnings, and complete measurement-only RuntimeCapture export; see
+  [comparison contracts](docs/aggregate-comparison.md)
 - Caller-owned `*sql.Tx` execution for queries, preloads, and mutations
 - Context-scoped statement observation and an automatic-color logger with
   explicit color overrides for any writer, argument values excluded by default,
@@ -170,6 +193,10 @@ The currently implemented surface provides:
 - Observer-scoped ServerRU capture that temporarily pins `*sql.DB` per
   recognized DML statement and records one auxiliary query without replacing
   target results on diagnostic failure
+- Opt-in ordinary DML warning collection, automatic delivery of already
+  collected aggregate/vector plan warnings, and value-free `WRN001` through
+  `WRN003` summaries in the logger, RuntimeCapture, and CLI; see
+  [warning contracts](docs/warnings.md)
 - Immutable offline catalogs parsed from self-contained TiDB CREATE TABLE
   snapshots, including SHOW CREATE TABLE executable comments
 - Directional SQL-snapshot and Go-model compatibility checks for mapped tables,
@@ -283,6 +310,16 @@ the same artifact and writes one versioned, timestamp-free, fingerprint-sorted
 ServerRU aggregate JSON object to standard output. It rejects captures with no
 successful sample or any collection error and does not yet apply a regression
 threshold.
+
+`CollectWarnings` optionally probes ordinary DML warnings on the same connection.
+It distinguishes uncollected, known-empty, and failed observations. Explicit
+aggregate/vector plans publish existing warning results without another probe.
+The logger and capture store only fixed categories and counts, never warning
+messages or auxiliary warning-error text. `tidbgo analyze` aggregates those
+counts by fingerprint and reports `WRN001` through `WRN003`. If ServerRU is also
+requested, it takes precedence and warnings report `ErrWarningsWithServerRU`:
+the two probes overwrite each other's session state on Starter. Some MPP
+warnings require EXPLAIN, so empty ordinary warnings do not establish support.
 
 `ExplainAnalyzePlan.Diagnostics` inspects an explicitly collected runtime plan
 without another database call. Suppressible `PLN001` through `PLN004` warnings

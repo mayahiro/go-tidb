@@ -157,6 +157,7 @@ type sourceQueryPattern struct {
 	seekAfter          sourceToggleState
 	withDeleted        sourceToggleState
 	forceIndex         sourceToggleState
+	columnar           sourceToggleState
 	index              *sourceIndexPattern
 }
 
@@ -714,6 +715,7 @@ func mergeSourceQueryPatterns(left, right sourceQueryPattern) sourceQueryPattern
 		seekAfter:          mergeSourceToggle(left.seekAfter, right.seekAfter),
 		withDeleted:        mergeSourceToggle(left.withDeleted, right.withDeleted),
 		forceIndex:         mergeSourceToggle(left.forceIndex, right.forceIndex),
+		columnar:           mergeSourceToggle(left.columnar, right.columnar),
 		index:              mergeSourceIndexPatterns(left.index, right.index),
 	}
 }

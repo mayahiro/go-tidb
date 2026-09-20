@@ -37,7 +37,9 @@ func compileRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 
 	var query strings.Builder
 	query.Grow(sqlCapacity)
-	query.WriteString("SELECT COUNT(*) FROM ")
+	query.WriteString("SELECT ")
+	ReadPolicy{Engine: selection.policy().Engine}.writeTables(&query, []string{associationTable})
+	query.WriteString("COUNT(*) FROM ")
 	writeQuotedIdentifier(&query, associationTable)
 
 	var arguments []any
@@ -45,10 +47,11 @@ func compileRelationCount(descriptor *model.Descriptor, selection *selectQuery) 
 		arguments = make([]any, 0, argumentCount)
 	}
 	predicates := predicateCompiler{
-		descriptor: metadata.target,
-		query:      &query,
-		arguments:  arguments,
-		operation:  "COUNT",
+		descriptor:     metadata.target,
+		query:          &query,
+		arguments:      arguments,
+		operation:      "COUNT",
+		relationEngine: selection.policy().Engine,
 	}
 	wroteWhere := false
 	if filterSoftDeleted {

@@ -6,10 +6,18 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 
 [English](README.md) | [Struct model](docs/models_ja.md) |
 [Query](docs/queries_ja.md) | [Mutationとraw SQL](docs/mutations_ja.md) |
+[集計とTiFlash](docs/aggregates_ja.md) |
+[ウィンドウ関数](docs/windows_ja.md) | [ベクトル検索](docs/vector-search_ja.md) |
+[TiFlashの準備](docs/tiflash_ja.md) |
 [解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
+[サーバー警告](docs/warnings_ja.md) |
 [Development](docs/development_ja.md)
 
 ## 利用できる機能
+
+- to-one関連集計、Relation条件付き指標、集計後のウィンドウ関数
+- 正確／近似ベクトル検索、ベクトル型、schema／plan診断
+- 明示的なTiFlashレプリカ準備と機能確認
 
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
@@ -22,6 +30,8 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - primary keyまたはpredicateで範囲を限定したupdateとdelete
 - soft delete、restore、pure junction mutation、transaction helper
 - raw JOIN、CTE、aggregate、partial resultのtyped scan
+- Relation条件、条件付きの件数・合計、日別・月別のgrouping、HAVING、結果structへのscan、明示的なTiKV／TiFlash・MPP指定とplan・警告確認を備えたsource modelの集計builder
+- 結果照合、latency／ServerRU測定、独立plan、baseline用capture出力を備えた[集計の実行方針比較](docs/aggregate-comparison_ja.md)
 - terminalの自動色付きshared-executor statement observation
 - actual root、preload、split bulk statementを記録するobserver設定だけのstructured runtime captureとoffline N+1解析
 - typed query builderによるSELECT限定のTiDB execution plan取得
@@ -438,7 +448,8 @@ soft-delete modelのSELECTとUPDATEにはactive-row guardを追加します
 
 `Upsert` と `UpsertMany` のzero-valued soft-delete fieldはNULLを書き込むため、conflictしたrowをrestoreします
 
-scalar builderの範囲外となるJOIN、CTE、aggregateなどには `Raw[T]` を使います
+source modelのgroupingには [`Aggregate[T]`](docs/aggregates_ja.md) を使い、`Where(Has(...))` で関連先のデータを条件に絞り込めます
+scalar／aggregate builderの範囲外となるJOIN、CTEなどには `Raw[T]` を使います
 
 result column名を `computed` fieldを含むmodel columnへmappingします
 

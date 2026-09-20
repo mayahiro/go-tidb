@@ -54,6 +54,8 @@ func NewRuntimeCapture(writer io.Writer) *RuntimeCapture {
 // CollectServerRU can explicitly add one same-session diagnostic query for
 // each recognized DML statement. A later WithStatementObserver call also
 // preserves the capture.
+// CollectWarnings adds same-session warning collection instead of ServerRU;
+// explicit aggregate/vector plan warning summaries are always captured.
 // Installing another RuntimeCapture on the derived context replaces the
 // inherited capture and its options.
 func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ...RuntimeCaptureOption) context.Context {
@@ -66,7 +68,7 @@ func WithRuntimeCapture(ctx context.Context, capture *RuntimeCapture, options ..
 	}
 	value.runtimeCapture = capture
 	value.runtimeScope = &statementRuntimeScope{id: capture.nextScope.Add(1)}
-	value.options &^= statementRuntimeCollectServerRU
+	value.options &^= statementRuntimeCollectServerRU | statementRuntimeCollectWarnings
 	for _, option := range options {
 		if option != nil {
 			option.applyRuntimeCapture(value)
@@ -144,6 +146,11 @@ func (capture *RuntimeCapture) observe(event StatementEvent, runtimeEvent *state
 	}
 	if event.Error != nil {
 		record.Error = event.Error.Error()
+	}
+	if event.Warnings != nil {
+		w := event.Warnings
+		record.Warnings = &runtimecapture.Warnings{Summary: summarizeWarnings(w.Warnings), Known: w.Known,
+			Failed: w.Error != nil, DiagnosticDurationNS: w.DiagnosticDuration.Nanoseconds(), AuxiliaryStatements: w.AuxiliaryStatements}
 	}
 	encoded, err := json.Marshal(record)
 	if err == nil {

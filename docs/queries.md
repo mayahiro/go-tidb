@@ -780,5 +780,14 @@ The public query surface includes `Build`, `All`, `ScanAll`, `First`, `Only`, `E
 many-to-many relation predicates, and nested direct or many-to-many
 preloads with target projection, collection ordering, and per-path soft-delete
 scope.
-Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice, and typed `Raw[T]`
-for joins, CTEs, aggregates, and other SQL outside the scalar builder surface.
+Use `Select("ID").ScanAll(ctx, db, &ids)` for an ID slice and
+[`Aggregate[T]`](aggregates.md) for source-model aggregates with optional `Has` filters. Use typed
+`Raw[T]` for joins, CTEs, and SQL beyond these builders.
+
+## Storage and MPP requests
+
+Ordinary query builders support `ReadFrom(orm.TiKV/orm.TiFlash)` and
+`MPP(orm.MPPAuto/orm.MPPEnforce)` across terminals and relation preloads.
+The compiler hints physical aliases after rewrites and preserves the default
+path when no policy is requested. `ForceIndex` conflicts with TiFlash.
+These are requests, not execution guarantees; see [TiFlash policy](tiflash.md).

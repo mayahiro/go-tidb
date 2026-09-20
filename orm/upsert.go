@@ -49,8 +49,8 @@ func (q *UpsertQuery[T]) Exec(ctx context.Context, executor ExecExecutor) (int64
 		return 0, err
 	}
 	observation := beginTypedMutationStatementObservation(ctx, StatementUpsert, compiled.sql, compiled.arguments, compiled.modelName, "upsert")
-	if observation != nil && observation.event.ServerRU != nil {
-		executor = observation.prepareServerRUExecExecutor(ctx, executor)
+	if observation != nil && (observation.event.ServerRU != nil || observation.event.Warnings != nil) {
+		executor = observation.prepareDiagnosticExecExecutor(ctx, executor)
 	}
 	result, err := executor.ExecContext(ctx, compiled.sql, compiled.arguments...)
 	if err != nil {

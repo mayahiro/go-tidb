@@ -90,15 +90,16 @@ func (t Table) PrimaryKeyColumns() []string {
 
 // Column is immutable metadata for one physical table column.
 type Column struct {
-	name          string
-	typeName      string
-	position      Position
-	nullable      bool
-	unsigned      bool
-	hasDefault    bool
-	generated     bool
-	autoIncrement bool
-	autoRandom    bool
+	name             string
+	typeName         string
+	position         Position
+	nullable         bool
+	unsigned         bool
+	hasDefault       bool
+	generated        bool
+	autoIncrement    bool
+	autoRandom       bool
+	vectorDimensions int
 }
 
 // Name returns the physical column name.
@@ -106,6 +107,10 @@ func (c Column) Name() string { return c.name }
 
 // TypeName returns the normalized uppercase SQL base type name.
 func (c Column) TypeName() string { return c.typeName }
+
+// VectorDimensions returns the declared VECTOR dimension count. Zero means a
+// variable-dimensional VECTOR or a non-vector column; inspect TypeName as well.
+func (c Column) VectorDimensions() int { return c.vectorDimensions }
 
 // Position returns the location of the column name in the SQL source.
 func (c Column) Position() Position { return c.position }
@@ -146,6 +151,8 @@ type Index struct {
 	specialized   bool
 	partial       bool
 	invisible     bool
+	vectorColumn  string
+	vectorMetric  string
 }
 
 // Name returns the declared index name, or PRIMARY for a primary key.
@@ -169,6 +176,13 @@ func (i Index) Unique() bool { return i.primary || i.unique }
 // length, or another form that is not a complete simple column reference with
 // an optional ASC or DESC direction.
 func (i Index) HasExpression() bool { return i.hasExpression }
+
+// Vector returns the column and SQL distance-function name for a recognized
+// single-column VECTOR INDEX. The boolean is false for other index forms.
+// A vector index never establishes scalar lookup or uniqueness coverage.
+func (i Index) Vector() (column, function string, ok bool) {
+	return i.vectorColumn, i.vectorMetric, i.vectorColumn != "" && !i.partial && !i.invisible
+}
 
 // ProvidesUnconditionalUniqueness reports whether the index enforces
 // uniqueness for the complete listed columns across every table row.

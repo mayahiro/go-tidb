@@ -2,6 +2,20 @@
 
 [日本語](observability_ja.md)
 
+For aggregate query policy across source and related tables, same-session plan warnings, and
+TiFlash/MPP task interpretation, see [Aggregates and TiFlash](aggregates.md).
+Aggregate SELECT capture uses `source=typed_aggregate` and a hint-sensitive
+`s1:` statement fingerprint. It carries no scalar query shape or bind values.
+Explicit aggregate plan calls capture the target EXPLAIN statement; their
+auxiliary `SHOW WARNINGS` is returned by the plan API and is not a separate
+capture record or part of the ServerRU auxiliary count.
+
+[`AggregateQuery.Compare`](aggregate-comparison.md) explicitly collects RU
+even without `CollectServerRU`. It defers callbacks until comparison and release
+of an internally pinned connection. Enclosing captures include warmups and
+separate plans; `AggregateComparison.WriteCapture` exports only one variant's
+measured SELECTs for baseline input.
+
 Configure opt-in observation once on the caller-owned executor and share the
 returned executor with repositories:
 
@@ -621,3 +635,19 @@ are outside this boundary because `go-tidb` does not install a
 
 No observer is installed by default. Offline `Build` and model inspection never
 emit events or perform I/O.
+
+Vector SELECTs use `source=typed_vector` and bind-free, hint-sensitive SQL
+fingerprints. Ordinary SELECT QueryShapes include optional `read_engine` and
+`mpp` fields in their fingerprints, preventing measurements for different
+requests from sharing a baseline. Unspecified-policy fingerprints are unchanged.
+
+## Server warnings
+
+Use `CollectWarnings()` with `Observe`, `WithStatementObserver`, or
+`WithRuntimeCapture` to collect same-session warnings for ordinary DML.
+`StatementEvent.Warnings` separates a successful empty result from missing
+coverage or collection failure. Aggregate/vector explicit plans publish their
+already collected warnings without this option. The built-in logger and capture
+keep only safe `WRN001`-`WRN003` summaries. MPP warnings may require EXPLAIN.
+ServerRU collection takes precedence when both options apply. See
+[server warning diagnostics](warnings.md) for cost, coverage, and examples.

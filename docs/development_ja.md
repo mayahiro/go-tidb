@@ -4,6 +4,135 @@
 
 このguideは `go-tidb` contributor向けのcommand、repository構成、integration test設定、benchmark手順を記載します
 
+## 集計とTiFlashの検証
+
+[集計API](aggregates_ja.md)のoffline testはgrouping、alias、NULLと型変換error、結果の所有権、hintの競合、未知のplan task、警告回収の失敗、connectionとcallbackの順序を確認します
+
+```sh
+go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateRelation$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
+```
+
+benchmarkは同じSQLと結果値を使い、同じlocal test driverで集計の `ScanAll`、typed `Raw`、直接の `database/sql` collectorを比較します
+出力group数は0、1、100、10,000です
+TiDB、network、driverのargument変換、RUは測定しません
+固定raw queryに対し、集計SQLの構築と結果mapping検証のcallごとの処理が加わります
+
+`BenchmarkAggregatePeriod` は同じgroup数で、期間keyへのHAVINGを含む `Date` と `YearMonth` を、同等のtyped rawと直接collectorで比較します
+すべて同じSQLと結果型を使い、local driverは日時式を評価しません
+日別経路のprofileには `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` を使い、代替経路では `raw` を指定します
+
+`BenchmarkAggregateConditional` は `BenchmarkAggregate` と同じgroup数と結果型を使い、条件付き件数／合計とHAVINGでの条件付き出力の再参照を含みます
+代替方式は同じSQLとbind値を使い、driverはSQL条件を評価しません
+profileには `-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` を使い、`raw` と比較します
+
+`BenchmarkAggregateRelation` は入れ子の `Has` を含む集計を、同じ0／1／100／10,000 group、SQL、bind値、結果型でaggregate／raw／直接collectorと比較します
+driverは関連先の検索を実行しません
+profileには以下のcommandで `-bench '^BenchmarkAggregateRelation$/^rows_100$/^aggregate$'` と対応する `raw` 経路を指定します
+
+比較benchmarkは同じ0／1／100／10,000行のdriver data、21組のSELECT／RU取得、3組のplan／警告を使います
+代替となる手書き方式はtypedな `ScanAll` と結果照合を使い、`Compare` は入力固定、loop前のcompile、raw結果bufferの再利用、sample統計を含みます
+診断全体の処理を測定し、通常ORM queryの性能変化や同じ結果mappingのcostを測るものではありません
+
+代表経路のprofileを取得し、`raw` または `database_sql` と比較できます
+
+```sh
+aggregate_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -benchtime=2s -cpuprofile "$aggregate_profile_dir/cpu" -memprofile "$aggregate_profile_dir/mem" -o "$aggregate_profile_dir/orm.test"
+go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
+```
+
+比較のprofileは `-bench '^BenchmarkAggregateComparison$/^rows_100$'` と `-bench '^BenchmarkAggregateComparisonManual$/^rows_100$'` を別fileへ出力し、同じprofile commandで確認します
+確認後は自分で作成した一時profile directoryを削除してください
+
+後述の専用database用に `TIDBGO_TEST_DSN` を設定して実行します
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlash$' -count=1 -v
+```
+
+このopt-in testは自分が所有する `tidbgo_it_tiflash_aggregates` tableを作り、NULLを含むDECIMALの20,000行を投入し、statisticsを解析してTiFlash replicaを2つ要求し、初期 `AVAILABLE=1` を待ちます
+既存tableは削除しません。作成したtableは失敗時もcleanupします
+
+固定した `aggregate_v1` datasetで、広いscan、主キーの20行range、選択性の高いsecondary index、20,000出力groupを比較します
+Auto、TiKV、TiFlash MPPに対し、手書きSQLと集計builderを使います
+両実装を2回warm-upし、3 roundでengineと実装の順序を交代します
+全結果値、NULL、順序の一致を要求します
+latencyはrowsのcloseまでを測定し、同じconnectionで直後に読むRU probeはその区間に含めません
+警告とruntime planは別の明示的なplan実行から取得します
+普遍的なlatency／RU閾値は設けません。free planの制約、cache、statistics、network、共有serviceの負荷が測定へ影響します
+
+各workloadでは公開 `Compare` も2回warmupし、5 round測定します
+全結果の照合と、3 variantのexportから既存baseline analyzerへの連携を確認します
+レプリカ欠如時は未完了statusと警告の保持を確認します
+offlineの比較testでは値と順序の変化、Valuerの固定、float許容誤差、driver数値型、行数上限、cancel、部分report、capture writerのerrorも確認します
+
+レプリカ不在の警告、空入力、nullable結果、7種類の集計関数、HAVINGとpaging、sourceのsoft-delete、physical tableの解決、MPPのsession設定復元も確認します
+通常実行とEXPLAIN ANALYZEは別の観測です
+sampleは請求RUやTiFlashが速い・安いことの保証ではありません
+レプリカ準備、storage、seed、warm-up、probe、cleanupは報告するSELECT測定外のcostを生みます
+このdatabaseで複数の接続testを同時に実行しないでください
+
+期間集計のintegration testは同じ専用databaseのguardを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterPeriodAggregates$' -count=1 -v
+```
+
+自分が所有する `tidbgo_it_period_aggregates` tableを作成し、20,000行と2つのTiFlash replicaを準備して、終了時にcleanupします
+日別・月別の結果を独立したGoの計算と比較し、UTC／JSTのsessionとdriver location、interpolationの有無、NULL、年末・月末・うるう日、alias衝突、HAVINGとpaging、`parseTime=false`、空結果を確認します
+TIMESTAMPとDATETIMEは分けて検証します
+
+4 workloadは1週間のtimestamp範囲、NULL以外の全日、全月、日付と店舗のgroupを扱います
+元のcolumnへのrange条件により、入力filterと期間抽出を分けます
+`DATE` と `EXTRACT(YEAR_MONTH ...)` を同等の `DATE_FORMAT` とcastに対し、2回のwarmupと実装順を交代する5 roundで比較します
+両実装ともtyped rawでscanし、全結果を照合して同じsessionで直後にServerRUを読みます
+各workloadで公開 `Compare` も実行します。そのplanとstorage側の集計operatorは通常実行とは別の観測です
+これらのworkloadは普遍的なlatencyやRUの優位性を示すものではありません
+
+条件付き集計のintegration testも専用databaseのguardと明示的なTiFlash opt-inを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterConditionalAggregates$' -count=1 -v
+```
+
+自分が所有する `tidbgo_it_conditional_aggregates` tableを作成・cleanupし、20,000行の投入とstatistics解析、2つのTiFlash replicaの準備を行います
+TRUE／FALSE／NULLの条件、空と一致行のないgroup、正確なDECIMAL、soft-delete、escape付きLIKE、alias衝突、HAVING／順序、日別・月別のpaging、interpolationの有無を明示した期待値と照合します
+
+4 workloadは複数指標、日別group、月別group、status indexに対する少数の一致行を扱います
+独立した手書きCASE、IF、filter付きSQLを同じtyped raw collectorで比較します
+filter付きSQLは全入力件数のqueryと条件一致の件数／合計のqueryを使い、欠けたgroupを件数0・合計NULLとして統合します
+少数一致のworkloadは条件付き指標だけを要求するため、代替はindexを持つstatus columnへ条件を指定する1つのWHERE queryになります
+
+auto、TiKV、TiFlash MPPの指定ごとに各方式を2回warmupし、方式の順序を交代する5 roundを測定します
+latencyはSELECTからrowsのcloseまでと結果統合の時間を合計し、直後の同じsessionでのRU probeは含みません
+ServerRUは1つの結果に必要なstatementの分を合計します
+全結果値と順序の一致を要求します
+公開 `Compare` はworkloadごとに別途実行し、そのplanとstorage側の集計operatorを記録します
+指標の統合やTiFlashによるlatency／RUの削減は保証しません
+
+Relation集計のtestも専用test databaseと明示的なopt-inを使います
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterAggregateRelations$' -count=1 -v
+```
+
+`tidbgo_it_aggregate_relation_nodes` のsource 10,000行と関連20,000行、`tidbgo_it_aggregate_relation_edges` の20,000行を所有し、終了時にcleanupします
+statisticsを解析し、各tableに2つのTiFlash replicaを要求します
+重複一致、NULL／欠落key、source／target／edgeのsoft-delete、入れ子・否定・Or、空／全NULL集計、期間key、条件付き集計、HAVING、paging、interpolationの有無を明示した期待値と照合します
+
+広い月別、選択性の高い条件、多数group、viaの4 workloadで、独立した手書きhint付きEXISTS、通常EXISTS、重複を除いた一致keyとのJOINを比較します
+typed Rawと同じ結果型を使い、全結果値と順序を照合します
+auto、TiKV、TiFlash MPPごとに各方式を2回warmupし、方式順を交代して5 sampleを測定します
+latencyはRaw構築、SELECT、scan、rows closeを含み、直後の同じsessionによるRU probeを除きます
+公開 `Compare` を別途実行し、結果、関連tableのplan対応、engine要求、警告を検証します
+hintやJOINへの書き換えによる高速化は保証しません
+
 ## Local check
 
 repository rootからofflineで完結する全確認を実行します
@@ -38,7 +167,7 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 ## Package boundary
 
 - `model`: application-owned Go structのcached offline metadata
-- `orm`: offline queryとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
+- `orm`: offline query、aggregateとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
 - `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
 - `check`: shared diagnostic data typeとoffline modelおよびphysical schema check
 - `migrate`: 独立したMigration tooling用に予約した境界
@@ -622,3 +751,41 @@ benchmarkは5個のinline to-one joinを持つparent SELECT、nested to-one join
 1本のpinned connectionを使い、elapsed time、Go allocation、statement単位のsampled RUをoperationごとに合計します
 
 setup、RU sampling query、cleanupは計測時間とapplication statement countに含めません
+
+## Window、vector、準備機能の検証
+
+```sh
+go test ./orm ./schema ./tiflash ./vector ./internal/sourcecheck ./examples/starter-app
+go test ./orm -run '^$' -bench '^(BenchmarkAggregateWindow|BenchmarkAggregateRelatedBuild|BenchmarkVectorSearchBuild)$' -benchmem -count=3
+go test ./vector -run '^$' -bench '^(BenchmarkVectorRoundTrip|BenchmarkVectorDecoderAlternatives)$' -benchmem -count=3
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlashExtensions$' -count=1 -v
+```
+
+接続する拡張testにも他のStarter testと同じ専用DSNの制約があります
+`tidbgo_it_tiflash_extensions` を所有・削除し、不在／削除済み関連を含む5,000行、2レプリカ、L2 vector indexを用意します
+capability確認とreplica待機、通常query／preload、関連groupingと条件付きEXISTS指標、group後のROW_NUMBER／LAG／累積SUMと手動JOINの一致を確認します
+prepared／interpolationの両方式、TiKV参照との正確vector結果一致、ANN planと事前filter時のfallback、nullable cosine距離、次元エラー時の宛先保持、実際のSHOW CREATE TABLE metadataも確認します
+全window operatorのMPP対応を仮定せずserver警告を残します
+記録する単発sampleは観測値であり、再現可能な性能保証や再現率benchmarkではありません
+
+fake driverのwindow benchmarkは0、1、100、10,000groupでbuilder／Raw／database/sqlの同一結果を比較します
+vector decoder比較は3、768、16,383次元で上限付きtyped-array解析とtoken解析を比較します
+これはclient CPU／allocationの測定であり、ANN品質、TiFlash indexing、network cost、production throughputは測りません
+上記profile手順のbenchmark名を置き換えて利用できます
+近似検索の採用前にapplication dataの大きいembeddingと代表的なfilterを測定します
+
+## 警告の検証
+
+```sh
+go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
+```
+
+接続testには前述の専用 `TIDBGO_TEST_DSN` が必要です
+自身で作成した `tidbgo_it_warning_state` だけを使用・削除します
+警告とRUの干渉、SELECTとmutationの警告観測、安全なcapture解析、収集有無を交互にした小queryのlatencyを確認します
+既存のTiFlash拡張testでもwindow planの警告通知と通常SELECTの警告確認範囲を検証します
+offline benchmarkは1／100結果行、0／1／1,000警告行で、収集なし、任意収集、手動での接続固定とSHOW WARNINGSを比較します
+networkとTiDBの時間は含みません
+profileは前述のコマンドで `warnings_1/rows_100/collect` と `warnings_1000/rows_1/collect` を対象にします

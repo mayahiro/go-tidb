@@ -3,6 +3,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -519,7 +520,7 @@ func tableConstraint(tokens []sqlToken) bool {
 	if len(tokens) == 0 {
 		return false
 	}
-	for _, keyword := range [...]string{"CONSTRAINT", "PRIMARY", "UNIQUE", "KEY", "INDEX", "FOREIGN", "CHECK", "FULLTEXT", "SPATIAL"} {
+	for _, keyword := range [...]string{"CONSTRAINT", "PRIMARY", "UNIQUE", "KEY", "INDEX", "FOREIGN", "CHECK", "FULLTEXT", "SPATIAL", "VECTOR"} {
 		if tokens[0].keyword(keyword) {
 			return true
 		}
@@ -551,6 +552,16 @@ func parseColumn(source string, tokens []sqlToken) (Column, []Index, error) {
 		typeName: typeName,
 		position: positionAt(source, tokens[0].offset),
 		nullable: true,
+	}
+	if typeName == "VECTOR" && tokenAtSymbol(tokens, 2, "(") {
+		if len(tokens) < 5 || tokens[3].kind != tokenNumber || !tokenAtSymbol(tokens, 4, ")") {
+			return Column{}, nil, parseErrorAt(source, tokens[2].offset, "VECTOR requires one positive dimension count")
+		}
+		dimensions, err := strconv.Atoi(tokens[3].text)
+		if err != nil || dimensions < 1 || dimensions > 16383 {
+			return Column{}, nil, parseErrorAt(source, tokens[3].offset, "VECTOR dimensions must be between 1 and 16383")
+		}
+		column.vectorDimensions = dimensions
 	}
 	primary := false
 	unique := false
@@ -644,7 +655,8 @@ func parseTableIndex(source string, tokens []sqlToken) (Index, bool, error) {
 	if tokens[0].keyword("FOREIGN") || tokens[0].keyword("CHECK") {
 		return Index{}, false, nil
 	}
-	specialized := tokens[0].keyword("FULLTEXT") || tokens[0].keyword("SPATIAL")
+	vectorIndex := tokens[0].keyword("VECTOR")
+	specialized := tokens[0].keyword("FULLTEXT") || tokens[0].keyword("SPATIAL") || vectorIndex
 	if specialized {
 		tokens = tokens[1:]
 		if len(tokens) == 0 {
@@ -696,6 +708,20 @@ func parseTableIndex(source string, tokens []sqlToken) (Index, bool, error) {
 		primary:     primary,
 		unique:      unique,
 		specialized: specialized,
+	}
+	if vectorIndex {
+		if len(parts) != 1 {
+			return Index{}, false, parseErrorAt(source, positionToken.offset, "VECTOR INDEX requires one distance expression")
+		}
+		part := parts[0]
+		if len(part) != 6 || !tokenAtSymbol(part, 0, "(") || !tokenAtSymbol(part, 2, "(") || !tokenAtSymbol(part, 4, ")") || !tokenAtSymbol(part, 5, ")") || !(part[1].keyword("VEC_COSINE_DISTANCE") || part[1].keyword("VEC_L2_DISTANCE")) {
+			return Index{}, false, parseErrorAt(source, positionToken.offset, "unsupported VECTOR INDEX distance expression")
+		}
+		column, ok := part[3].identifier()
+		if !ok {
+			return Index{}, false, parseErrorAt(source, part[3].offset, "VECTOR INDEX requires a column identifier")
+		}
+		index.vectorColumn, index.vectorMetric = column, strings.ToUpper(part[1].text)
 	}
 	for _, token := range tokens[closeIndex+1:] {
 		if token.keyword("WHERE") {

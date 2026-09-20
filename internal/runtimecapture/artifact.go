@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/go-tidb/internal/queryshape"
+	"github.com/mayahiro/go-tidb/internal/warningcheck"
 )
 
 // Version identifies the JSON Lines runtime artifact format.
@@ -21,13 +22,15 @@ const statementFingerprintPrefix = "s1:"
 type Source string
 
 const (
-	SourceTypedSelect   Source = "typed_select"
-	SourcePreload       Source = "preload"
-	SourceTypedMutation Source = "typed_mutation"
-	SourceRaw           Source = "raw"
-	SourceTransaction   Source = "transaction"
-	SourcePlan          Source = "plan"
-	SourceUnknown       Source = "unknown"
+	SourceTypedSelect    Source = "typed_select"
+	SourceTypedAggregate Source = "typed_aggregate"
+	SourceTypedVector    Source = "typed_vector"
+	SourcePreload        Source = "preload"
+	SourceTypedMutation  Source = "typed_mutation"
+	SourceRaw            Source = "raw"
+	SourceTransaction    Source = "transaction"
+	SourcePlan           Source = "plan"
+	SourceUnknown        Source = "unknown"
 )
 
 // Batch identifies one statement within an automatically split ORM operation.
@@ -49,6 +52,15 @@ type ServerRU struct {
 	DiagnosticDurationNS int64   `json:"diagnostic_duration_ns"`
 	AuxiliaryStatements  int     `json:"auxiliary_statements"`
 	Error                string  `json:"error,omitempty"`
+}
+
+// Warnings stores only safe categories and collection status, never server text.
+type Warnings struct {
+	Summary              warningcheck.Summary `json:"summary"`
+	Known                bool                 `json:"known"`
+	Failed               bool                 `json:"failed"`
+	DiagnosticDurationNS int64                `json:"diagnostic_duration_ns"`
+	AuxiliaryStatements  int                  `json:"auxiliary_statements"`
 }
 
 // Record is one completed ORM statement in a runtime capture JSON Lines file.
@@ -77,6 +89,7 @@ type Record struct {
 	Query             *queryshape.Query    `json:"query,omitempty"`
 	Mutation          *queryshape.Mutation `json:"mutation,omitempty"`
 	ServerRU          *ServerRU            `json:"server_ru,omitempty"`
+	Warnings          *Warnings            `json:"warnings,omitempty"`
 }
 
 // StatementFingerprint returns a stable bind-free identity for one SQL
@@ -143,6 +156,21 @@ func (record Record) Validate() error {
 			if record.ServerRU.Error == "" {
 				return fmt.Errorf("runtime capture record has no ServerRU result or error")
 			}
+		}
+	}
+	if w := record.Warnings; w != nil {
+		if w.DiagnosticDurationNS < 0 || w.AuxiliaryStatements < 0 || w.AuxiliaryStatements > 1 {
+			return fmt.Errorf("runtime capture record has invalid warning collection metrics")
+		}
+		if w.Summary.MPPBlocked < 0 || w.Summary.Other < 0 || w.Summary.Notes < 0 {
+			return fmt.Errorf("runtime capture record has negative warning counts")
+		}
+		if w.Known {
+			if w.AuxiliaryStatements != 1 {
+				return fmt.Errorf("runtime capture record has known warnings without a probe")
+			}
+		} else if !w.Failed || w.Summary != (warningcheck.Summary{}) {
+			return fmt.Errorf("runtime capture record has invalid unknown warnings")
 		}
 	}
 	if record.Batch != nil {

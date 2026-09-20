@@ -7,10 +7,18 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 
 [日本語](README_ja.md) | [Struct models](docs/models.md) |
 [Queries](docs/queries.md) | [Mutations and raw SQL](docs/mutations.md) |
+[Aggregates and TiFlash](docs/aggregates.md) |
+[Windows](docs/windows.md) | [Vector search](docs/vector-search.md) |
+[TiFlash preparation](docs/tiflash.md) |
 [Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
+[Server warnings](docs/warnings.md) |
 [Development](docs/development.md)
 
 ## Available features
+
+- To-one related aggregates, conditional relation metrics, and windows over groups
+- Exact/approximate vector search, vector values, and schema/plan diagnostics
+- Explicit TiFlash replica preparation and capability probes
 
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction
@@ -25,6 +33,11 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - Primary-key and predicate-bounded update and delete
 - Soft deletion, restore, pure-junction mutations, and transaction helpers
 - Typed scanning for raw joins, CTEs, aggregates, and partial results
+- Source-model aggregate builders with relation filters, conditional counts and sums,
+  daily/monthly grouping, HAVING, output-struct scanning, and explicit
+  TiKV/TiFlash and MPP hints with plan and warning inspection
+- [Aggregate policy comparison](docs/aggregate-comparison.md) with result checks,
+  latency/ServerRU samples, separate plans, and baseline capture export
 - Shared-executor statement observation with automatic terminal colors
 - Observer-only structured runtime capture of actual root, preload, and
   split-bulk statements, with offline N+1 analysis
@@ -427,7 +440,9 @@ Soft-delete models add active-row guards to SELECT and UPDATE statements.
 models continue to use physical DELETE. Zero-valued soft-delete fields in
 `Upsert` and `UpsertMany` write NULL and therefore restore conflicting rows.
 
-Use `Raw[T]` for joins, CTEs, aggregates, and other SQL outside the scalar
+Use [`Aggregate[T]`](docs/aggregates.md) to group source-model rows, optionally
+filtered by related data with `Where(Has(...))`.
+Use `Raw[T]` for joins, CTEs, and other SQL outside the scalar or aggregate
 builder. Returned column names map to model columns, including fields tagged
 `computed`. Use `RawExec` only when a mutation expression cannot be represented
 by the typed API. See the [mutation and raw SQL guide](docs/mutations.md).

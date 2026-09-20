@@ -48,6 +48,7 @@ type preloadPlan struct {
 	inline            bool
 	loadAllSources    bool
 	withDeleted       bool
+	readPolicy        *ReadPolicy
 }
 
 type preloadSoftDeletePlan struct {
@@ -646,7 +647,7 @@ func compilePreloadAll(plan *preloadPlan) string {
 		writePreloadSoftDeletePredicate(&query, plan.targetStatement.qualifier, plan.softDelete.column)
 	}
 	writePreloadOrderBy(&query, plan.targetStatement.qualifier, plan.orderBy)
-	return query.String()
+	return preloadReadPolicy(query.String(), plan)
 }
 
 func compilePreloadBatch(plan *preloadPlan, keys []preloadKey) (string, []any) {
@@ -664,7 +665,7 @@ func compilePreloadBatch(plan *preloadPlan, keys []preloadKey) (string, []any) {
 	}
 	arguments := writePreloadKeyPredicate(&query, plan.targetStatement.qualifier, plan.targetKeyColumns, keys)
 	writePreloadOrderBy(&query, plan.targetStatement.qualifier, plan.orderBy)
-	return query.String(), arguments
+	return preloadReadPolicy(query.String(), plan), arguments
 }
 
 func compileManyToManyPreloadBatch(plan *preloadPlan, keys []preloadKey) (string, []any) {
@@ -678,7 +679,7 @@ func compileManyToManyPreloadBatch(plan *preloadPlan, keys []preloadKey) (string
 	}
 	arguments := writePreloadKeyPredicate(&query, "j", junction.sourceColumns, keys)
 	writePreloadOrderBy(&query, "t", plan.orderBy)
-	return query.String(), arguments
+	return preloadReadPolicy(query.String(), plan), arguments
 }
 
 func compileManyToManyPreloadAll(plan *preloadPlan) string {
@@ -688,7 +689,7 @@ func compileManyToManyPreloadAll(plan *preloadPlan) string {
 	writeManyToManyPreloadSelect(&query, plan)
 	writeManyToManyPreloadScope(&query, plan, " WHERE ")
 	writePreloadOrderBy(&query, "t", plan.orderBy)
-	return query.String()
+	return preloadReadPolicy(query.String(), plan)
 }
 
 func writeManyToManyPreloadScope(query *strings.Builder, plan *preloadPlan, prefix string) bool {

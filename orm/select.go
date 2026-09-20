@@ -33,6 +33,7 @@ type selectQuery struct {
 	withDeleted   bool
 	forceIndex    string
 	forceIndexSet bool
+	readPolicy    *ReadPolicy
 }
 
 var (
@@ -41,6 +42,19 @@ var (
 )
 
 func compileSelect(query *selectQuery) (compiledSelect, error) {
+	if err := query.validatePolicy(); err != nil {
+		return compiledSelect{}, err
+	}
+	compiled, err := compileSelectBase(query)
+	if err != nil || query.readPolicy == nil {
+		return compiled, err
+	}
+	descriptor, _ := model.DescribeType(query.modelType)
+	applySelectReadPolicy(descriptor, query, &compiled)
+	return compiled, nil
+}
+
+func compileSelectBase(query *selectQuery) (compiledSelect, error) {
 	descriptor, err := model.DescribeType(query.modelType)
 	if err != nil {
 		return compiledSelect{}, fmt.Errorf("orm: compile SELECT model: %w", err)

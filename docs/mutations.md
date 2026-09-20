@@ -363,7 +363,8 @@ report when `Exec` would require automatic batching.
 
 ## Typed raw results
 
-Use `Raw[T]` for joins, CTEs, aggregates, and other SQL outside the scalar
+Use [`Aggregate[T]`](aggregates.md) for source-model aggregates with optional `Has` filters.
+Use `Raw[T]` for joins, CTEs, and other SQL outside the scalar or aggregate
 builder:
 
 ```go

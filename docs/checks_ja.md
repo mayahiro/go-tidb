@@ -215,3 +215,23 @@ invalid inputはstatus `2`、I/Oまたはinternal failureはstatus `5` です
 - `EXPLAIN ANALYZE` はSELECTを実行してRUを消費する
 - ServerRU収集はrecognized DML statementごとにsame-session diagnostic round tripを1回追加する
 - query planとRUは現在のstatistics、data distribution、workloadに依存する
+
+## 集計とvectorの根拠
+
+source lintは集計の `Build`、`ScanAll`、`Explain`、`ExplainAnalyze`、`Compare` terminalを認識します
+`AGG001` は静的に確定した元の出力名とGROUP BYについて、exported／一意なalias、必要なgrouping、有効なgroup出力を確認します
+等価な選択式はgroup keyを共有できます
+`aggregate_patterns`、`analyzed_aggregate_patterns`、`uncertain_aggregate_patterns` がこの限定的なcoverageを表します
+動的な式list／名前、escape／alias／別statementで変更されたbuilderは未確定です
+predicate、物理型、Relationの一意性、window指定、optimizer対応は `Build`、schema確認、明示実行で検証します
+
+明示的なTiFlash指定にはscalar row-index prefixの助言を適用せず、動的なstorage選択はindex coverage未確定です
+集計／vectorのruntime recordはscalar QueryShapeを推定せずSQL fingerprintを持ちます
+VEC001からVEC003は[vector診断](vector-search_ja.md#index定義と確認)、operatorの事実は[plan summary](tiflash_ja.md#機能とplanの確認)を参照してください
+
+## サーバー警告の診断
+
+`WRN001` は一部でMPPを使うplanも含めてTiDBのMPP制約警告を通知します
+`WRN002` はその他の警告、エラー、noteを値なしで要約し、`WRN003` は警告収集の未完了を通知します
+planの `Diagnostics()` と `tidbgo analyze` で利用でき、suppressionにも対応します
+[サーバー警告](warnings_ja.md)を参照してください

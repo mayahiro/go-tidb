@@ -212,6 +212,9 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 	if !ok || !sourceQueryPatternTerminal(selector.Sel.Name) {
 		return visitor
 	}
+	if visitor.analyzer.recordAggregatePattern(visitor.context, call, selector.X) {
+		return visitor
+	}
 	summary := visitor.analyzer.summarizeQueryExpression(visitor.context, selector.X, call.Pos(), nil, nil)
 	if !summary.recognized {
 		return visitor
@@ -225,7 +228,7 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 
 func sourceQueryPatternTerminal(name string) bool {
 	switch name {
-	case "All", "ScanAll", "First", "Only", "Build", "Explain", "ExplainAnalyze":
+	case "All", "ScanAll", "First", "Only", "Build", "Explain", "ExplainAnalyze", "Compare":
 		return true
 	default:
 		return false
@@ -581,6 +584,10 @@ func (analyzer *sourceAnalyzer) summarizeQueryExpression(
 }
 
 func sourceQueryFactoryModel(file *sourceFile, call *ast.CallExpr) (sourceTypeKey, bool) {
+	return sourceFactoryModel(file, call, "Query")
+}
+
+func sourceFactoryModel(file *sourceFile, call *ast.CallExpr, name string) (sourceTypeKey, bool) {
 	var genericBase ast.Expr
 	var modelExpression ast.Expr
 	switch current := call.Fun.(type) {
@@ -597,7 +604,7 @@ func sourceQueryFactoryModel(file *sourceFile, call *ast.CallExpr) (sourceTypeKe
 		return sourceTypeKey{}, false
 	}
 	selector, ok := genericBase.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Query" {
+	if !ok || selector.Sel.Name != name {
 		return sourceTypeKey{}, false
 	}
 	identifier, ok := selector.X.(*ast.Ident)
@@ -622,6 +629,7 @@ func newSourceQuerySummary(model sourceTypeKey, schemaEnabled bool) sourceQueryS
 			seekAfter:       sourceToggleAbsent,
 			withDeleted:     sourceToggleAbsent,
 			forceIndex:      sourceToggleAbsent,
+			columnar:        sourceToggleAbsent,
 		},
 	}
 	if schemaEnabled {
@@ -668,6 +676,20 @@ func (analyzer *sourceAnalyzer) applySourceQueryMethod(
 				name, known := sourceStringConstant(call.Args[0], nil)
 				index.forceIndexName = name
 				index.forceIndexKnown = known && modelmeta.ValidSQLIdentifier(name)
+			}
+		}
+	case "ReadFrom":
+		summary.pattern.columnar = sourceToggleUnknown
+		if len(call.Args) == 1 {
+			if choice, ok := call.Args[0].(*ast.SelectorExpr); ok {
+				if qualifier, ok := choice.X.(*ast.Ident); ok && qualifier.Obj == nil && qualifier.Name == context.file.ormAlias {
+					switch choice.Sel.Name {
+					case "TiFlash":
+						summary.pattern.columnar = sourceTogglePresent
+					case "TiKV":
+						summary.pattern.columnar = sourceToggleAbsent
+					}
+				}
 			}
 		}
 	case "Where":
@@ -864,6 +886,9 @@ func (analyzer *sourceAnalyzer) summarizeBuilderObject(
 	if calls.forceIndexCall {
 		result.pattern.forceIndex = sourceToggleUnknown
 	}
+	if calls.readFromCall {
+		result.pattern.columnar = sourceToggleUnknown
+	}
 	if result.pattern.index != nil && (calls.orderCall || calls.whereCall || calls.withDeletedCall) {
 		index := result.pattern.index
 		if calls.whereCall {
@@ -952,6 +977,7 @@ type sourceBuilderCallSet struct {
 	seekAfterCall   bool
 	withDeletedCall bool
 	forceIndexCall  bool
+	readFromCall    bool
 	safe            bool
 }
 
@@ -1005,6 +1031,8 @@ func sourceBuilderCalls(context sourceFunctionContext, object *ast.Object, befor
 				result.withDeletedCall = true
 			case "ForceIndex":
 				result.forceIndexCall = true
+			case "ReadFrom":
+				result.readFromCall = true
 			}
 		}
 		return true

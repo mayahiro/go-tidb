@@ -21,6 +21,31 @@ func Query[T any]() *SelectQuery[T] {
 	return &SelectQuery[T]{selection: selectQuery{modelType: reflect.TypeFor[T]()}}
 }
 
+// ReadFrom requests one storage engine for every physical table read by this
+// query, including Has, inline joins, and separate collection preload SELECTs.
+// The request follows rewritten SQL, including Count that omits the root table.
+// Hints do not guarantee engine selection. TiFlash conflicts with ForceIndex.
+func (q *SelectQuery[T]) ReadFrom(engine StorageEngine) *SelectQuery[T] {
+	if q != nil {
+		policy := q.selection.policy()
+		policy.Engine, policy.engineSet = engine, true
+		q.selection.readPolicy = &policy
+	}
+	return q
+}
+
+// MPP requests MPP selection for each SELECT, including collection preloads.
+// A statement gets one SET_VAR request; connection settings are not changed.
+// MPPEnforce conflicts with TiKV and does not guarantee MPP execution.
+func (q *SelectQuery[T]) MPP(mode MPPMode) *SelectQuery[T] {
+	if q != nil {
+		policy := q.selection.policy()
+		policy.MPP, policy.mppSet = mode, true
+		q.selection.readPolicy = &policy
+	}
+	return q
+}
+
 // Select appends exported Go field names to the result projection.
 //
 // Without Select, every mapped scalar field is selected.

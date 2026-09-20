@@ -178,3 +178,9 @@ Candidate-key validation follows TiDB's [unique constraint
 semantics](https://docs.pingcap.com/tidb/stable/constraints/).
 The structural warning follows TiDB's
 [index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/).
+
+`schema.Parse` preserves fixed VECTOR dimensions and supported vector-index
+column/metric metadata. These specialized indexes do not provide scalar lookup
+or uniqueness coverage. Use `VectorQuery.SchemaDiagnostics` for query-specific
+dimension and vector-index checks; arbitrary custom Scanner types remain the
+application's mapping responsibility. See [vector search](vector-search.md).

@@ -5,6 +5,179 @@
 This guide contains contributor-facing commands, repository structure,
 integration-test setup, and benchmark procedures for `go-tidb`
 
+## Aggregate and TiFlash verification
+
+The [aggregate API](aggregates.md) has offline contract tests for grouping,
+aliases, NULL/conversion errors, destination ownership, hint conflicts,
+unknown plan tasks, warning failures, and connection/callback ordering:
+
+```sh
+go test ./orm -run '^TestAggregate|^TestPlanTask|^TestScanAll'
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregatePeriod$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateConditional$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateRelation$' -benchmem -benchtime=100ms -count=3
+go test ./orm -run '^$' -bench '^BenchmarkAggregateComparison(Manual)?$' -benchmem -benchtime=100ms -count=3
+```
+
+The benchmark compares identical SQL and result values through the same local
+test driver: aggregate `ScanAll`, typed `Raw`, and a direct `database/sql`
+collector. It covers 0, 1, 100, and 10,000 output groups. It excludes TiDB,
+network, driver argument conversion, and RU; building SQL and validating the
+aggregate's output mapping adds per-call work relative to a fixed raw query.
+
+`BenchmarkAggregatePeriod` uses the same group counts to compare `Date` and
+`YearMonth`, including HAVING on the calendar key, against equivalent typed
+raw and direct collectors. All paths use identical SQL and destination types;
+the local driver does not evaluate date expressions. Profile its daily path
+with `-bench '^BenchmarkAggregatePeriod$/^date$/^rows_100$/^aggregate$'` and use
+`raw` for the alternative.
+
+`BenchmarkAggregateConditional` uses the same group counts and result types as
+`BenchmarkAggregate`, with conditional count/sum expressions and a repeated
+conditional output in HAVING. The alternatives use the same SQL and bind
+values. The driver does not evaluate SQL conditions. Profile it with
+`-bench '^BenchmarkAggregateConditional$/^rows_100$/^aggregate$'` and compare
+with `raw`.
+
+`BenchmarkAggregateRelation` compares nested `Has` filters using the same
+0/1/100/10,000 group counts, SQL, bindings, and destination types through
+aggregate, raw, and direct collectors. The driver does not execute relation
+lookups. Profile `-bench '^BenchmarkAggregateRelation$/^rows_100$/^aggregate$'`
+and the corresponding `raw` path with the commands below.
+
+The comparison benchmarks use the same 0/1/100/10,000-row driver data, 21
+SELECT/RU pairs, and three plan/warning pairs. The manual alternative uses
+typed `ScanAll` and result equality; `Compare` freezes inputs, compiles before
+the loop, reuses raw result buffers, and returns sample statistics. These
+measure complete diagnostic orchestration, not a change in ordinary ORM
+query performance or the cost of equivalent destination mapping.
+
+Profile the representative path and compare it with `raw` or `database_sql`:
+
+```sh
+aggregate_profile_dir=$(mktemp -d)
+go test ./orm -run '^$' -bench '^BenchmarkAggregate$/^rows_100$/^aggregate$' -benchtime=2s -cpuprofile "$aggregate_profile_dir/cpu" -memprofile "$aggregate_profile_dir/mem" -o "$aggregate_profile_dir/orm.test"
+go -C tools tool pprof -top "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/cpu"
+go -C tools tool pprof -top -alloc_space "$aggregate_profile_dir/orm.test" "$aggregate_profile_dir/mem"
+```
+
+For comparison profiles, use
+`-bench '^BenchmarkAggregateComparison$/^rows_100$'` and then
+`-bench '^BenchmarkAggregateComparisonManual$/^rows_100$'` with separate output
+files and the same profile commands. Remove your temporary profile directory
+after inspection.
+
+With `TIDBGO_TEST_DSN` configured for the dedicated database described below:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlash$' -count=1 -v
+```
+
+This opt-in test creates only its owned `tidbgo_it_tiflash_aggregates` table,
+seeds 20,000 rows with nullable DECIMAL values, analyzes statistics, requests two
+TiFlash replicas, and waits for initial `AVAILABLE=1`. An existing table is
+never removed. The test cleans up its own table, including on failure.
+
+The fixed `aggregate_v1` dataset covers a broad scan, a 20-row primary-key
+range, a selective secondary index, and 20,000 output groups. Auto, TiKV, and
+TiFlash MPP are compared using hand-written SQL and the aggregate builder.
+Both implementations warm up twice; three rounds rotate engine and method
+order. Full result values, NULLs, and ordering must match. Latency ends after
+row closure; the immediate same-session RU probe is outside that interval.
+Warnings and runtime plans come from separate explicit plan executions. There
+is no universal latency/RU threshold. Free-plan limits, caches, statistics,
+network conditions, and shared service load can affect measurements.
+
+Each workload also runs public `Compare` with two warmups and five measured
+rounds. It checks complete result coverage and exports all three variants into
+the existing baseline analyzer. The missing-replica case checks incomplete
+comparison status and retained warnings. Offline comparison tests additionally
+cover changed values/order, frozen Valuers, float tolerances, driver numeric
+types, row limits, cancellation, partial reports, and capture writer errors.
+
+The test also checks missing-replica warnings, empty inputs, nullable outputs,
+all seven aggregate functions, HAVING/paging, source soft deletion, physical
+table resolution, and restoration of MPP session settings. Ordinary and
+EXPLAIN ANALYZE executions are distinct observations. These samples are not
+billed RU or a guarantee that TiFlash is faster or cheaper. Replica setup,
+storage, seeding, warm-up, probes, and cleanup add costs outside reported
+SELECT measurements. Do not run connected suites concurrently on this database.
+
+The calendar integration test uses the same dedicated-database guards:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterPeriodAggregates$' -count=1 -v
+```
+
+It creates and cleans up its owned `tidbgo_it_period_aggregates` table with
+20,000 rows and two TiFlash replicas. It checks daily/monthly results against
+independently computed Go keys across UTC/JST session and driver locations,
+both interpolation settings, NULLs, year/month/leap-day boundaries, alias
+collisions, HAVING/paging, `parseTime=false`, and empty results. TIMESTAMP and
+DATETIME are checked separately.
+
+The four workloads cover a one-week timestamp range, all non-NULL days, all
+months, and date/store groups. Original-column range predicates keep the
+input filter separate from calendar extraction. `DATE` and
+`EXTRACT(YEAR_MONTH ...)` are compared with equivalent `DATE_FORMAT` plus casts
+using two warmups and five rounds with rotating method order. Both alternatives
+use typed raw scanning, compare every result, and read immediate same-session
+ServerRU. Each workload also runs public `Compare`; its plans and storage
+aggregation operators are separate observations from ordinary execution.
+These workloads do not establish a universal latency or RU advantage.
+
+The conditional aggregate integration test also uses the dedicated-database
+guards and requires explicit TiFlash opt-in:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterConditionalAggregates$' -count=1 -v
+```
+
+It creates and cleans up its owned `tidbgo_it_conditional_aggregates` table,
+seeds 20,000 rows, analyzes statistics, and requests two TiFlash replicas. It
+checks TRUE/FALSE/NULL conditions, empty and unmatched groups, exact decimals,
+soft deletion, escaped LIKE, alias collisions, HAVING/ordering, daily/monthly
+paging, and both interpolation settings against explicit expected values.
+
+Four workloads cover combined metrics, daily groups, monthly groups, and rare
+matches with a status index. Each compares independent hand-written CASE, IF,
+and filtered SQL through the same typed raw collector. Filtered SQL uses one
+query for all input counts and one for matching counts/sums, merging missing
+groups as zero counts and NULL sums. The rare-match workload requests only
+filtered metrics, so its alternative is a single WHERE query on the indexed
+status column.
+
+Each method warms up twice and measures five rounds with rotating method order
+for auto, TiKV, and TiFlash MPP requests. Latency sums SELECT/row-close time and
+any result merging; it excludes the immediate same-session RU probes. ServerRU
+is summed across the statements needed for one result. Full result values and
+ordering must match. Public `Compare` runs separately for every workload and
+records its own plans and storage aggregation operators. These results do not
+guarantee that combining metrics or using TiFlash reduces latency or RU.
+
+The relation aggregate test also requires the dedicated test database and opt-in:
+
+```sh
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterAggregateRelations$' -count=1 -v
+```
+
+It owns and cleans up `tidbgo_it_aggregate_relation_nodes` (10,000 source rows
+and 20,000 related rows) and `tidbgo_it_aggregate_relation_edges` (20,000 edges).
+It analyzes statistics and requests two TiFlash replicas per table. Explicit
+contracts cover repeated matches, NULL/missing keys, source/target/edge soft
+deletion, nested and negated conditions, `Or`, empty and all-NULL aggregates,
+calendar keys, conditional metrics, HAVING, paging, and both interpolation modes.
+
+Broad monthly, selective, many-group, and `via` workloads compare independently
+written hinted EXISTS, plain EXISTS, and JOIN against distinct matching keys.
+All use typed Raw, identical result types, and exact result/order checks. Each
+method warms up twice and measures five samples in rotating order for auto,
+TiKV, and TiFlash MPP. Latency includes Raw construction, SELECT, scanning, and
+row closure; immediate same-session RU probes are excluded. Public `Compare`
+runs separately to verify results, related-table plan bindings, engine requests,
+and warnings. Neither a hint nor a rewritten JOIN guarantees a faster plan.
+
 ## Local checks
 
 Run the complete offline verification from the repository root:
@@ -39,7 +212,7 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 ## Package boundaries
 
 - `model`: cached offline metadata for application-owned Go structs
-- `orm`: offline query and mutation building, explicit `database/sql`
+- `orm`: offline query, aggregate, and mutation building, explicit `database/sql`
   execution, relation loading, and typed raw-result scanning
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
 - `check`: shared diagnostic data types and offline model and physical schema
@@ -653,3 +826,51 @@ nested to-one join, and one has-many batch with its nested to-one join
 It uses one pinned connection and reports elapsed time, Go allocations, and
 sampled statement RU summed per operation. Setup, RU-sampling queries, and
 cleanup are outside the timed and statement-counted operation
+
+## Window, vector, and preparation checks
+
+```sh
+go test ./orm ./schema ./tiflash ./vector ./internal/sourcecheck ./examples/starter-app
+go test ./orm -run '^$' -bench '^(BenchmarkAggregateWindow|BenchmarkAggregateRelatedBuild|BenchmarkVectorSearchBuild)$' -benchmem -count=3
+go test ./vector -run '^$' -bench '^(BenchmarkVectorRoundTrip|BenchmarkVectorDecoderAlternatives)$' -benchmem -count=3
+TIDBGO_TEST_TIFLASH=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterTiFlashExtensions$' -count=1 -v
+```
+
+The connected extension test requires the same dedicated DSN safeguards as the
+other Starter tests. It owns and removes `tidbgo_it_tiflash_extensions`, seeds
+5,000 rows with missing/deleted relations, requests two replicas, and creates an
+L2 vector index. It verifies capability probes and replica waiting; ordinary
+queries/preloads; related grouping and conditional EXISTS metrics; grouped
+ROW_NUMBER/LAG/running SUM against a manual JOIN; prepared/interpolated parameters;
+exact vector results against a TiKV reference; ANN plan selection and prefilter
+fallback; nullable cosine distance and atomic dimension-error handling; and actual
+SHOW CREATE TABLE vector metadata. It retains server warnings instead of claiming
+that every window operator supports MPP. Logged single samples are observations,
+not repeatable performance guarantees or recall benchmarks.
+
+The fake-driver window benchmark covers 0, 1, 100, and 10,000 result groups using
+identical builder/Raw/database/sql results. Vector decoder alternatives cover
+3, 768, and 16,383 dimensions and compare bounded typed-array parsing with token
+parsing. These isolate client CPU/allocation; they do not measure ANN quality,
+TiFlash indexing, network cost, or production throughput. Use the profile workflow
+above with these benchmark names. Test large embeddings and representative
+filters on application data before choosing approximate search.
+
+## Warning verification
+
+```sh
+go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
+```
+
+The connected test needs the dedicated `TIDBGO_TEST_DSN` described above. It
+creates and removes only its owned `tidbgo_it_warning_state` table. It checks
+warning/RU interference, observed SELECT and mutation warnings, safe capture
+analysis, and rotated small-query latency with collection off/on. The existing
+TiFlash extension test also checks window-plan warning delivery and ordinary
+SELECT warning coverage. The offline benchmark compares no collection, opt-in
+collection, and manual connection pinning plus SHOW WARNINGS for 1/100 rows and
+0/1/1,000 warning rows. It excludes network and TiDB time. Profile its
+`warnings_1/rows_100/collect` and `warnings_1000/rows_1/collect` paths with the
+profile commands above.

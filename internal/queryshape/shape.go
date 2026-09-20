@@ -17,6 +17,8 @@ type Query struct {
 	Offset           Bound            `json:"offset"`
 	WithDeleted      bool             `json:"with_deleted"`
 	ForceIndex       string           `json:"force_index,omitempty"`
+	ReadEngine       string           `json:"read_engine,omitempty"`
+	MPP              string           `json:"mpp,omitempty"`
 	SoftDeleteColumn string           `json:"soft_delete_column,omitempty"`
 	Preloads         []Preload        `json:"preloads"`
 	Compiler         CompilerDecision `json:"compiler"`

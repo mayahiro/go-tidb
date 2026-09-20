@@ -8,6 +8,25 @@ import (
 	"github.com/mayahiro/go-tidb/model"
 )
 
+func TestSelectQueryShapeSeparatesReadPolicies(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, q := range []*SelectQuery[relationTopNSoftVideo]{
+		Query[relationTopNSoftVideo](),
+		Query[relationTopNSoftVideo]().ReadFrom(TiKV),
+		Query[relationTopNSoftVideo]().ReadFrom(TiFlash),
+		Query[relationTopNSoftVideo]().ReadFrom(TiFlash).MPP(MPPAuto),
+		Query[relationTopNSoftVideo]().ReadFrom(TiFlash).MPP(MPPEnforce),
+		Query[relationTopNSoftVideo]().MPP(MPPEnforce),
+	} {
+		shape := queryShapeForTest(t, q)
+		fingerprint := shape.Fingerprint()
+		if seen[fingerprint] {
+			t.Fatalf("read policies share a fingerprint: %#v", shape)
+		}
+		seen[fingerprint] = true
+	}
+}
+
 func TestSelectQueryShapeDescribesRelationTopNWithoutBindValues(t *testing.T) {
 	t.Parallel()
 
@@ -101,6 +120,13 @@ func TestSelectQueryShapeIncludesRootSoftDeleteInIndexAccess(t *testing.T) {
 		!reflect.DeepEqual(shape.IndexAccesses[0].EqualityColumns, []string{"deleted_at"}) ||
 		!reflect.DeepEqual(shape.IndexAccesses[0].OrderColumns, []string{"id"}) {
 		t.Fatalf("index accesses = %#v", shape.IndexAccesses)
+	}
+}
+
+func TestSelectQueryShapeTiFlashSkipsScalarIndexAdvice(t *testing.T) {
+	shape := queryShapeForTest(t, Query[relationTopNSoftVideo]().ReadFrom(TiFlash).OrderBy(Desc("ID")).Limit(20))
+	if shape.ReadEngine != "tiflash" || len(shape.IndexAccesses) != 0 {
+		t.Fatal(shape)
 	}
 }
 

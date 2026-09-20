@@ -44,6 +44,10 @@ func buildSelectQueryShape(
 		Preloads:    buildQueryShapePreloads(compiled.preloads, ""),
 		Compiler:    buildQueryShapeCompilerDecision(relationTopN),
 	}
+	if selection.readPolicy != nil {
+		shape.ReadEngine = string(selection.readPolicy.Engine)
+		shape.MPP = string(selection.readPolicy.MPP)
+	}
 	if softDeleteField, active := activeSoftDeleteField(descriptor, selection.withDeleted); active {
 		shape.SoftDeleteColumn = softDeleteField.ColumnName()
 	}
@@ -271,6 +275,9 @@ func buildQueryShapeIndexAccesses(
 	shape queryshape.Query,
 	analysis relationTopNAnalysis,
 ) []queryshape.IndexAccess {
+	if selection.readPolicy != nil && selection.readPolicy.Engine == TiFlash {
+		return nil
+	}
 	if !selection.pagination.limitSet || selection.pagination.limit <= 0 || !queryShapeHasUniformOrder(shape.Order) {
 		return nil
 	}

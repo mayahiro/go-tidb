@@ -72,3 +72,10 @@ CREATE TABLE user_watch_later_videos (
   PRIMARY KEY (user_id, video_id),
   KEY user_watch_later_videos_video_id_user_id (video_id, user_id)
 );
+
+CREATE TABLE search_documents (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  embedding VECTOR(3) NOT NULL
+);
