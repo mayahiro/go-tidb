@@ -4,6 +4,54 @@
 
 このguideは `go-tidb` contributor向けのcommand、repository構成、integration test設定、benchmark手順を記載します
 
+## マイグレーションの検証
+
+[マイグレーションrunner](migrations_ja.md)のoffline testではbaseline導入、up／down／再適用、checksumとdriftによる停止、独立client間の排他、DDLと履歴更新の途中失敗、明示復旧、snapshot出力失敗を確認します
+
+```sh
+go test ./migrate
+go -C cmd/tidbgo test ./...
+go test ./migrate -race
+go -C cmd/tidbgo test ./... -race
+go test ./migrate -run '^$' -fuzz '^FuzzSQLBoundaries$' -fuzztime=10s
+go test ./migrate -run '^$' -bench '^(BenchmarkSnapshotHash|BenchmarkLoad)$' -benchmem -benchtime=200ms -count=3
+```
+
+`BenchmarkLoad` は1 version、100 version、1 MiBのquoted literalでfile読取とsection検証を測定します
+fixture作成は計測時間外で、DB実行とRUは測定しません
+
+`BenchmarkSnapshotHash` は同じcanonical SQLをsortし、結合してSHA-256へ渡す方式と順次書き込む方式を比較します
+
+1 table、100 table、多数column、1 MiBのquoted literalを測定します
+
+SQL分割と正規化を含み、file I/O、protocol driver、DB latency、RUは含みません
+
+両方式のprofileは次のcommandで確認します
+
+```sh
+go test ./migrate -run '^$' -bench '^BenchmarkSnapshotHash$/^hundred_tables$/^join$' -benchtime=2s -cpuprofile=migration-join.cpu.out -memprofile=migration-join.mem.out
+go test ./migrate -run '^$' -bench '^BenchmarkSnapshotHash$/^hundred_tables$/^stream$' -benchtime=2s -cpuprofile=migration-stream.cpu.out -memprofile=migration-stream.mem.out
+go -C tools tool pprof -top ../migration-join.cpu.out
+go -C tools tool pprof -top -alloc_space ../migration-stream.mem.out
+```
+
+実DB検証は `TIDBGO_TEST_DSN` に、TLS検証を有効にした `tidbgo_test_` で始まる**空の専用DB**を指定します
+
+先に読取専用の接続先確認を行い、その後でマイグレーションtestを明示的に有効にします
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterMigrationTarget$' -count=1 -v
+TIDBGO_TEST_MIGRATE=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterMigrations$' -count=1 -v
+```
+
+同じDBで他のtestを並行実行しないでください
+
+初期状態が空であることを確認後、testが所有する `tidbgo_it_migration_accounts` と `_tidbgo_migrations` だけを作成・削除します
+
+decimalデータの保持、INSERT後のsnapshot安定性、down／再適用後の更新、DDL部分失敗と復旧、既存tableを再作成しない導入、取得した初期SQLから空DBを再構築する経路を確認します
+
+環境変数の設定を使用し、`.env` は自動読込しません
+
 ## 集計とTiFlashの検証
 
 [集計API](aggregates_ja.md)のoffline testはgrouping、alias、NULLと型変換error、結果の所有権、hintの競合、未知のplan task、警告回収の失敗、connectionとcallbackの順序を確認します
@@ -140,28 +188,31 @@ repository rootからofflineで完結する全確認を実行します
 ```sh
 go -C tools tool goimports -w ..
 go test ./...
+go -C cmd/tidbgo test ./...
 go -C integration test ./...
 go vet ./...
+go -C cmd/tidbgo vet ./...
 go -C integration vet ./...
 go build ./...
+go -C cmd/tidbgo build .
 go -C integration build ./...
 ```
 
-root test commandはnested `integration` moduleへ入りません
+root test commandはnested `cmd/tidbgo` と `integration` moduleへ入りません
 
 ## CLI development
 
 checkoutから現在のcommandを直接実行します
 
 ```sh
-go run ./cmd/tidbgo version
-go run ./cmd/tidbgo lint ./examples/starter-app
+go -C cmd/tidbgo run . version
+go -C cmd/tidbgo run . lint ../../examples/starter-app
 ```
 
 release artifactをbuildする場合はGo linkerでversionを設定します
 
 ```sh
-go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
+go -C cmd/tidbgo build -ldflags "-X main.version=v0.1.0" .
 ```
 
 ## Package boundary
@@ -170,15 +221,19 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `orm`: offline query、aggregateとmutation構築、明示的な `database/sql` 実行、Relation loading、typed raw result scan
 - `schema`: TiDB CREATE TABLE snapshotからparseするimmutable offline catalog
 - `check`: shared diagnostic data typeとoffline modelおよびphysical schema check
-- `migrate`: 独立したMigration tooling用に予約した境界
-- `cmd/tidbgo`: CLI entry point
+- `migrate`: caller-owned接続を使う独立したdeployment runner、offline SQL file検証、現時点のDBを投影するSQL snapshot
+- `cmd/tidbgo`: MySQL driverとCLI frameworkを含む独立moduleのCLI entry point
 - `internal`: 非公開のcompiler、analysis、logging、redaction support
 - `examples`: 実行可能なpublic API example
 - `integration`: actual TiDB Cloud Starterを検証する独立module
 
-`integration` moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependencyを所有し、local module replacementで現在のroot checkoutを使用します
+`cmd/tidbgo` と `integration` moduleはlocal module replacementで現在のroot checkoutを使用します
+両moduleが[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql)に依存し、CLI frameworkもCLI module内に置きます
+rootのlibrary moduleにthird-party依存はなく、`orm` と `migrate` はapplicationのdriverを選択しません
 
-root moduleとその利用者へtest dependencyは伝播しません
+現在のCLIはcheckoutからbuildまたはinstallします
+[Goのversion付きinstall](https://go.dev/ref/mod#go-install)はlocal replacementを許可しません
+CLI moduleをversion付きで公開する際は、必要なAPIを含むroot moduleを先に公開し、そのversionへの依存を設定してCLIのlocal replacementを削除し、`cmd/tidbgo/vX.Y.Z` tagを使用します
 
 ## Source解析benchmark
 
@@ -777,7 +832,8 @@ vector decoder比較は3、768、16,383次元で上限付きtyped-array解析と
 ## 警告の検証
 
 ```sh
-go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm ./internal/warningcheck ./internal/runtimecapture
+go -C cmd/tidbgo test ./...
 go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
 ```

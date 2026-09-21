@@ -569,8 +569,9 @@ caller-supplied raw SQL cannot enter this path. Collection preload statements
 remain excluded.
 
 The caller remains responsible for driver registration and connection
-security. `go-tidb` does not currently include a MySQL protocol driver or a
-TiDB Cloud Starter connection constructor.
+security. The ORM does not select a protocol driver or provide a connection
+constructor. The [standalone migration CLI](migrations.md) owns its deployment
+connections separately.
 
 ## Preload relations
 
