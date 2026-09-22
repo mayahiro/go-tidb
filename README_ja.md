@@ -741,6 +741,10 @@ projection解析ではreturn、別functionへの引き渡し、alias、preload�
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
+`--schema` は `model.Meta` の明示宣言と認識したqueryのsource modelについて、table・mapped列・宣言した主キー／一意制約・未mapped必須列も検査します
+queryのpaginationとは独立してmodelごとに一度検査し、mappingを解決できない場合は `SRC002` と専用のschema coverage counterで報告します
+型・NULL許容・生成方法・Relation全体の互換性は `check.Schema` で確認します
+
 version情報は次のcommandで出力します
 
 ```sh

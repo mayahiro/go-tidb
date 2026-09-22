@@ -9,6 +9,10 @@
 生成したsnapshotは `schema.Parse` と `check.Schema` による[offlineのスキーマ互換性検査](schema-checks_ja.md)や、`tidbgo lint --schema` に利用できます
 downでもsnapshotは操作対象DBの現時点の構造に更新されます
 
+`tidbgo lint . --schema schema.sql` はsource modelのtable・mapped列・宣言した主キー／一意制約・未mapped必須列を検査します
+applicationを配布する前に、予定するmigrationまたはrollback先のsnapshotで照合できます
+検査範囲と未解決modelの報告は[sourceのスキーマ検査](checks_ja.md#go-source解析)を参照してください
+
 ## 接続とファイル
 
 デプロイ環境またはsecret managerで `TIDBGO_DSN` を設定します

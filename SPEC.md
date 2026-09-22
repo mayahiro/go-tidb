@@ -313,6 +313,17 @@ always include recognized, explicitly projected, analyzed, and uncertain
 coverage counts. The command executes no application code and performs no
 database access.
 
+With `--schema`, source lint checks distinct explicit `model.Meta` declarations
+and recognized SELECT/aggregate source models for physical tables, mapped
+columns, ordered primary keys, candidate unique constraints, and unmapped
+required columns. It uses `CMP002`, `CMP003`, `CMP007`, `CMP015`, and `CMP010`
+with the corresponding `check.Schema` severity and suppression policy. SELECT
+`Count` and `Exists` participate in model coverage without pagination advice.
+Unresolved models emit informational `SRC002` and remain in
+`uncertain_schema_models`; structural coverage does not imply type, nullability,
+generation, relation, or live-schema validation. Query execution and generated
+SQL are unaffected by source diagnostics.
+
 `ScanAll` participates in query-pattern and schema-aware index analysis. Its
 explicit `Select` counts as an explicit projection; default-projection
 destination-pointer flows remain uncertain for `SRC001`.

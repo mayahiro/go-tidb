@@ -63,6 +63,15 @@ type Statistics struct {
 	// UncertainIndexPatterns counts candidates that were not safe to convert
 	// to a neutral index access.
 	UncertainIndexPatterns int `json:"uncertain_index_patterns"`
+	// SchemaModels counts distinct explicit model.Meta declarations and models
+	// used by recognized SELECT or aggregate terminals when WithSchema is set.
+	SchemaModels int `json:"schema_models"`
+	// AnalyzedSchemaModels counts models whose complete table/column/key mapping
+	// was compared with the snapshot. It does not imply type or relation checks.
+	AnalyzedSchemaModels int `json:"analyzed_schema_models"`
+	// UncertainSchemaModels counts models without a complete source mapping or
+	// an available catalog. Their structural compatibility remains unchecked.
+	UncertainSchemaModels int `json:"uncertain_schema_models"`
 	// AggregatePatterns counts recognized aggregate terminals. These counters
 	// cover base projection/grouping contracts, not full runtime validation.
 	AggregatePatterns          int `json:"aggregate_patterns"`
@@ -84,8 +93,8 @@ type analysisConfiguration struct {
 	schemaEnabled bool
 }
 
-// WithSchema enables physical index-prefix diagnostics using a catalog parsed
-// from an offline SQL schema snapshot.
+// WithSchema enables structural model compatibility and physical index-prefix
+// diagnostics using a catalog parsed from an offline SQL schema snapshot.
 func WithSchema(catalog *physicalschema.Catalog) AnalysisOption {
 	return func(configuration *analysisConfiguration) {
 		configuration.catalog = catalog
@@ -333,7 +342,7 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d aggregate_patterns=%d analyzed_aggregate_patterns=%d uncertain_aggregate_patterns=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d aggregate_patterns=%d analyzed_aggregate_patterns=%d uncertain_aggregate_patterns=%d schema_models=%d analyzed_schema_models=%d uncertain_schema_models=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
@@ -352,5 +361,8 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.AggregatePatterns,
 		statistics.AnalyzedAggregatePatterns,
 		statistics.UncertainAggregatePatterns,
+		statistics.SchemaModels,
+		statistics.AnalyzedSchemaModels,
+		statistics.UncertainSchemaModels,
 	)
 }

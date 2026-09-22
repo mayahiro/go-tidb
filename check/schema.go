@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/mayahiro/go-tidb/internal/schemacompat"
 	"github.com/mayahiro/go-tidb/model"
 	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
@@ -514,33 +515,7 @@ func fieldColumnNames(fields []model.Field) []string {
 }
 
 func tableHasUniqueKey(table physicalschema.Table, columns []string) bool {
-	if len(columns) == 0 {
-		return false
-	}
-	for _, index := range table.Indexes() {
-		indexColumns := index.Columns()
-		if !index.ProvidesUnconditionalUniqueness() || len(indexColumns) == 0 {
-			continue
-		}
-		provesUnique := true
-		for _, indexedColumn := range indexColumns {
-			found := false
-			for _, targetColumn := range columns {
-				if strings.EqualFold(indexedColumn, targetColumn) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				provesUnique = false
-				break
-			}
-		}
-		if provesUnique {
-			return true
-		}
-	}
-	return false
+	return schemacompat.HasUniqueKey(table, columns)
 }
 
 func tableHasIndexPrefix(table physicalschema.Table, columns []string) bool {
@@ -683,15 +658,7 @@ var knownSQLTypes = func() map[string]struct{} {
 }()
 
 func equalIdentifiers(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if !strings.EqualFold(left[index], right[index]) {
-			return false
-		}
-	}
-	return true
+	return schemacompat.EqualColumns(left, right)
 }
 
 func foldSchemaIdentifier(identifier string) string {

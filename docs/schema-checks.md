@@ -28,6 +28,13 @@ that already has a `reflect.Type` can use `check.SchemaType`. The snapshot for a
 model with relations must also contain its declared relation-target and
 many-to-many junction tables.
 
+For checks directly from Go source, `tidbgo lint . --schema schema.sql` also
+compares tables, mapped columns, declared primary/unique keys, and required
+database-only columns for its resolved models. It reports incomplete source
+coverage and does not execute application code. Type, nullability, generation,
+and complete relation checks remain part of `check.Schema`; see the
+[source analysis guide](checks.md#go-source-analysis) for the exact boundary.
+
 ## Accepted SQL snapshots
 
 `schema.Parse` accepts one or more self-contained TiDB `CREATE TABLE`

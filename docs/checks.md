@@ -127,6 +127,53 @@ tidbgo lint . --json
 tidbgo lint . --schema schema.sql
 ```
 
+With `--schema`, lint checks each distinct model declared with `model.Meta`
+in the analyzed source, even without a query. It also checks the source models
+of recognized SELECT and aggregate terminals, including SELECT `Count` and
+`Exists`. Unrelated structs, raw-result structs, and `ScanAll` destinations are
+not model registrations. Every mapped non-computed column is checked,
+independently of a query's projection, filters, ordering, or limit.
+
+| Code | Severity | Structural model check |
+| --- | --- | --- |
+| `CMP002` | error | The mapped table is absent |
+| `CMP003` | error | A mapped column is absent |
+| `CMP007` | error | The declared ordered primary key differs |
+| `CMP015` | error | A declared candidate unique key lacks an unconditional physical unique constraint |
+| `CMP010` | warning | An unmapped required column can make inserts fail |
+| `SRC002` | info | The source model mapping could not be completely resolved |
+
+The key checks use the same proofs as `check.Schema`. Database-only nullable,
+defaulted, or generated columns are accepted. `CMP010` can be suppressed with a
+reason for an intentionally read-only or partial model. Mapping errors cannot
+be suppressed. Diagnostics identify the Go declaration and include SQL snapshot
+positions where available. Repeated queries do not repeat model diagnostics.
+
+`schema_models`, `analyzed_schema_models`, and `uncertain_schema_models` report
+this coverage separately from query/index coverage. Analyzed models include
+comparisons that found errors. Aliases, generic declarations, unsupported
+embedding, ambiguous tags, and models whose source is outside the input remain
+uncertain and receive `SRC002`. Its informational severity does not make the
+command fail; exit status zero does not mean every model was checked.
+
+These checks cover table/column/key structure only. Known mappings for custom
+scalar fields can be checked without inferring their representation. Type
+families, Go/SQL nullability, generated-field writability, `AUTO_RANDOM`
+agreement, and complete relation contracts still require `check.Schema`.
+Models used only by mutations or query helpers without recognized terminals
+need an explicit `model.Meta` declaration to participate in source schema checks.
+
+To check a migration or rollback target, supply its snapshot against the
+application version that will use it:
+
+```sh
+tidbgo lint . --schema schema-before.sql
+tidbgo lint . --schema schema-after.sql
+```
+
+Prepare those snapshots separately. Lint does not replay migration SQL, verify
+data conversion, or compare a snapshot with a live database.
+
 Source analysis applies `QRY002` through `QRY005` to resolved `Build`, `All`, `ScanAll`,
 `First`, `Only`, `Explain`, and `ExplainAnalyze` query terminals
 It resolves fluent chains, a single local builder definition, local query
@@ -150,9 +197,9 @@ The source decision recognizes `unique=<group>` candidate keys in the same way
 as runtime model metadata. For a read-only `via` mapping, it also checks that
 the edge source-target pair covers a complete declared primary or candidate
 key. An unproven pair remains a reasoned `QRY005` fallback, not an invalid
-relation. Source lint does not replace model-to-schema
-compatibility tests; use `check.Schema` to verify that every declaration is
-backed by an unconditional physical unique constraint
+relation. With `--schema`, the structural model checks above validate declared
+keys on the checked models. Use `check.Schema` for complete relation contracts,
+including targets or edges not independently included in source model coverage
 
 With `--schema`, source analysis also derives physical table and column names
 from the same `tidbgo` metadata and default naming rule as the runtime model
@@ -243,6 +290,8 @@ Invalid input returns status `2`, and I/O or internal failures return status
   builder flows and relation metadata
 - Source lint with `--schema` applies `QRY006` and `QRY007` only to resolved
   root or relation-first ordered-limit accesses
+- Structural model checks with `--schema` run independently of index patterns;
+  unresolved models remain visible as `SRC002` and in schema coverage counters
 - Dynamic relation names and relation shapes that cannot be proven from local
   source metadata remain visible in relation uncertainty counters
 - `EXPLAIN ANALYZE` executes the SELECT and consumes RU

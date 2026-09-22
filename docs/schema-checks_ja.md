@@ -2,6 +2,10 @@
 
 [English](schema-checks.md)
 
+Go sourceから直接確認する場合は `tidbgo lint . --schema schema.sql` でも、解決できたmodelのtable・mapped列・宣言した主キー／一意制約・DB側だけの必須列を照合できます
+application codeは実行せず、sourceを解決できない場合は未確認として報告します
+型・NULL許容・生成方法・Relation全体の検査は `check.Schema` の対象です。範囲の詳細は[source解析guide](checks_ja.md#go-source解析)を参照してください
+
 `go-tidb` はSQL schema snapshotとapplication-owned Go structを、責任範囲が異なる正として扱います
 
 SQL snapshotは期待する物理database、structはapplicationが読み書きするcolumnとRelationを表すため、両者が同じ情報を持つ必要はありません

@@ -139,7 +139,8 @@ source decisionはruntime model metadataと同じ規則で `unique=<group>` cand
 
 読み取り専用viaではedgeのsource-target pairが宣言済みprimary keyまたはcandidate keyを完全にcoverすることも確認します。証明できないpairは無効なRelationとはせず、理由付き `QRY005` fallbackとして扱います
 
-source lintはmodel-to-schema compatibility testを置き換えないため、各宣言がunconditionalな物理unique constraintに裏付けられることは `check.Schema` で検証します
+`--schema` では下記の構造検査の対象modelについて宣言したkeyの物理的な裏付けを確認します
+sourceのmodel coverageへ独立して含まれないtargetやedgeを含め、Relation全体の契約は `check.Schema` で検証します
 
 `--schema` を指定するとsource解析はruntime model descriptorと同じ `tidbgo` metadataとdefault naming ruleから物理table名とcolumn名も導出します
 
@@ -166,6 +167,45 @@ Relation fallback、associationのnon-equality filter、mixed direction、unknow
 repository return、alias、model method、解決できないresult flowは別の `analyzed` と `uncertain` projection counterへ反映します
 
 `ScanAll`もquery patternとschema付きindex checkの対象です。明示した`Select`はexplicit projectionへ計上します。`Select`がない場合はdestination pointerのresult flowを`uncertain`へ計上し、`SRC001`を提案しません
+
+### Modelのスキーマ構造検査
+
+`--schema` は解析したsource内で `model.Meta` を宣言したmodelを、queryがなくても検査します
+認識したSELECTと集計terminalのsource modelも対象で、SELECTの `Count` と `Exists` を含みます
+無関係なstruct、raw-result struct、`ScanAll` の格納先はmodelの登録として扱いません
+queryのprojection・条件・順序・LIMITによらず、computed以外の全mapped列を検査し、同じmodelを使うqueryが複数あっても検査は一度です
+
+| Code | Severity | Modelの構造検査 |
+| --- | --- | --- |
+| `CMP002` | error | mapped tableが存在しない |
+| `CMP003` | error | mapped列が存在しない |
+| `CMP007` | error | 宣言した順序付き主キーが一致しない |
+| `CMP015` | error | 宣言したcandidate unique keyを裏付ける無条件の物理一意制約がない |
+| `CMP010` | warning | 未mapped必須列によりINSERTが失敗する可能性がある |
+| `SRC002` | info | sourceからmodel mapping全体を解決できない |
+
+keyの検査は `check.Schema` と同じ証明規則を使います
+DB側だけの列でもNULL・default・DB生成で値を補える場合は許容します
+読み取り専用または部分的なmodelでは、理由付きで `CMP010` を抑制できます。mappingのerrorは抑制できません
+診断はGoの宣言位置を示し、取得できる場合はSQL snapshotの位置も根拠へ含めます
+
+`schema_models`、`analyzed_schema_models`、`uncertain_schema_models` はquery／indexとは別のcoverageを表します
+analyzedには照合の結果errorを検出したmodelも含みます
+alias、generic宣言、未対応の埋込み、曖昧なtag、入力範囲外のmodelは未確認として `SRC002` を出します
+infoのためcommand自体は失敗せず、終了statusが0でも全modelの検査完了を意味しません
+
+対象はtable・列・keyの構造です。custom scalar fieldもmappingが分かれば列を照合できますが、表現形式は推測しません
+型family、Go／SQLのNULL許容、生成列への書込み、`AUTO_RANDOM` の一致、Relation全体の契約は引き続き `check.Schema` で確認します
+mutationだけで使うmodelや、認識できるterminalがないquery helperのmodelは、`model.Meta` を明示してsourceの検査対象に含めます
+
+migrationまたはrollback先を確認する場合は、そのDBを利用するapplication版に対して対象のsnapshotを渡します
+
+```sh
+tidbgo lint . --schema schema-before.sql
+tidbgo lint . --schema schema-after.sql
+```
+
+各snapshotは別途用意します。Lintはmigration SQLのreplay、データ変換の検証、snapshotと実DBの照合を行いません
 
 ## Runtime plan diagnostic
 
@@ -211,6 +251,7 @@ invalid inputはstatus `2`、I/Oまたはinternal failureはstatus `5` です
 - RuntimeCaptureはderived contextを使ってgo-tidbから実行されたstatementだけを対象にする
 - source lintは静的に解決できたbuilder flowとRelation metadataだけへ `QRY002` から `QRY005` を適用する
 - source lintへ `--schema` を指定した場合は解決済みrootまたはrelation-first ordered-limit accessだけへ `QRY006` と `QRY007` を適用する
+- `--schema` のmodel構造検査はindex patternとは独立して行い、未解決modelは `SRC002` とschema coverage counterへ反映する
 - source metadataから証明できないdynamicなRelation名とRelation shapeはRelation uncertainty counterへ反映する
 - `EXPLAIN ANALYZE` はSELECTを実行してRUを消費する
 - ServerRU収集はrecognized DML statementごとにsame-session diagnostic round tripを1回追加する

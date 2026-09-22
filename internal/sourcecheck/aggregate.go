@@ -31,6 +31,7 @@ func (analyzer *sourceAnalyzer) recordAggregatePattern(context sourceFunctionCon
 		return false
 	}
 	analyzer.analysis.Statistics.AggregatePatterns++
+	analyzer.noteSchemaModel(summary.model, call.Pos())
 	analyzer.seenModels[summary.model] = struct{}{}
 	if !summary.known {
 		analyzer.analysis.Statistics.UncertainAggregatePatterns++

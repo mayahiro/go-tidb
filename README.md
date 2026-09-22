@@ -724,6 +724,13 @@ analysis also leaves returned or passed results, aliases, and preloads
 uncertain. Every report includes general, relation compiler, and index
 coverage statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
 
+`--schema` also checks tables, mapped columns, declared primary/unique keys,
+and unmapped required columns for explicit `model.Meta` declarations and
+recognized query source models. These structural checks run once per model,
+independently of query pagination. Unresolved mappings receive `SRC002` and
+separate schema coverage counts. Use `check.Schema` for type, nullability,
+generation, and complete relation compatibility checks.
+
 Print version information with:
 
 ```sh

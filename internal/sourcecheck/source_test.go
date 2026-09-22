@@ -624,10 +624,10 @@ func build() {
 	_, _, _ = orm.Query[User]().OrderBy(orm.Desc("ID")).Limit(20).Build()
 }
 `, WithSchema(parseSourceSchema(t, `CREATE TABLE other_users (id BIGINT PRIMARY KEY);`)))
-	if got, want := sourceDiagnosticCodes(analysis), []string{querycheck.CodeIndexCheckUnavailable}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceDiagnosticCodes(analysis), []string{"CMP002", querycheck.CodeIndexCheckUnavailable}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("diagnostic codes = %#v, want %#v", got, want)
 	}
-	if diagnostic := analysis.Diagnostics[0]; diagnostic.Suppressible || diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, `table "user" is absent`) {
+	if diagnostic := analysis.Diagnostics[1]; diagnostic.Suppressible || diagnostic.Location.Path != "query.go" || !strings.Contains(diagnostic.Message, `table "user" is absent`) {
 		t.Fatalf("Diagnostic = %#v", diagnostic)
 	}
 }
@@ -865,7 +865,8 @@ type User struct {
 type Role struct { ID uint64 ` + "`tidbgo:\",pk\"`" + `; Name string }
 func query() { _, _, _ = orm.Query[User]().Where(orm.Has("Roles", orm.Equal("ID", uint64(7)))).OrderBy(orm.Desc("ID")).Limit(20).Build() }
 `
-	matching := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user_roles (
+	matching := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user (id BIGINT UNSIGNED PRIMARY KEY);
+CREATE TABLE user_roles (
   user_id BIGINT UNSIGNED NOT NULL,
   role_id BIGINT UNSIGNED NOT NULL,
   PRIMARY KEY (user_id, role_id),
@@ -875,7 +876,8 @@ func query() { _, _, _ = orm.Query[User]().Where(orm.Has("Roles", orm.Equal("ID"
 		t.Fatalf("matching analysis = %#v", matching)
 	}
 
-	missing := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user_roles (
+	missing := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, `CREATE TABLE user (id BIGINT UNSIGNED PRIMARY KEY);
+CREATE TABLE user_roles (
   user_id BIGINT UNSIGNED NOT NULL,
   role_id BIGINT UNSIGNED NOT NULL,
   PRIMARY KEY (user_id, role_id)
@@ -1146,7 +1148,7 @@ func TestFormatStatistics(t *testing.T) {
 	t.Parallel()
 
 	statistics := Statistics{Files: 3, ModelTypes: 2, ResultQueries: 5, QueryPatterns: 6, ExplicitProjections: 1, Analyzed: 2, Uncertain: 2, AnalyzedPatterns: 4, UncertainPatterns: 2}
-	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 relation_topn_patterns=0 analyzed_relation_topn_patterns=0 uncertain_relation_topn_patterns=0 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0 aggregate_patterns=0 analyzed_aggregate_patterns=0 uncertain_aggregate_patterns=0"
+	const want = "source: files=3 model_types=2 result_queries=5 query_patterns=6 explicit_projections=1 analyzed=2 uncertain=2 analyzed_patterns=4 uncertain_patterns=2 relation_topn_patterns=0 analyzed_relation_topn_patterns=0 uncertain_relation_topn_patterns=0 index_patterns=0 analyzed_index_patterns=0 uncertain_index_patterns=0 aggregate_patterns=0 analyzed_aggregate_patterns=0 uncertain_aggregate_patterns=0 schema_models=0 analyzed_schema_models=0 uncertain_schema_models=0"
 	if got := FormatStatistics(statistics); got != want {
 		t.Fatalf("FormatStatistics() = %q, want %q", got, want)
 	}

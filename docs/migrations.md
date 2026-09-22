@@ -11,6 +11,12 @@ Use the generated snapshot for [offline schema compatibility checks](schema-chec
 with `schema.Parse` and `check.Schema`, or pass it to `tidbgo lint --schema`.
 Down also updates the snapshot to reflect the current target database.
 
+`tidbgo lint . --schema schema.sql` checks source model tables, mapped columns,
+declared primary/unique keys, and unmapped required columns. Use a snapshot of
+the intended migration or rollback target before deploying that application
+version; see [source schema checks](checks.md#go-source-analysis) for coverage
+and unresolved-model reporting.
+
 ## Connection and files
 
 Set `TIDBGO_DSN` through your deployment environment or secret manager. It uses

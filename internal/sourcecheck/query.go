@@ -55,6 +55,7 @@ type sourceAnalyzer struct {
 	functionCache          map[sourceFunctionKey]sourceQuerySummary
 	relationCache          map[sourceRelationKey]sourceRelationResult
 	seenModels             map[sourceTypeKey]struct{}
+	schemaModels           map[sourceTypeKey]token.Pos
 	seenPatternDiagnostics map[sourceDiagnosticKey]struct{}
 	analysis               Analysis
 }
@@ -73,6 +74,9 @@ func newSourceAnalyzer(fileSet *token.FileSet, files []*sourceFile, configuratio
 			Diagnostics: make([]check.Diagnostic, 0),
 		},
 	}
+	if configuration.schemaEnabled {
+		analyzer.schemaModels = make(map[sourceTypeKey]token.Pos)
+	}
 	analyzer.indexQueryFunctions()
 	return analyzer
 }
@@ -86,6 +90,9 @@ func (analyzer *sourceAnalyzer) analyze() Analysis {
 			}
 			analyzer.analyzeFunctionBody(file, function.Body)
 		}
+	}
+	if analyzer.configuration.schemaEnabled {
+		analyzer.recordSchemaModels()
 	}
 	analyzer.analysis.Statistics.ModelTypes = len(analyzer.seenModels)
 	sort.SliceStable(analyzer.analysis.Diagnostics, func(left, right int) bool {
@@ -186,7 +193,7 @@ func (finder *sourceTerminalFinder) Visit(node ast.Node) ast.Visitor {
 		return finder
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if ok && sourceQueryPatternTerminal(selector.Sel.Name) {
+	if ok && (sourceQueryPatternTerminal(selector.Sel.Name) || finder.analyzer.configuration.schemaEnabled && sourceSchemaOnlyTerminal(selector.Sel.Name)) {
 		finder.found = true
 	}
 	return finder
@@ -209,7 +216,16 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 		return visitor
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || !sourceQueryPatternTerminal(selector.Sel.Name) {
+	if !ok {
+		return visitor
+	}
+	if !sourceQueryPatternTerminal(selector.Sel.Name) {
+		if visitor.analyzer.configuration.schemaEnabled && sourceSchemaOnlyTerminal(selector.Sel.Name) {
+			summary := visitor.analyzer.summarizeQueryExpression(visitor.context, selector.X, call.Pos(), nil, nil)
+			if summary.recognized {
+				visitor.analyzer.noteSchemaModel(summary.model, call.Pos())
+			}
+		}
 		return visitor
 	}
 	if visitor.analyzer.recordAggregatePattern(visitor.context, call, selector.X) {
@@ -224,6 +240,10 @@ func (visitor *sourceTerminalAnalyzer) Visit(node ast.Node) ast.Visitor {
 		visitor.analyzer.recordResultQuery(visitor.context, call, selector.Sel.Name, summary)
 	}
 	return visitor
+}
+
+func sourceSchemaOnlyTerminal(name string) bool {
+	return name == "Count" || name == "Exists"
 }
 
 func sourceQueryPatternTerminal(name string) bool {

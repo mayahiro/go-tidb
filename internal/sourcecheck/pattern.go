@@ -170,6 +170,7 @@ type sourceDiagnosticKey struct {
 
 func (analyzer *sourceAnalyzer) recordQueryPattern(call *ast.CallExpr, summary sourceQuerySummary) {
 	analyzer.analysis.Statistics.QueryPatterns++
+	analyzer.noteSchemaModel(summary.model, call.Pos())
 	if _, exists := analyzer.models[summary.model]; exists {
 		analyzer.seenModels[summary.model] = struct{}{}
 	}

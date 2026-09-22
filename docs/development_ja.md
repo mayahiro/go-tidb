@@ -245,6 +245,7 @@ go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredRes
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathSchemaModels$' -benchmem -count=5
 ```
 
 offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
@@ -258,6 +259,9 @@ temporary fixture作成はtimer開始前に完了します
 4番目はdirect Relation metadataを解決し、共通のrelation-first TopN compiler decisionを適用して100個のassociation index accessを照合します
 
 5番目はpure many-to-many Relationとjunction metadataを解決し、同じcompiler decisionを適用して100個のjunction index accessを照合します
+
+schema modelのworkloadは明示的な100 model宣言に対して、一致するsnapshot、列削除、未対応の埋込みを検査します
+snapshotのparseはtimer開始前です。source互換性検査を変更する際は、modelを共有するqueryのworkloadとschema未指定のlocal queryも比較します
 
 ## Via Relation compiler検証
 

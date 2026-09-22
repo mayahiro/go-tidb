@@ -299,6 +299,7 @@ go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredRes
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathSchemaModels$' -benchmem -count=5
 ```
 
 The benchmark is offline and does not load packages, run application code,
@@ -313,6 +314,11 @@ The fourth resolves direct relation metadata, applies the shared relation-first
 TopN compiler decision, and checks 100 association index accesses
 The fifth resolves pure many-to-many relation and junction metadata, applies
 the same compiler decision, and checks 100 junction index accesses
+
+The schema-model workload checks 100 explicit model declarations with matching
+snapshots, removed columns, or unsupported embedded fields. Snapshot parsing
+occurs before timing. Compare it with the shared-model query workloads and
+the schema-free local-query workload when changing source compatibility checks.
 
 ## Via relation compiler verification
 
