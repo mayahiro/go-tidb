@@ -28,6 +28,7 @@ func (analyzer *sourceAnalyzer) recordSchemaModels() {
 			analyzer.noteSchemaModel(key, model.structure.Pos())
 		}
 	}
+	analyzer.expandSchemaModels()
 	statistics := &analyzer.analysis.Statistics
 	statistics.SchemaModels = len(analyzer.schemaModels)
 	if analyzer.configuration.catalog == nil {
@@ -72,6 +73,7 @@ func (analyzer *sourceAnalyzer) recordSchemaModels() {
 		statistics.AnalyzedSchemaModels++
 		analyzer.checkSchemaModel(model)
 	}
+	analyzer.recordSchemaRelations(keys)
 }
 
 func (analyzer *sourceAnalyzer) checkSchemaModel(model *sourceModel) {

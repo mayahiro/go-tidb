@@ -124,7 +124,7 @@ import (
  "database/sql"
 )
 `
-	catalog := parseSourceSchema(t, `CREATE TABLE item (id BIGINT PRIMARY KEY, name VARCHAR(64));`)
+	catalog := parseSourceSchema(t, `CREATE TABLE item (id BIGINT PRIMARY KEY, name VARCHAR(64)); CREATE TABLE child (item_id BIGINT, KEY item_lookup (item_id));`)
 	for _, tc := range []struct {
 		name, body string
 		analyzed   int
@@ -141,7 +141,7 @@ import (
 		{name: "scan destination excluded", body: `type Item struct { ID int64 }; type DTO struct { Missing string }; func rows() { var rows []DTO; _ = orm.Query[Item]().ScanAll(ctx, db, &rows) }`, analyzed: 1},
 		{name: "custom field representation", body: `type Item struct { model.Meta; ID external.CustomID; Name sql.NullString }`, analyzed: 1},
 		{name: "ignored and computed", body: "type Item struct { model.Meta; ID int64; Ignored map[string]bool `tidbgo:\"-\"`; Calculated string `tidbgo:\",computed\"`; hidden map[string]int }", analyzed: 1},
-		{name: "relation field excluded", body: "type Item struct { model.Meta; ID int64; Children []Child `tidbgo:\"has_many,join=ID:ItemID\"` }; type Child struct { ItemID int64 }", analyzed: 1},
+		{name: "relation field excluded", body: "type Item struct { model.Meta; ID int64; Children []Child `tidbgo:\"has_many,join=ID:ItemID\"` }; type Child struct { ItemID int64 }", analyzed: 2},
 		{name: "embedded model", body: "type Base struct { ID int64 }; type Item struct { model.Meta; Base; Name string }", uncertain: 1, codes: []string{"SRC002"}},
 		{name: "invalid tag", body: "type Item struct { model.Meta; ID int64 `tidbgo:\",unknown\"` }", uncertain: 1, codes: []string{"SRC002"}},
 		{name: "invalid table", body: "type Item struct { model.Meta `tidbgo:\"table=invalid-name\"`; ID int64 }", uncertain: 1, codes: []string{"SRC002"}},

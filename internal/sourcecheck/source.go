@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/mayahiro/go-tidb/check"
+	"github.com/mayahiro/go-tidb/internal/referencecheck"
 	physicalschema "github.com/mayahiro/go-tidb/schema"
 )
 
@@ -63,8 +64,9 @@ type Statistics struct {
 	// UncertainIndexPatterns counts candidates that were not safe to convert
 	// to a neutral index access.
 	UncertainIndexPatterns int `json:"uncertain_index_patterns"`
-	// SchemaModels counts distinct explicit model.Meta declarations and models
-	// used by recognized SELECT or aggregate terminals when WithSchema is set.
+	// SchemaModels counts distinct explicit model.Meta declarations, models used
+	// by recognized SELECT/aggregate terminals, and reachable Relation targets
+	// when WithSchema is set.
 	SchemaModels int `json:"schema_models"`
 	// AnalyzedSchemaModels counts models whose complete table/column/key mapping
 	// was compared with the snapshot. It does not imply type or relation checks.
@@ -72,6 +74,12 @@ type Statistics struct {
 	// UncertainSchemaModels counts models without a complete source mapping or
 	// an available catalog. Their structural compatibility remains unchecked.
 	UncertainSchemaModels int `json:"uncertain_schema_models"`
+	// SchemaRelations counts declared relations on schema models and reachable targets.
+	SchemaRelations int `json:"schema_relations"`
+	// AnalyzedSchemaRelations counts resolved mappings compared with the catalog.
+	AnalyzedSchemaRelations int `json:"analyzed_schema_relations"`
+	// UncertainSchemaRelations counts declarations whose reference mapping is unknown.
+	UncertainSchemaRelations int `json:"uncertain_schema_relations"`
 	// AggregatePatterns counts recognized aggregate terminals. These counters
 	// cover base projection/grouping contracts, not full runtime validation.
 	AggregatePatterns          int `json:"aggregate_patterns"`
@@ -83,6 +91,8 @@ type Statistics struct {
 type Analysis struct {
 	Statistics  Statistics         `json:"statistics"`
 	Diagnostics []check.Diagnostic `json:"diagnostics"`
+	// References holds resolved physical reference probes for explicit auditing.
+	References []referencecheck.Reference `json:"-"`
 }
 
 // AnalysisOption configures offline source analysis.
@@ -93,8 +103,8 @@ type analysisConfiguration struct {
 	schemaEnabled bool
 }
 
-// WithSchema enables structural model compatibility and physical index-prefix
-// diagnostics using a catalog parsed from an offline SQL schema snapshot.
+// WithSchema enables structural model and logical reference compatibility,
+// and physical index-prefix diagnostics using an offline SQL schema snapshot.
 func WithSchema(catalog *physicalschema.Catalog) AnalysisOption {
 	return func(configuration *analysisConfiguration) {
 		configuration.catalog = catalog
@@ -342,7 +352,7 @@ func sourcePackageKey(directory string, module moduleInfo) string {
 // FormatStatistics renders one stable human-readable source coverage line.
 func FormatStatistics(statistics Statistics) string {
 	return fmt.Sprintf(
-		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d aggregate_patterns=%d analyzed_aggregate_patterns=%d uncertain_aggregate_patterns=%d schema_models=%d analyzed_schema_models=%d uncertain_schema_models=%d",
+		"source: files=%d model_types=%d result_queries=%d query_patterns=%d explicit_projections=%d analyzed=%d uncertain=%d analyzed_patterns=%d uncertain_patterns=%d relation_topn_patterns=%d analyzed_relation_topn_patterns=%d uncertain_relation_topn_patterns=%d index_patterns=%d analyzed_index_patterns=%d uncertain_index_patterns=%d aggregate_patterns=%d analyzed_aggregate_patterns=%d uncertain_aggregate_patterns=%d schema_models=%d analyzed_schema_models=%d uncertain_schema_models=%d schema_relations=%d analyzed_schema_relations=%d uncertain_schema_relations=%d",
 		statistics.Files,
 		statistics.ModelTypes,
 		statistics.ResultQueries,
@@ -364,5 +374,8 @@ func FormatStatistics(statistics Statistics) string {
 		statistics.SchemaModels,
 		statistics.AnalyzedSchemaModels,
 		statistics.UncertainSchemaModels,
+		statistics.SchemaRelations,
+		statistics.AnalyzedSchemaRelations,
+		statistics.UncertainSchemaRelations,
 	)
 }

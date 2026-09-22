@@ -34,6 +34,7 @@ type sourceUniqueKey struct {
 }
 
 type sourcePhysicalModel struct {
+	relations        []*ast.Field
 	table            string
 	columns          map[string]string
 	softDeleteColumn string
@@ -140,6 +141,9 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 		}
 		first, _, _ := strings.Cut(tag, ",")
 		if sourceRelationKind(first) {
+			if physical {
+				result.physical.relations = append(result.physical.relations, field)
+			}
 			continue
 		}
 		if len(field.Names) == 0 {

@@ -320,6 +320,23 @@ snapshots, removed columns, or unsupported embedded fields. Snapshot parsing
 occurs before timing. Compare it with the shared-model query workloads and
 the schema-free local-query workload when changing source compatibility checks.
 
+Reference lint also traverses reachable models and verifies logical key mappings.
+Use the relation workloads above to measure that added work. CPU/allocation
+profiles can be captured with `-cpuprofile`/`-memprofile` and inspected with
+`go -C tools tool pprof`.
+
+The connected reference audit test requires `TIDBGO_TEST_DSN` pointing to the
+dedicated test database described above. It checks composite and nullable keys,
+self references, both junction endpoints, and physical soft-delete semantics
+using isolated fixture tables that it removes afterward:
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterReferenceAudit$' -count=1
+```
+
+This test skips when the DSN is absent. Source/CLI tests remain offline, and a
+passing offline run does not validate TiDB execution plans or audit RU.
+
 ## Via relation compiler verification
 
 Measure warmed offline SQL compilation for a payload-bearing edge with a

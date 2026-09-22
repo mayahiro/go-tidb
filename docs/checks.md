@@ -163,6 +163,14 @@ agreement, and complete relation contracts still require `check.Schema`.
 Models used only by mutations or query helpers without recognized terminals
 need an explicit `model.Meta` declaration to participate in source schema checks.
 
+Schema lint also follows reachable Relation targets and checks logical
+references, including SQL key base types/signedness, unique identity, to-one
+cardinality, pure-junction pair uniqueness, and lookup prefixes. `SRC003`
+marks unresolved relation mappings; three separate `schema_relations` counters
+report coverage. These checks require no physical foreign key. Use the explicit
+`tidbgo audit` command for live orphan detection; see
+[logical reference audits](reference-audits.md) for diagnostics and limits.
+
 To check a migration or rollback target, supply its snapshot against the
 application version that will use it:
 

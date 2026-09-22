@@ -97,6 +97,18 @@ root and relation-first association accesses with the example's TiDB schema
 snapshot. Both reports include recognized query, relation compiler, index,
 and uncertainty counts even when no diagnostic is emitted
 
+Preview logical reference checks without connecting to a database:
+
+```sh
+go -C cmd/tidbgo run . audit ../../examples/starter-app --schema ../../examples/starter-app/schema.sql --dry-run
+```
+
+For an explicitly connected orphan audit, supply `TIDBGO_DSN` for the database
+matching the snapshot and omit `--dry-run`. Use `--relation Order.User` to
+select one reference and `--timeout 10s` to set the total deadline. An audit
+checks physical references, including soft-deleted rows, and never repairs data.
+See [reference audits](../../docs/reference-audits.md) for coverage and limits.
+
 `BuildRecentOrdersQuery` compiles SQL and bind arguments without opening a
 connection. `BuildRecentClipsInGenreQuery` demonstrates natural
 `Clip`-rooted `Has("Genres", Equal("ID", ...))` syntax through its `via` relation

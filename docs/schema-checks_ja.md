@@ -162,6 +162,9 @@ foreign keyは要求も検査も行いません
 
 referential-integrity policy、一般的なperformance index、Migration history、live database driftはoffline comparisonの対象外です
 
+物理FKを使わないsourceの参照検査と、明示的にDBへ接続する孤児参照の検出は[参照Audit](reference-audits_ja.md)を参照してください
+Auditはjunction両端を含むGoのRelation宣言を利用し、applicationのwrite時に参照整合性を強制する処理は行いません
+
 現在のTiDB仕様は[`CREATE TABLE` grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)、[`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/)、[unique constraint semantics](https://docs.pingcap.com/tidb/stable/constraints/)、[case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)、[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
 
 `schema.Parse` は固定VECTOR次元数と対応するvector indexのcolumn／metricを保持します

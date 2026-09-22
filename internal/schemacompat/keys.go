@@ -53,3 +53,35 @@ func EqualColumns(left, right []string) bool {
 	}
 	return true
 }
+
+// HasIndexPrefix reports visible, unconditional, complete-column prefix
+// coverage. This is a structural check, not an optimizer prediction.
+func HasIndexPrefix(table schema.Table, columns []string) bool {
+	if len(columns) == 0 {
+		return false
+	}
+	for _, index := range table.Indexes() {
+		parts := index.Columns()
+		if !index.SupportsDefaultColumnLookup() || len(parts) < len(columns) {
+			continue
+		}
+		matched := true
+		for _, column := range columns {
+			found := false
+			for _, part := range parts[:len(columns)] {
+				if strings.EqualFold(column, part) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}

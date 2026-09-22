@@ -198,6 +198,10 @@ infoのためcommand自体は失敗せず、終了statusが0でも全modelの検
 型family、Go／SQLのNULL許容、生成列への書込み、`AUTO_RANDOM` の一致、Relation全体の契約は引き続き `check.Schema` で確認します
 mutationだけで使うmodelや、認識できるterminalがないquery helperのmodelは、`model.Meta` を明示してsourceの検査対象に含めます
 
+schema付きLintは到達可能なRelation targetも辿り、SQL keyの基本型・符号、一意なidentity、to-oneの一意性、pure junction pairの一意性、検索用index prefixを検査します
+物理FKは要求せず、未解決のRelationを `SRC003` と3つの `schema_relations` counterで報告します
+実データの孤児参照は明示的な `tidbgo audit` で検査します。診断と制限は[論理参照のAudit](reference-audits_ja.md)を参照してください
+
 migrationまたはrollback先を確認する場合は、そのDBを利用するapplication版に対して対象のsnapshotを渡します
 
 ```sh

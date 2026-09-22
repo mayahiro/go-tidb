@@ -320,9 +320,20 @@ required columns. It uses `CMP002`, `CMP003`, `CMP007`, `CMP015`, and `CMP010`
 with the corresponding `check.Schema` severity and suppression policy. SELECT
 `Count` and `Exists` participate in model coverage without pagination advice.
 Unresolved models emit informational `SRC002` and remain in
-`uncertain_schema_models`; structural coverage does not imply type, nullability,
-generation, relation, or live-schema validation. Query execution and generated
+`uncertain_schema_models`; model coverage alone does not imply Go/SQL type,
+nullability, generation, full relation, or live-schema validation. Query execution and generated
 SQL are unaffected by source diagnostics.
+
+Source schema checks traverse reachable Relation targets. Logical reference
+checks compare physical key base types and signedness, unique referenced
+identity, to-one and pure-junction cardinality, and equality lookup prefixes.
+Unresolved mappings report `SRC003` with separate relation coverage. Physical
+FKs are optional. `tidbgo audit` requires a snapshot and explicit connection,
+with offline `--dry-run`, relation selection, and a bounded client deadline.
+Read-only probes detect the existence of orphan non-NULL keys; they include
+soft-deleted rows and report incomplete execution separately from clean data.
+Each probe observes its own snapshot, and audits neither enforce writes nor
+repair rows. See [reference audits](docs/reference-audits.md).
 
 `ScanAll` participates in query-pattern and schema-aware index analysis. Its
 explicit `Select` counts as an explicit projection; default-projection

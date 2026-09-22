@@ -263,6 +263,18 @@ temporary fixture作成はtimer開始前に完了します
 schema modelのworkloadは明示的な100 model宣言に対して、一致するsnapshot、列削除、未対応の埋込みを検査します
 snapshotのparseはtimer開始前です。source互換性検査を変更する際は、modelを共有するqueryのworkloadとschema未指定のlocal queryも比較します
 
+参照Lintは到達可能なmodelを辿って論理key mappingも検査します。上記のRelation workloadで追加costを測定します
+`-cpuprofile`／`-memprofile` で取得したprofileは `go -C tools tool pprof` で確認できます
+
+接続する参照Audit testには、前述の専用test DBを指す `TIDBGO_TEST_DSN` が必要です
+専用fixture tableを作成して複合key・NULL・自己参照・junction両端・論理削除の物理的な意味を検査し、終了後に削除します
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterReferenceAudit$' -count=1
+```
+
+DSNがない場合はskipします。source／CLI testはofflineのままで、offline testの成功はTiDBの実行計画やAuditのRUの確認を意味しません
+
 ## Via Relation compiler検証
 
 source-target candidate keyを宣言したpayload付きedgeの、metadata warm済みoffline SQL compileを計測します

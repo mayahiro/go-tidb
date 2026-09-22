@@ -13,6 +13,9 @@ downでもsnapshotは操作対象DBの現時点の構造に更新されます
 applicationを配布する前に、予定するmigrationまたはrollback先のsnapshotで照合できます
 検査範囲と未解決modelの報告は[sourceのスキーマ検査](checks_ja.md#go-source解析)を参照してください
 
+migration後は更新したsnapshotとapplicationのRelation宣言で[参照Audit](reference-audits_ja.md)を実行し、FKがないDBの孤児参照も確認できます
+接続して実行する前に `tidbgo audit . --schema schema.sql --dry-run` で検査SQLを確認します
+
 ## 接続とファイル
 
 デプロイ環境またはsecret managerで `TIDBGO_DSN` を設定します

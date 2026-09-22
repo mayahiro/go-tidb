@@ -177,6 +177,11 @@ Foreign keys are neither required nor inspected. Referential-integrity policy,
 general performance indexes, migration history, and live database drift remain
 outside this offline comparison.
 
+For source-based logical reference checks and explicitly connected orphan
+detection without physical FKs, see [reference audits](reference-audits.md).
+The audit uses the declared Go relations, including junction endpoints, and
+does not enforce referential integrity during application writes.
+
 TiDB documents the current [`CREATE TABLE`
 grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/),
 [`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/), and

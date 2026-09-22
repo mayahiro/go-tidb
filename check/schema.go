@@ -519,19 +519,7 @@ func tableHasUniqueKey(table physicalschema.Table, columns []string) bool {
 }
 
 func tableHasIndexPrefix(table physicalschema.Table, columns []string) bool {
-	if len(columns) == 0 {
-		return false
-	}
-	for _, index := range table.Indexes() {
-		indexColumns := index.Columns()
-		if !index.SupportsDefaultColumnLookup() || len(indexColumns) < len(columns) {
-			continue
-		}
-		if equalIdentifierSets(indexColumns[:len(columns)], columns) {
-			return true
-		}
-	}
-	return false
+	return schemacompat.HasIndexPrefix(table, columns)
 }
 
 func junctionIndexCoverage(table physicalschema.Table, pairColumns, sourceColumns []string) (bool, bool) {
