@@ -76,7 +76,7 @@ func TestTiDBCloudStarterOrderedListSQLShapes(t *testing.T) {
 					start := time.Now()
 					var rows []orderedListRow
 					if shapes[mode] == "compiler" {
-						rows = readCompiledOrderedList(t, ctx, connection, dsn, tc)
+						rows = readCompiledOrderedList(t, ctx, connection, dsn, orderedListQuery(tc))
 					} else {
 						rows = readOrderedList(t, ctx, connection, dsn, query, args)
 					}
@@ -152,12 +152,17 @@ type orderedListTargetModel struct {
 }
 
 func orderedListQuery(tc orderedListCase) *orm.SelectQuery[orderedListLinkModel] {
-	query := orm.Query[orderedListLinkModel]().Preload("Target").
-		Where(orm.Equal("OwnerID", tc.owner)).
-		Limit(int64(tc.limit)).Offset(int64(tc.offset))
+	query := orderedListBaseQuery(tc)
 	if !tc.missingIndex {
 		query.ForceIndex("owner_order")
 	}
+	return query
+}
+
+func orderedListBaseQuery(tc orderedListCase) *orm.SelectQuery[orderedListLinkModel] {
+	query := orm.Query[orderedListLinkModel]().Preload("Target").
+		Where(orm.Equal("OwnerID", tc.owner)).
+		Limit(int64(tc.limit)).Offset(int64(tc.offset))
 	if tc.ascending {
 		query.OrderBy(orm.Asc("AddedAt"), orm.Asc("ID"))
 	} else {
@@ -213,9 +218,9 @@ func readOrderedList(t *testing.T, ctx context.Context, connection *sql.Conn, ds
 	return rows
 }
 
-func readCompiledOrderedList(t *testing.T, ctx context.Context, connection *sql.Conn, dsn string, tc orderedListCase) []orderedListRow {
+func readCompiledOrderedList(t *testing.T, ctx context.Context, connection *sql.Conn, dsn string, query *orm.SelectQuery[orderedListLinkModel]) []orderedListRow {
 	t.Helper()
-	links, err := orderedListQuery(tc).All(ctx, connection)
+	links, err := query.All(ctx, connection)
 	if err != nil {
 		fatalDatabaseError(t, dsn, "execute compiled ordered list", err)
 	}

@@ -536,6 +536,38 @@ This is an opt-in experiment, not an RU regression gate. It does not reproduce
 application statistics or guarantee a particular optimizer decision. No
 universal RU improvement should be inferred from these results alone.
 
+To isolate explicit index hints from SQL shape, statistics, and index
+coverage, run the separate plan experiment:
+
+```sh
+TIDBGO_TEST_ORDERED_LIST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterIndexPlans$' -count=1 -v
+```
+
+It requires verified TLS and a dedicated test database. It creates and removes
+the same two owned fixture tables, so do not run both experiments concurrently.
+It compares identical ORM queries with no hint and an explicit hint,
+retaining the raw SQL variants to expose projection or query-shape
+differences. An explicit `PRIMARY` hint provides a table-scan alternative.
+The phases run after seeding, after `ANALYZE TABLE ... ALL COLUMNS`, and after
+adding a covering index and analyzing again. The initial phase does not assume
+statistics are absent; their observed state is logged.
+
+Each first-page, last-page, large-limit, and few-matches case has one warmup and
+seven measured rounds with rotating execution order. JSON observation logs
+retain SQL, synthetic fixture arguments, individual
+ServerRU/latency samples, and separate `EXPLAIN ANALYZE` executions with execution
+details. Large-limit and last-page cases repeat EXPLAIN seven times to reveal
+variations in processed keys, join batches, and the RU reported by the top
+operator. This RU is distinct from the measured SELECT's session-local RU.
+Session settings and table statistics are also logged when permissions allow;
+denied metadata reads are recorded as unavailable. The explicit and unhinted
+ORM SQL must differ only by the hint, with identical arguments, and all variants
+must return identical fixture results. No plan shape or RU threshold is asserted.
+ANALYZE warnings are logged; completing ANALYZE does not prove that every
+subsequent plan has loaded complete statistics. The same timing boundaries as
+the preceding experiment apply; EXPLAIN is a
+separate execution and might differ from an earlier measured execution.
+
 Compare offline compilation of hinted lists across page sizes and offsets,
 and scalar queries, separately from database savings:
 

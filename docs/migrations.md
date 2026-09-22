@@ -7,6 +7,10 @@ supports new databases, adoption of existing databases, up/down SQL, and a
 `schema.sql` snapshot of the **current target database**. Application startup
 and ORM queries never run migrations.
 
+Use the generated snapshot for [offline schema compatibility checks](schema-checks.md)
+with `schema.Parse` and `check.Schema`, or pass it to `tidbgo lint --schema`.
+Down also updates the snapshot to reflect the current target database.
+
 ## Connection and files
 
 Set `TIDBGO_DSN` through your deployment environment or secret manager. It uses

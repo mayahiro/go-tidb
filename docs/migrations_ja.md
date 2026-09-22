@@ -6,6 +6,9 @@
 新規DB、既存DBの取り込み、up／down SQL、**操作対象DBの現時点の構造**を表す `schema.sql` を扱います
 アプリケーション起動やORMのqueryからマイグレーションを実行することはありません
 
+生成したsnapshotは `schema.Parse` と `check.Schema` による[offlineのスキーマ互換性検査](schema-checks_ja.md)や、`tidbgo lint --schema` に利用できます
+downでもsnapshotは操作対象DBの現時点の構造に更新されます
+
 ## 接続とファイル
 
 デプロイ環境またはsecret managerで `TIDBGO_DSN` を設定します
