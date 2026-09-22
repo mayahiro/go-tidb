@@ -2,7 +2,6 @@ package tidbcloud
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,9 +38,9 @@ func TestTiDBCloudStarterMigrations(t *testing.T) {
 	if objects != 0 {
 		t.Fatal("refusing migration fixture: dedicated test database must contain no tables, views, or sequences")
 	}
-	const firstVersion int64 = 20260921000000001
-	const secondVersion int64 = 20260921000000002
-	const thirdVersion int64 = 20260921000000003
+	const firstVersion = "20260921000000001_accounts"
+	const secondVersion = "20260921000000002_label"
+	const thirdVersion = "20260921000000003_partial"
 	const table = "tidbgo_it_migration_accounts"
 	const initial = "CREATE TABLE `" + table + "` (`id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, `amount` DECIMAL(18,6) NOT NULL DEFAULT 1.250000, `note` VARCHAR(80) DEFAULT 'a;quoted')"
 	const add = "ALTER TABLE `" + table + "` ADD COLUMN `label` VARCHAR(50)"
@@ -57,6 +56,7 @@ func TestTiDBCloudStarterMigrations(t *testing.T) {
 			}
 		}
 	})
+	var events []migrate.Event
 	makeRunner := func() (*migrate.Runner, string, string) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "migrations")
@@ -64,7 +64,7 @@ func TestTiDBCloudStarterMigrations(t *testing.T) {
 			t.Fatal(err)
 		}
 		schema := filepath.Join(dir, "schema.sql")
-		r, err := migrate.New(db, migrate.Config{Directory: path, SchemaFile: schema})
+		r, err := migrate.New(db, migrate.Config{Directory: path, SchemaFile: schema, OnEvent: func(event migrate.Event) error { events = append(events, event); return nil }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,8 +95,8 @@ func TestTiDBCloudStarterMigrations(t *testing.T) {
 		}
 	}
 	r, dir, schema := makeRunner()
-	write(dir, fmt.Sprintf("%d_accounts.sql", firstVersion), initial, "DROP TABLE `"+table+"`")
-	write(dir, fmt.Sprintf("%d_label.sql", secondVersion), add, reverse)
+	write(dir, firstVersion+".sql", initial, "DROP TABLE `"+table+"`")
+	write(dir, secondVersion+".sql", add, reverse)
 	plan, err := r.Plan(ctx, migrate.Up, 0)
 	check("plan initial migrations", err)
 	if len(plan.Steps) != 2 {
@@ -135,24 +135,70 @@ func TestTiDBCloudStarterMigrations(t *testing.T) {
 	if read(schema) != latest {
 		t.Fatal("re-up snapshot differs")
 	}
-	write(dir, fmt.Sprintf("%d_partial.sql", thirdVersion), "ALTER TABLE `"+table+"` ADD COLUMN `partial` INT; ALTER TABLE `"+table+"` ADD COLUMN `partial` INT", "ALTER TABLE `"+table+"` DROP COLUMN `partial`")
+	// A reverted file may be corrected and reapplied without old-file constraints.
+	_, err = r.Apply(ctx, migrate.Down, 1)
+	check("reverse before SQL edit", err)
+	write(dir, secondVersion+".sql", "ALTER TABLE `"+table+"` ADD COLUMN `label` VARCHAR(100)", reverse)
+	_, err = r.Apply(ctx, migrate.Up, 0)
+	check("apply corrected SQL", err)
+	if !strings.Contains(read(schema), "varchar(100)") {
+		t.Fatal("corrected column was not applied")
+	}
+	var columnCount int
+	check("inspect version columns", db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='_tidbgo_migrations'").Scan(&columnCount))
+	if columnCount != 2 {
+		t.Fatal("management table does not have exactly two columns")
+	}
+	write(dir, thirdVersion+".sql", "ALTER TABLE `"+table+"` ADD COLUMN `partial` INT; ALTER TABLE `"+table+"` ADD COLUMN `partial` INT; ALTER TABLE `"+table+"` ADD COLUMN `pending_marker` INT", "ALTER TABLE `"+table+"` DROP COLUMN IF EXISTS `partial`; ALTER TABLE `"+table+"` DROP COLUMN IF EXISTS `pending_marker`")
+	events = nil
 	result, err = r.Apply(ctx, migrate.Up, 0)
-	if err == nil || !result.Dirty {
-		t.Fatal("partial DDL failure was not retained")
+	if err == nil || result.Version != secondVersion || result.SnapshotUpdated {
+		t.Fatal("partial failure was not reported")
 	}
-	if _, err := r.Apply(ctx, migrate.Up, 0); !errors.Is(err, migrate.ErrDirty) {
-		t.Fatal("dirty operation was allowed to retry")
+	var applied int
+	check("check partial version is absent", db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `_tidbgo_migrations` WHERE version=?", thirdVersion).Scan(&applied))
+	if applied != 0 {
+		t.Fatal("partial up recorded as applied")
 	}
-	_, err = db.ExecContext(ctx, "ALTER TABLE `"+table+"` DROP COLUMN `partial`")
-	check("manually restore partial fixture", err)
-	_, err = r.Dump(ctx)
-	check("dump restored fixture", err)
-	_, err = r.Repair(ctx, migrate.RepairOptions{Version: thirdVersion, ExpectedSchema: schema, Reason: "Restored the test column and independently checked data and DDL completion"})
-	check("repair interrupted migration", err)
+	var states []string
+	for _, event := range events {
+		if event.Phase == "SQL" && event.State != "started" {
+			states = append(states, fmt.Sprintf("%d:%s", event.Statement, event.State))
+		}
+	}
+	if strings.Join(states, ",") != "1:succeeded,2:error,3:unexecuted" {
+		t.Fatalf("unexpected execution events: %v", states)
+	}
+	check("check unsent SQL", db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='pending_marker'", table).Scan(&columnCount))
+	if columnCount != 0 {
+		t.Fatal("SQL after failure was executed")
+	}
+	// The operator checks the partial state and supplies guarded corrected SQL.
+	correctedUp := "ALTER TABLE `" + table + "` ADD COLUMN IF NOT EXISTS `partial` INT; ALTER TABLE `" + table + "` ADD COLUMN IF NOT EXISTS `pending_marker` INT"
+	correctedDown := "ALTER TABLE `" + table + "` DROP COLUMN IF EXISTS `partial`; ALTER TABLE `" + table + "` DROP COLUMN IF EXISTS `pending_marker`"
+	write(dir, thirdVersion+".sql", correctedUp, correctedDown)
+	_, err = r.Apply(ctx, migrate.Up, 0)
+	check("retry corrected partial SQL", err)
+	write(dir, thirdVersion+".sql", correctedUp, "ALTER TABLE `"+table+"` DROP COLUMN IF EXISTS `partial`; ALTER TABLE `"+table+"` DROP COLUMN `absent_marker`")
+	_, err = r.Apply(ctx, migrate.Down, 1)
+	if err == nil {
+		t.Fatal("expected partial down failure")
+	}
+	check("check partial down keeps version", db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `_tidbgo_migrations` WHERE version=?", thirdVersion).Scan(&applied))
+	if applied != 1 {
+		t.Fatal("failed down removed its record")
+	}
+	write(dir, thirdVersion+".sql", correctedUp, correctedDown)
+	_, err = r.Apply(ctx, migrate.Down, 1)
+	check("complete corrected down", err)
+	_, err = r.Apply(ctx, migrate.Up, 0)
+	check("reapply after corrected down", err)
+	_, err = r.Apply(ctx, migrate.Down, 1)
+	check("reverse completed partial fixture", err)
 	status, err := r.Status(ctx)
-	check("inspect repaired history", err)
-	if status.Dirty || status.Drift || status.Version != secondVersion {
-		t.Fatal("repair did not restore history")
+	check("inspect applied records", err)
+	if status.Version != secondVersion {
+		t.Fatal("incorrect latest applied record")
 	}
 	// Finish this independently owned history and then exercise adoption of the
 	// retained application table and data from a different migration directory.

@@ -8,17 +8,19 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	cli "github.com/mayahiro/nagicli-go"
 
+	"github.com/mayahiro/go-tidb/internal/redact"
 	"github.com/mayahiro/go-tidb/migrate"
 )
 
 func migrateCommand() *cli.Command {
 	root := cli.NewCommand("migrate").ID("migrate").About("Manage versioned SQL migrations and the current database schema snapshot").RequireSubcommand()
-	for _, action := range []string{"new", "lint", "init", "baseline", "status", "plan", "up", "down", "dump", "repair"} {
+	for _, action := range []string{"new", "lint", "init", "baseline", "status", "plan", "up", "down", "dump"} {
 		command := cli.NewCommand(action).ID("migrate-" + action).About(migrationHelp(action)).
 			Option(cli.ValueOption("migration-dir").Long("dir").Parser(cli.StringParser()).Help("Migration directory (default: migrations)")).
 			Option(cli.Flag("migration-json").Long("json").Help("Write structured JSON output"))
@@ -31,17 +33,16 @@ func migrateCommand() *cli.Command {
 				Option(cli.ValueOption("migration-timeout").Long("timeout").Parser(cli.CustomParser("DURATION", time.ParseDuration)).Help("Operation deadline (default: 30m)")).
 				Option(cli.ValueOption("migration-lock-timeout").Long("lock-timeout").Parser(cli.CustomParser("DURATION", time.ParseDuration)).Help("Lock timeout: whole seconds, 1s..1h (default: 30s)"))
 		}
+		if action == "lint" {
+			command.Option(cli.ValueOption("migration-schema").Long("schema").Parser(cli.StringParser()).Help("Prior SQL snapshot; requires --file and --direction")).
+				Option(cli.ValueOption("migration-file").Long("file").Repeated().Parser(cli.StringParser()).Help("Filename in --dir; repeat in execution order for schema checks")).
+				Option(cli.ValueOption("migration-direction").Long("direction").Parser(cli.StringParser()).Help("up or down; default without --schema: both"))
+		}
 		if action == "up" || action == "down" || action == "plan" {
 			command.Option(cli.ValueOption("migration-steps").Long("steps").Parser(cli.CustomParser("COUNT", strconv.Atoi)).Help("Versions to execute; default: all for up, one for down"))
 		}
 		if action == "plan" {
 			command.Option(cli.ValueOption("migration-direction").Long("direction").Parser(cli.StringParser()).Help("up or down (default: up)"))
-		}
-		if action == "repair" {
-			command.Argument(cli.Positional("migration-version").Parser(cli.CustomParser("VERSION", parseMigrationVersion)).Help("Unresolved migration version")).
-				Option(cli.ValueOption("migration-state").Long("state").Parser(cli.StringParser()).Help("Confirmed result: applied or reverted")).
-				Option(cli.ValueOption("migration-expected").Long("expected-schema").Parser(cli.StringParser()).Help("Reviewed SQL snapshot that must match the current database")).
-				Option(cli.ValueOption("migration-reason").Long("reason").Parser(cli.StringParser()).Help("Required audit explanation; independently verify data and server DDL completion"))
 		}
 		command.Handle(func(c *cli.Context, in *cli.Invocation) (cli.Outcome, error) { return runMigrate(c, in, action) })
 		root.Subcommand(command)
@@ -51,26 +52,18 @@ func migrateCommand() *cli.Command {
 
 func migrationHelp(action string) string {
 	return map[string]string{
-		"new":      "Create one offline SQL template with up/down sections and a UTC millisecond version",
-		"lint":     "Validate migration files offline",
-		"init":     "Capture an existing database into an initial up section without changing database objects",
-		"baseline": "Adopt the matching initial migration and refresh schema.sql without executing its SQL",
-		"status":   "Inspect history, interrupted attempts, and live schema drift",
+		"new":      "Create one offline SQL template with a UTC millisecond prefix in its filename",
+		"lint":     "Check existence guards and optional prior-schema consistency offline",
+		"init":     "Capture an existing database into one initial SQL file without Down",
+		"baseline": "Record a matching initial file without executing its SQL",
+		"status":   "List recorded applied versions and local pending migrations",
 		"plan":     "Preview exact up/down SQL without applying it",
 		"up":       "Apply pending SQL and refresh schema.sql from the database",
 		"down":     "Run reverse SQL and refresh schema.sql from the database",
-		"dump":     "Refresh schema.sql without changing database objects or repairing history",
-		"repair":   "Record an explicitly verified result of an interrupted migration",
+		"dump":     "Refresh schema.sql without changing database objects or changing applied records",
 	}[action]
 }
 
-func parseMigrationVersion(s string) (int64, error) {
-	v, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || v <= 0 {
-		return 0, fmt.Errorf("expected a positive migration version")
-	}
-	return v, nil
-}
 func migrationValue(in *cli.Invocation, key, fallback string) string {
 	value, ok := cli.ValueAs[string](in, key)
 	if !ok {
@@ -89,15 +82,26 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 	directory := migrationPath(c, migrationValue(in, "migration-dir", "migrations"))
 	var output any
 	var operationErr error
+	var dsn string
+	var executionLog *migrationLog
+	defer func() {
+		if executionLog != nil {
+			_ = executionLog.close()
+		}
+	}()
 	if action == "new" {
 		name := migrationValue(in, "migration-name", "")
 		output, operationErr = migrate.Create(directory, name)
 	} else if action == "lint" {
-		files, err := migrate.Load(directory)
-		operationErr = err
-		output = struct {
-			Versions int `json:"versions"`
-		}{len(files)}
+		options := migrate.LintOptions{Direction: migrate.Direction(migrationValue(in, "migration-direction", ""))}
+		if path := migrationValue(in, "migration-schema", ""); path != "" {
+			options.SchemaFile = migrationPath(c, path)
+		}
+		for _, value := range in.ParsedValues("migration-file") {
+			name, _ := value.Typed().(string)
+			options.Versions = append(options.Versions, strings.TrimSuffix(name, ".sql"))
+		}
+		output, operationErr = migrate.Lint(directory, options)
 	} else {
 		schemaFile := migrationPath(c, migrationValue(in, "migration-schema", "schema.sql"))
 		timeout, ok := cli.ValueAs[time.Duration](in, "migration-timeout")
@@ -125,20 +129,8 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 		if direction != migrate.Up && direction != migrate.Down || steps < 0 || direction == migrate.Down && steps == 0 {
 			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, "use direction up or down and a valid step count")
 		}
-		var repair migrate.RepairOptions
-		if action == "repair" {
-			repair.Version, _ = cli.ValueAs[int64](in, "migration-version")
-			state := migrationValue(in, "migration-state", "")
-			repair.Applied = state == "applied"
-			expected := migrationValue(in, "migration-expected", "")
-			repair.Reason = migrationValue(in, "migration-reason", "")
-			if repair.Version <= 0 || state != "applied" && state != "reverted" || expected == "" || repair.Reason == "" {
-				return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, "repair requires VERSION, --state applied|reverted, --expected-schema, and --reason")
-			}
-			repair.ExpectedSchema = migrationPath(c, expected)
-		}
 		envName := migrationValue(in, "migration-dsn-env", "TIDBGO_DSN")
-		dsn, ok := c.Environment(envName)
+		dsn, ok = c.Environment(envName)
 		if !ok || dsn == "" {
 			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, "set the migration DSN environment variable before connecting")
 		}
@@ -147,7 +139,15 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error())
 		}
 		defer db.Close()
-		runner, err := migrate.New(db, migrate.Config{Directory: directory, SchemaFile: schemaFile, LockTimeout: lockTimeout})
+		config := migrate.Config{Directory: directory, SchemaFile: schemaFile, LockTimeout: lockTimeout}
+		if action == "up" || action == "down" || action == "baseline" {
+			executionLog, err = newMigrationLog(filepath.Join(c.CurrentDirectory(), "log", "tidbgo"), c.Stderr(), dsn)
+			if err != nil {
+				return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "prepare migration log: "+err.Error())
+			}
+			config.OnEvent = executionLog.event
+		}
+		runner, err := migrate.New(db, config)
 		if err != nil {
 			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeInvalidValue, err.Error())
 		}
@@ -166,14 +166,20 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 			output, operationErr = runner.Apply(ctx, direction, steps)
 		case "dump":
 			output, operationErr = runner.Dump(ctx)
-		case "repair":
-			output, operationErr = runner.Repair(ctx, repair)
+		}
+	}
+	if executionLog != nil {
+		operationErr = errors.Join(operationErr, executionLog.finish(operationErr))
+		if result, ok := output.(migrate.Result); ok {
+			output = migrationRunResult{Result: result, LogFile: executionLog.path}
 		}
 	}
 	jsonOutput, _ := in.Flag("migration-json")
 	var writeErr error
 	if operationErr != nil {
-		if _, ok := output.(migrate.Result); !ok {
+		switch output.(type) {
+		case migrate.Result, migrationRunResult:
+		default:
 			output = nil
 		}
 	}
@@ -188,12 +194,12 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 		return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "write migration output failed")
 	}
 	if operationErr != nil {
-		if _, err := fmt.Fprintln(c.Stderr(), safeMigrationError(operationErr)); err != nil {
+		if _, err := fmt.Fprintln(c.Stderr(), safeMigrationError(operationErr, dsn)); err != nil {
 			return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, "write migration error failed")
 		}
 		return cli.NewOutcome(exitDiagnosticFailure), nil
 	}
-	if status, ok := output.(migrate.Status); ok && (status.Dirty || status.Drift) {
+	if result, ok := output.(migrate.LintResult); ok && result.HasErrors() {
 		return cli.NewOutcome(exitDiagnosticFailure), nil
 	}
 	return cli.Success(), nil
@@ -233,26 +239,60 @@ type migrationDriverLogger struct{}
 
 func (migrationDriverLogger) Print(...any) {}
 
-func safeMigrationError(err error) string {
+func migrationSecrets(dsn string) []string {
+	secrets := []string{dsn}
+	if config, err := mysql.ParseDSN(dsn); err == nil {
+		secrets = append(secrets, config.Passwd)
+	}
+	return secrets
+}
+
+func safeMigrationError(err error, dsn string) string {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		messages := make([]string, 0, len(joined.Unwrap()))
+		for _, cause := range joined.Unwrap() {
+			messages = append(messages, safeMigrationError(cause, dsn))
+		}
+		return strings.Join(messages, "; ")
+	}
 	var operation *migrate.OperationError
 	if errors.As(err, &operation) {
-		return err.Error()
+		if operation.Cause != nil {
+			return operation.Error() + "; cause=" + safeMigrationError(operation.Cause, dsn)
+		}
+		return operation.Error()
 	}
 	var server *mysql.MySQLError
 	if errors.As(err, &server) {
-		return fmt.Sprintf("migrate: database error %d; inspect the database before retrying", server.Number)
+		state := strings.Trim(string(server.SQLState[:]), "\x00")
+		return fmt.Sprintf("database error %d (SQLSTATE %q): %s", server.Number, state, strconv.Quote(redact.String(server.Message, migrationSecrets(dsn)...)))
 	}
-	return err.Error()
+	return strconv.Quote(redact.Error(err, migrationSecrets(dsn)...))
+}
+
+type migrationRunResult struct {
+	migrate.Result
+	LogFile string `json:"log_file"`
 }
 
 func writeMigrationText(c *cli.Context, output any) error {
 	switch value := output.(type) {
+	case migrate.LintResult:
+		if _, err := fmt.Fprintf(c.Stdout(), "versions=%d statements=%d unverified=%d schema_checked=%t execution_checked=false\n", value.Versions, value.Statements, value.Unverified, value.SchemaChecked); err != nil {
+			return err
+		}
+		for _, issue := range value.Issues {
+			if _, err := fmt.Fprintf(c.Stdout(), "%s %s.sql %s statement=%d: %s\n", issue.Severity, issue.Version, issue.Direction, issue.Statement, issue.Message); err != nil {
+				return err
+			}
+		}
+		return nil
 	case migrate.Plan:
-		if _, err := fmt.Fprintf(c.Stdout(), "database=%s %s: version %d -> %d creates_history=%t\n", value.Database, value.Direction, value.CurrentVersion, value.TargetVersion, value.CreatesHistory); err != nil {
+		if _, err := fmt.Fprintf(c.Stdout(), "database=%s %s: version %s -> %s creates_history=%t\n", value.Database, value.Direction, value.CurrentVersion, value.TargetVersion, value.CreatesHistory); err != nil {
 			return err
 		}
 		for _, step := range value.Steps {
-			if _, err := fmt.Fprintf(c.Stdout(), "version %d %s\n", step.Version, step.Name); err != nil {
+			if _, err := fmt.Fprintf(c.Stdout(), "file %s.sql\n", step.Version); err != nil {
 				return err
 			}
 			for _, sql := range step.Statements {
@@ -263,20 +303,26 @@ func writeMigrationText(c *cli.Context, output any) error {
 		}
 		return nil
 	case migrate.Status:
-		if _, err := fmt.Fprintf(c.Stdout(), "database=%s version=%d baseline=%d managed=%t dirty=%t drift=%t\n", value.Database, value.Version, value.Baseline, value.Managed, value.Dirty, value.Drift); err != nil {
+		if _, err := fmt.Fprintf(c.Stdout(), "database=%s version=%s managed=%t\n", value.Database, value.Version, value.Managed); err != nil {
 			return err
 		}
 		for _, m := range value.Migrations {
-			if _, err := fmt.Fprintf(c.Stdout(), "%d %s %s reversible=%t\n", m.Version, m.Name, m.State, m.Reversible); err != nil {
+			if _, err := fmt.Fprintf(c.Stdout(), "%s %s created_at=%v reversible=%t\n", m.Version, m.State, m.CreatedAt, m.Reversible); err != nil {
 				return err
 			}
 		}
 		return nil
+	case migrationRunResult:
+		if err := writeMigrationText(c, value.Result); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(c.Stdout(), "log_file=%s\n", value.LogFile)
+		return err
 	case migrate.Result:
-		_, err := fmt.Fprintf(c.Stdout(), "database=%s version=%d completed=%v snapshot_updated=%t dirty=%t\n", value.Database, value.Version, value.Completed, value.SnapshotUpdated, value.Dirty)
+		_, err := fmt.Fprintf(c.Stdout(), "database=%s version=%s completed=%v snapshot_updated=%t\n", value.Database, value.Version, value.Completed, value.SnapshotUpdated)
 		return err
 	case migrate.Migration:
-		_, err := fmt.Fprintf(c.Stdout(), "created %017d_%s.sql\n", value.Version, value.Name)
+		_, err := fmt.Fprintf(c.Stdout(), "created %s.sql\n", value.Version)
 		return err
 	default:
 		return json.NewEncoder(c.Stdout()).Encode(output)

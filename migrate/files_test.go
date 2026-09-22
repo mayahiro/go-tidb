@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -102,41 +101,29 @@ func TestMigrationSections(t *testing.T) {
 	}
 }
 
-func TestLoadValidatesTimestampsAndHistoryBytes(t *testing.T) {
+func TestLoadFilenamesAndSourcePreservation(t *testing.T) {
 	dir := t.TempDir()
-	initial := "20260921000000001_initial.sql"
-	add := "20260921000000002_add.sql"
-	source := migrationSQL("ALTER TABLE t ADD COLUMN x INT", "ALTER TABLE t DROP COLUMN x")
-	writeSQL(t, dir, add, source)
-	writeSQL(t, dir, initial, migrationSQL("CREATE TABLE t (id INT)", ""))
+	source := migrationSQL("CREATE TABLE t (id INT); ALTER TABLE t ADD x INT", "ALTER TABLE t DROP x; DROP TABLE t")
+	for _, name := range []string{"002_first.sql", "002_second.sql", "001.sql", "001-a.sql"} {
+		writeSQL(t, dir, name, source)
+	}
 	files, err := Load(dir)
-	if err != nil || len(files) != 2 || files[0].Version != firstVersion || files[0].Down != "" || files[1].Up+files[1].Down != source {
-		t.Fatalf("files=%#v err=%v", files, err)
+	if err != nil || len(files) != 4 || files[0].Version != "001" || files[1].Version != "001-a" || files[2].Version != "002_first" || files[3].Version != "002_second" {
+		t.Fatalf("filenames: %#v, %v", files, err)
 	}
-	beforeUp, beforeDown := checksum(files[1].Up), checksum(files[1].Down)
-	writeSQL(t, dir, add, "-- header\n"+source+"-- footer\n")
-	files, err = Load(dir)
-	if err != nil || checksum(files[1].Up) == beforeUp || checksum(files[1].Down) == beforeDown {
-		t.Fatalf("comments excluded from checksum: %v", err)
+	if files[1].Up+files[1].Down != source {
+		t.Fatal("source text changed")
 	}
-	for _, name := range []string{
-		"20260921000000002_duplicate.sql", "20260229000000000_invalid.sql",
-		"20260921240000000_invalid.sql", "2026092100000000_short.sql",
-		"202609210000000001_long.sql", "20260921000000003_pair.up.sql", "unknown.sql",
-	} {
-		t.Run(name, func(t *testing.T) {
-			writeSQL(t, dir, name, source)
-			defer os.Remove(filepath.Join(dir, name))
-			if _, err := Load(dir); err == nil {
-				t.Fatal("invalid file accepted")
-			}
-		})
+	for _, name := range []string{".hidden.sql", "bad name.sql", "-prefix.sql"} {
+		writeSQL(t, dir, name, source)
+		if _, err := Load(dir); err == nil {
+			t.Fatalf("invalid filename accepted: %s", name)
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	writeSQL(t, dir, "20240229235959999_leap.sql", source)
-	if _, err := Load(dir); err != nil {
-		t.Fatalf("valid leap date rejected: %v", err)
-	}
-	if err := os.Symlink(filepath.Join(dir, initial), filepath.Join(dir, "20260921000000003_link.sql")); err != nil {
+	if err := os.Symlink(filepath.Join(dir, "001.sql"), filepath.Join(dir, "003_link.sql")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(dir); err == nil {
@@ -144,65 +131,38 @@ func TestLoadValidatesTimestampsAndHistoryBytes(t *testing.T) {
 	}
 }
 
-func TestCreateUsesUTCMillisecondsAndRejectsCollisions(t *testing.T) {
+func TestCreateUsesUTCAndPreservesExistingFiles(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2027, 1, 1, 8, 59, 59, 999987654, time.FixedZone("JST", 9*60*60))
 	source := migrationSQL("CREATE TABLE t (id INT)", "DROP TABLE t")
 	m, err := createMigration(dir, "initial", source, now, false)
-	if err != nil || m.Version != 20261231235959999 {
-		t.Fatalf("UTC millisecond timestamp = %#v, %v", m, err)
+	if err != nil || m.Version != "20261231235959999_initial" {
+		t.Fatalf("created: %#v, %v", m, err)
 	}
-	for _, name := range []string{"initial", "different"} {
-		if _, err := createMigration(dir, name, source, now, false); err == nil {
-			t.Fatal("same-millisecond version accepted")
-		}
+	if _, err := createMigration(dir, "initial", "different", now, false); err == nil {
+		t.Fatal("existing file overwritten")
 	}
-	if _, err := createMigration(dir, "older", source, now.Add(-time.Second), false); err == nil {
-		t.Fatal("clock rollback accepted")
+	if _, err := createMigration(dir, "different", source, now, false); err != nil {
+		t.Fatal(err)
 	}
-	m, err = createMigration(dir, "next", source, now.Add(time.Millisecond), false)
-	if err != nil || m.Version != 20270101000000000 {
-		t.Fatalf("calendar rollover = %#v, %v", m, err)
+	if _, err := createMigration(dir, "older", source, now.Add(-time.Second), false); err != nil {
+		t.Fatal(err)
 	}
 	files, err := Load(dir)
-	if err != nil || len(files) != 2 || files[0].Up+files[0].Down != source {
-		t.Fatalf("existing file changed: %#v, %v", files, err)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("files: %#v, %v", files, err)
 	}
-}
-
-func TestCreateSerializesConcurrentNames(t *testing.T) {
-	dir := t.TempDir()
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	var wg sync.WaitGroup
-	for _, name := range []string{"first", "second"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			_, err := createMigration(dir, name, migrationSQL("CREATE TABLE t (id INT)", ""), time.Date(2026, 9, 21, 0, 0, 0, 123000000, time.UTC), false)
-			results <- err
-		}()
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-	successes := 0
-	for err := range results {
-		if err == nil {
-			successes++
+	for _, file := range files {
+		if file.Up+file.Down != source {
+			t.Fatal("existing source changed")
 		}
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || successes != 1 || len(entries) != 1 {
-		t.Fatalf("concurrent creations = %d, files = %v, err = %v", successes, entries, err)
 	}
 }
 
 func TestCreateAndAtomicSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	m, err := Create(filepath.Join(dir, "migrations"), "create_users")
-	if err != nil || m.Version <= 0 {
+	if err != nil || m.Version == "" {
 		t.Fatalf("create=%#v,%v", m, err)
 	}
 	if _, err := Load(filepath.Join(dir, "migrations")); err == nil {
@@ -264,20 +224,17 @@ func TestForeignKeyOrdering(t *testing.T) {
 	}
 }
 
-func TestPlanChecksEveryDownBeforeExecution(t *testing.T) {
-	migrations := []Migration{{1, "initial", "CREATE TABLE t (id INT);", ""}, {2, "add", "ALTER TABLE t ADD x INT;", "ALTER TABLE t DROP x;"}}
-	s := historyState{stack: []int64{1, 2}, hash: "hash"}
-	snap := snapshot{Hash: "hash"}
-	if _, err := buildPlan(migrations, s, snap, Down, 2); err == nil {
+func TestPlanChecksOnlySelectedDownFilesBeforeExecution(t *testing.T) {
+	migrations := []Migration{{Version: "001_initial", Up: "CREATE TABLE t (id INT);"}, {Version: "002_add", Up: "ALTER TABLE t ADD x INT;", Down: "ALTER TABLE t DROP x;"}}
+	s := historyState{applied: []appliedVersion{{version: "001_initial"}, {version: "002_add"}}}
+	if _, err := buildPlan(migrations, s, snapshot{managed: true}, Down, 2); err == nil {
 		t.Fatal("irreversible initial migration accepted")
 	}
-	s.baseline = 1
-	if _, err := buildPlan(migrations, s, snap, Down, 2); err == nil {
-		t.Fatal("baseline crossed")
-	}
-	p, err := buildPlan(migrations, s, snap, Down, 1)
-	if err != nil || p.TargetVersion != 1 || len(p.Steps) != 1 {
-		t.Fatalf("plan=%#v,%v", p, err)
+	for _, files := range [][]Migration{migrations, migrations[1:]} {
+		p, err := buildPlan(files, s, snapshot{managed: true}, Down, 1)
+		if err != nil || p.TargetVersion != "001_initial" || len(p.Steps) != 1 {
+			t.Fatalf("plan: %#v, %v", p, err)
+		}
 	}
 }
 

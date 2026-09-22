@@ -11,9 +11,9 @@ import (
 const snapshotHeader = "-- tidbgo schema snapshot v1; generated from the current database\n\n"
 
 type snapshot struct {
-	SQL, Hash string
-	tables    int
-	managed   bool
+	SQL     string
+	tables  int
+	managed bool
 }
 type tableDDL struct {
 	name, definition string
@@ -136,8 +136,7 @@ func capture(ctx context.Context, conn *sql.Conn, database string) (snapshot, er
 	if len(source) > maxSQLSize {
 		return snapshot{}, fmt.Errorf("migrate: schema snapshot exceeds 16 MiB")
 	}
-	hash, err := snapshotHash(source)
-	return snapshot{source, hash, len(names), managed}, err
+	return snapshot{source, len(names), managed}, nil
 }
 
 func snapshotHash(source string) (string, error) {

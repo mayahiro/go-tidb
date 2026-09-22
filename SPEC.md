@@ -225,8 +225,8 @@ dedicated result API and any resulting minimum-Go-version cost.
 
 ## 5. Migration surface
 
-Migrations use increasing UTC timestamp versions with millisecond precision
-(`YYYYMMDDHHMMSSmmm`), such as:
+Migrations use filename versions. Generated filenames start with a UTC timestamp
+with millisecond precision (`YYYYMMDDHHMMSSmmm`), such as:
 
 ```text
 20260921093000123_create_users.sql
@@ -236,40 +236,55 @@ schema.sql
 Each migration file contains `-- tidbgo:up` and an optional `-- tidbgo:down`
 section. Directives occupy their own lines outside SQL quotes and block comments.
 Omitting down declares an irreversible change. Both sections must contain SQL
-when present. Checksums cover the complete file, including comments and whitespace.
-Generated versions must be later than the latest local version; same-millisecond
-collisions and clock rollback are rejected without overwriting files.
+when present, and may contain multiple statements. The version is the complete
+filename without `.sql`. Generated names have a UTC millisecond prefix and an
+exact filename collision fails without overwriting files.
 
 `tidbgo migrate` provides offline `new` and `lint`, and explicit connected
-`init`, `baseline`, `plan`, `status`, `up`, `down`, `dump`, and `repair`.
+`init`, `baseline`, `plan`, `status`, `up`, `down`, and `dump`.
 Application startup and ORM APIs do not run migrations. A caller-owned
 `database/sql` pool can also be passed to the deployment-only `migrate.Runner`.
 The CLI is an independent module under `cmd/tidbgo` containing the MySQL driver
 and CLI framework. The root library module has no third-party dependencies.
 
-`init` reads an existing database into the first migration's up section.
-`baseline` compares that SQL with a fresh snapshot, records adoption without
-application DDL or DML, and creates or refreshes `schema.sql` from the database.
-The adopted version is the lower bound for down. The same initial SQL
-can initialize an empty database through up.
+`init` captures the existing database into one initial file without Down and
+does not register a version. `baseline` requires exactly one initial file,
+compares its SQL with a fresh snapshot, records it without application DDL or
+DML, and refreshes `schema.sql`. Down rejects a selected file without Down
+before executing any SQL or removing records. The same initial SQL can
+initialize an empty database through up.
+
+The database stores only `version` and a database-generated UTC `created_at`.
+Up selects unregistered filenames in ascending order, including older names
+added later. Down selects applied records by descending `created_at`, then
+descending filename to break ties. SQL edits after down are permitted.
 
 Migration application:
 
 1. Hold one dedicated connection
 2. Acquire a named advisory lock
-3. Validate local SQL, all recorded checksums, and the live structural fingerprint
-4. Record a running state
-5. Execute statements in source order
-6. Record success or interruption and the confirmed statement count
+3. Validate file structure and select files from applied records
+4. Persist the CLI execution log before each SQL statement
+5. Execute statements in source order and report each result
+6. Register or remove the version only after all its SQL succeeds
 7. Regenerate `schema.sql` from the current database after each completed version
 8. Release the advisory lock
 
-Down uses authored reverse SQL and also refreshes `schema.sql`; migration
-files and history stay fixed. DDL is not transactionally rolled back. An
-interrupted attempt blocks further up/down until an operator inspects the
-structure, data, and DDL jobs and explicitly repairs the recorded state using
-a matching reviewed snapshot and an audit reason. Database success and
-snapshot-output failure are reported separately; dump can retry file output.
+Down uses authored reverse SQL. DDL is not transactionally rolled back.
+Interrupted SQL leaves an Up version unregistered or a Down version registered.
+The operator inspects the structure, data, and DDL jobs, then manually recovers.
+CLI output and `log/tidbgo` retain successful, failed, unknown, and unexecuted
+SQL, as well as separate record-update outcomes. Database error numbers,
+SQLSTATE, and causes are displayed with connection credentials redacted.
+The library exposes synchronous `OnEvent` progress for caller-owned logging.
+Database success and snapshot-output failure are reported separately; dump can
+retry file output.
+
+Offline migration lint checks basic existence guards and, with an explicit
+prior snapshot, files, and direction, basic table, column, and index consistency.
+Missing guards are warnings; supported structural conflicts are errors.
+Unsupported SQL and dependent checks remain unverified. Lint neither enumerates
+TiDB-specific restrictions nor guarantees idempotence or database execution.
 
 The snapshot retains supported table definitions and TiFlash replica settings,
 excluding history metadata and allocator counters. It rejects unsupported
@@ -391,9 +406,6 @@ Planned catalogs cover:
 - Cross-run connected plan regressions
 - Cross-run query-count and duration regressions
 - SELECT server-RU regressions
-- Additional migration SQL diagnostics for destructive changes and unsupported
-  Starter syntax; migration execution already enforces checksums, schema drift,
-  and advisory locking independently of the diagnostic catalog
 
 Future diagnostics continue to choose suppressibility as part of each rule
 contract. Safety errors such as unqualified updates and deletes will not be
@@ -422,13 +434,13 @@ connection behavior.
 - DSNs, passwords, tokens, and bind values are excluded from default logs and
   persisted reports. Raw SQL templates and database errors can still contain
   application data and require explicit retention controls.
-- Full SQL text is not logged by default.
+- Runtime logging omits full SQL text by default. The explicit migration CLI
+  persists authored SQL and database error details under `log/tidbgo` with mode
+  `0600` for manual recovery, redacting connection credentials.
 - TLS is required by default for database connections.
 - Identifier values are validated before SQL construction.
-- User-provided reasons are not inserted into generated SQL comments.
 - Runtime telemetry is opt-in, written only to the caller-owned writer, and is
   not sent by the core packages.
-- Migration repair operations require an explicit action and reason.
 
 ## 9. Delivery order
 
@@ -448,8 +460,8 @@ connection behavior.
   deterministic collection-relation index-prefix checks, and conservative
   same-function Go-source projection analysis
 - Implemented: current-database SQL snapshot generation and normalization,
-  versioned up/down migrations, existing-database adoption, checksums, drift
-  checks, advisory locking, and explicit interrupted-operation repair
+  filename-based up/down migrations, existing-database adoption, applied-version
+  records, advisory locking, manual recovery logs, and limited offline SQL lint
 - Planned next: historical reads and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value

@@ -686,11 +686,13 @@ tidbgo migrate up
 tidbgo migrate down
 ```
 
-既存DBでは `tidbgo migrate init` で初期SQLを取得し、`tidbgo migrate baseline` で一致を検証してapplication DDLを実行せずに履歴へ登録します
+既存DBでは `tidbgo migrate init` で初期SQLを取得し、`tidbgo migrate baseline` で一致を検証してapplication DDLを実行せずに適用済みとして登録します
 
+1ファイルに複数SQLを記載できます。DBは適用済みファイル名と登録日時を保持し、downは登録順を遡ります
 upとdownの成功後は、いずれも現時点のDBから `schema.sql` を再生成します
+手動復旧のためにSQLの進捗とDBエラーを `log/tidbgo` に保存します
 
-ファイルの作成、baseline境界、失敗からの復旧、snapshot対応objectは[マイグレーションガイド](docs/migrations_ja.md)を参照してください
+ファイルの作成、既存DBへの導入、lintの範囲、復旧、snapshot対応objectは[マイグレーションガイド](docs/migrations_ja.md)を参照してください
 
 application queryの登録とDB接続なしでstructured runtime artifactを解析できます
 

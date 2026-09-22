@@ -99,7 +99,7 @@ func scanTokens(source string, directives bool) ([]token, error) {
 	return result, nil
 }
 
-// migrationParts retains every source byte in exactly one direction checksum.
+// migrationParts preserves source text in each direction.
 // Directives inside quoted values or block comments remain ordinary SQL text.
 func migrationParts(source string) (up, down string, err error) {
 	ts, err := scanTokens(source, true)
@@ -372,4 +372,19 @@ func normalizedDDL(source string) (string, error) {
 	}
 	b.WriteString(source[last:])
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(b.String()), ";")), nil
+}
+
+func migrationStatements(m Migration, direction Direction) ([]string, error) {
+	source := m.Up
+	if direction == Down {
+		source = m.Down
+	}
+	statements, err := splitSQL(source)
+	if err != nil {
+		return nil, fmt.Errorf("migrate: %s %s: %w", filename(m), direction, err)
+	}
+	if len(statements) == 0 {
+		return nil, fmt.Errorf("migrate: %s %s: section contains no SQL", filename(m), direction)
+	}
+	return statements, nil
 }

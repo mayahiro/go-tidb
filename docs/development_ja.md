@@ -6,7 +6,7 @@
 
 ## マイグレーションの検証
 
-[マイグレーションrunner](migrations_ja.md)のoffline testではbaseline導入、up／down／再適用、checksumとdriftによる停止、独立client間の排他、DDLと履歴更新の途中失敗、明示復旧、snapshot出力失敗を確認します
+[マイグレーションrunner](migrations_ja.md)のoffline testではbaseline導入、up／down／再適用、ファイル名による選択と適用順、独立client間の排他、SQLと適用記録更新の途中失敗、CLIログの保存、限定的なoffline lint、snapshot出力失敗を確認します
 
 ```sh
 go test ./migrate
@@ -17,7 +17,7 @@ go test ./migrate -run '^$' -fuzz '^FuzzSQLBoundaries$' -fuzztime=10s
 go test ./migrate -run '^$' -bench '^(BenchmarkSnapshotHash|BenchmarkLoad)$' -benchmem -benchtime=200ms -count=3
 ```
 
-`BenchmarkLoad` は1 version、100 version、1 MiBのquoted literalでfile読取とsection検証を測定します
+`BenchmarkLoad` は1 version、100 version、1ファイルに100 statement、1 MiBのquoted literalでfile読取とsection検証を測定します
 fixture作成は計測時間外で、DB実行とRUは測定しません
 
 `BenchmarkSnapshotHash` は同じcanonical SQLをsortし、結合してSHA-256へ渡す方式と順次書き込む方式を比較します
@@ -48,7 +48,7 @@ TIDBGO_TEST_MIGRATE=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudSta
 
 初期状態が空であることを確認後、testが所有する `tidbgo_it_migration_accounts` と `_tidbgo_migrations` だけを作成・削除します
 
-decimalデータの保持、INSERT後のsnapshot安定性、down／再適用後の更新、DDL部分失敗と復旧、既存tableを再作成しない導入、取得した初期SQLから空DBを再構築する経路を確認します
+decimalデータの保持、INSERT後のsnapshot安定性、down／再適用後の更新、down後のSQL修正、up／downの部分失敗と手動修正、2カラムの適用記録、既存tableを再作成しない導入、取得した初期SQLから空DBを再構築する経路を確認します
 
 環境変数の設定を使用し、`.env` は自動読込しません
 

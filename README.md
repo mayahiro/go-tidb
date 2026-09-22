@@ -669,9 +669,12 @@ tidbgo migrate down
 
 For an existing database, `tidbgo migrate init` captures the initial SQL and
 `tidbgo migrate baseline` verifies and records it without executing application
-DDL. Successful up and down operations both regenerate `schema.sql` from the
-current database. See the [migration guide](docs/migrations.md) for file
-creation, baseline boundaries, failure recovery, and supported snapshot objects.
+DDL. Each file can contain multiple SQL statements. The database stores applied
+filenames and registration times; down follows registration order. Successful
+up and down operations regenerate `schema.sql` from the current database. SQL
+progress and database errors are saved under `log/tidbgo` for manual recovery.
+See the [migration guide](docs/migrations.md) for file creation, adoption, lint
+coverage, recovery, and supported snapshot objects.
 
 Analyze a structured runtime artifact without registering application queries
 or connecting to a database:
