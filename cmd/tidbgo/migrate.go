@@ -200,15 +200,19 @@ func runMigrate(c *cli.Context, in *cli.Invocation, action string) (cli.Outcome,
 }
 
 func openMigrationDatabase(dsn string) (*sql.DB, error) {
+	return openToolDatabase(dsn, "migration")
+}
+
+func openToolDatabase(dsn, operation string) (*sql.DB, error) {
 	config, err := mysql.ParseDSN(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("invalid migration DSN")
+		return nil, fmt.Errorf("invalid %s DSN", operation)
 	}
 	if config.DBName == "" || config.Net != "tcp" || config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext {
-		return nil, fmt.Errorf("migration DSN requires a database and TCP with verified TLS (tls=true)")
+		return nil, fmt.Errorf("%s DSN requires a database and TCP with verified TLS (tls=true)", operation)
 	}
 	if config.MultiStatements || config.AllowAllFiles || config.AllowOldPasswords || len(config.Params) > 0 {
-		return nil, fmt.Errorf("migration DSN cannot enable multiple statements, arbitrary file access, old passwords, or session-variable parameters")
+		return nil, fmt.Errorf("%s DSN cannot enable multiple statements, arbitrary file access, old passwords, or session-variable parameters", operation)
 	}
 	config.Logger = migrationDriverLogger{}
 	if config.Timeout == 0 {
@@ -216,7 +220,7 @@ func openMigrationDatabase(dsn string) (*sql.DB, error) {
 	}
 	connector, err := mysql.NewConnector(config)
 	if err != nil {
-		return nil, fmt.Errorf("invalid migration connection configuration")
+		return nil, fmt.Errorf("invalid %s connection configuration", operation)
 	}
 	db := sql.OpenDB(connector)
 	db.SetMaxOpenConns(1)

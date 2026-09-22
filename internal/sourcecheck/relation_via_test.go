@@ -41,13 +41,13 @@ func TestAnalyzeViaUsesDeclaredEdgeKeysAndScope(t *testing.T) {
 	if analysis := analyzeSource(t, source); len(analysis.Diagnostics) != 0 || analysis.Statistics.AnalyzedRelationTopNPatterns != 1 || analysis.Statistics.UncertainRelationTopNPatterns != 0 {
 		t.Fatalf("optimized source: %#v", analysis)
 	}
-	schema := "CREATE TABLE edges (id BIGINT PRIMARY KEY, parent_key BIGINT NULL, target_key BIGINT NULL, removed_at DATETIME NULL, priority BIGINT NOT NULL, UNIQUE KEY pair_key (parent_key,target_key), KEY target_scope_parent (target_key, removed_at, parent_key));"
+	schema := "CREATE TABLE parent (id BIGINT PRIMARY KEY); CREATE TABLE target (id BIGINT PRIMARY KEY); CREATE TABLE edges (id BIGINT PRIMARY KEY, parent_key BIGINT NULL, target_key BIGINT NULL, removed_at DATETIME NULL, priority BIGINT NOT NULL, UNIQUE KEY pair_key (parent_key,target_key), KEY target_scope_parent (target_key, removed_at, parent_key));"
 	matching := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, schema)))
 	if len(matching.Diagnostics) != 0 || matching.Statistics.AnalyzedIndexPatterns != 1 {
 		t.Fatalf("matching index: %#v", matching)
 	}
 	missing := analyzeSourceWithOptions(t, source, WithSchema(parseSourceSchema(t, strings.Replace(schema, ", KEY target_scope_parent (target_key, removed_at, parent_key)", "", 1))))
-	if codes := sourceDiagnosticCodes(missing); !reflect.DeepEqual(codes, []string{querycheck.CodeMissingIndexPrefix}) || !strings.Contains(missing.Diagnostics[0].Evidence[0].Message, "removed_at") {
+	if codes := sourceDiagnosticCodes(missing); !reflect.DeepEqual(codes, []string{querycheck.CodeMissingIndexPrefix, "REF004", "REF004"}) || !strings.Contains(missing.Diagnostics[2].Evidence[0].Message, "removed_at") {
 		t.Fatalf("missing edge scope index: %#v", missing)
 	}
 	for _, field := range []string{"Priority", "DeletedAt"} {

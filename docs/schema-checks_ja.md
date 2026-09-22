@@ -2,6 +2,10 @@
 
 [English](schema-checks.md)
 
+Go sourceから直接確認する場合は `tidbgo lint . --schema schema.sql` でも、解決できたmodelのtable・mapped列・宣言した主キー／一意制約・DB側だけの必須列を照合できます
+application codeは実行せず、sourceを解決できない場合は未確認として報告します
+型・NULL許容・生成方法・Relation全体の検査は `check.Schema` の対象です。範囲の詳細は[source解析guide](checks_ja.md#go-source解析)を参照してください
+
 `go-tidb` はSQL schema snapshotとapplication-owned Go structを、責任範囲が異なる正として扱います
 
 SQL snapshotは期待する物理database、structはapplicationが読み書きするcolumnとRelationを表すため、両者が同じ情報を持つ必要はありません
@@ -157,6 +161,9 @@ production indexを変更する前に `Explain` または `ExplainAnalyze` で�
 foreign keyは要求も検査も行いません
 
 referential-integrity policy、一般的なperformance index、Migration history、live database driftはoffline comparisonの対象外です
+
+物理FKを使わないsourceの参照検査と、明示的にDBへ接続する孤児参照の検出は[参照Audit](reference-audits_ja.md)を参照してください
+Auditはjunction両端を含むGoのRelation宣言を利用し、applicationのwrite時に参照整合性を強制する処理は行いません
 
 現在のTiDB仕様は[`CREATE TABLE` grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/)、[`AUTO_RANDOM`](https://docs.pingcap.com/tidbcloud/auto-random/)、[unique constraint semantics](https://docs.pingcap.com/tidb/stable/constraints/)、[case-insensitive table-name behavior](https://docs.pingcap.com/tidbcloud/mysql-compatibility/)、[index-prefix guidance](https://docs.pingcap.com/developer/dev-guide-index-best-practice/)を参照してください
 

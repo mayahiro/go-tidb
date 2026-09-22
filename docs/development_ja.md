@@ -245,6 +245,7 @@ go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredRes
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedIndexPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedRelationTopNPatterns$' -benchmem -count=5
 go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathHundredResolvedManyToManyRelationTopNPatterns$' -benchmem -count=5
+go test ./internal/sourcecheck -run '^$' -bench '^BenchmarkAnalyzePathSchemaModels$' -benchmem -count=5
 ```
 
 offline benchmarkであり、package load、application code実行、database connection open、RU消費を行いません
@@ -258,6 +259,21 @@ temporary fixture作成はtimer開始前に完了します
 4番目はdirect Relation metadataを解決し、共通のrelation-first TopN compiler decisionを適用して100個のassociation index accessを照合します
 
 5番目はpure many-to-many Relationとjunction metadataを解決し、同じcompiler decisionを適用して100個のjunction index accessを照合します
+
+schema modelのworkloadは明示的な100 model宣言に対して、一致するsnapshot、列削除、未対応の埋込みを検査します
+snapshotのparseはtimer開始前です。source互換性検査を変更する際は、modelを共有するqueryのworkloadとschema未指定のlocal queryも比較します
+
+参照Lintは到達可能なmodelを辿って論理key mappingも検査します。上記のRelation workloadで追加costを測定します
+`-cpuprofile`／`-memprofile` で取得したprofileは `go -C tools tool pprof` で確認できます
+
+接続する参照Audit testには、前述の専用test DBを指す `TIDBGO_TEST_DSN` が必要です
+専用fixture tableを作成して複合key・NULL・自己参照・junction両端・論理削除の物理的な意味を検査し、終了後に削除します
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterReferenceAudit$' -count=1
+```
+
+DSNがない場合はskipします。source／CLI testはofflineのままで、offline testの成功はTiDBの実行計画やAuditのRUの確認を意味しません
 
 ## Via Relation compiler検証
 
@@ -469,6 +485,29 @@ logには各sample、中央値、runtime plan、hint warningの確認結果を�
 この比較は明示的に有効にする実験であり、RU regression gateではありません
 
 applicationのstatisticsを再現するものではなく、特定のoptimizer判断や普遍的なRU改善を保証しません
+
+明示的なindex hintの効果をSQL形状・統計・indexの列カバー範囲から切り分ける場合は、別のplan比較を実行します
+
+```sh
+TIDBGO_TEST_ORDERED_LIST=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterIndexPlans$' -count=1 -v
+```
+
+検証済みTLSと専用テストDBが必要です
+同じ2つのfixture tableを作成して所有分だけを削除するため、両実験を同時には実行しないでください
+同じORM queryのhintなし・明示hintを比較し、projectionやSQL形状の違いを確認するためraw SQL方式も残しています
+明示的な `PRIMARY` hintでtable scanを使う代替案も比較します
+データ投入後、`ANALYZE TABLE ... ALL COLUMNS` 後、取得列をカバーするindexを追加して再ANALYZEした後の3段階を比較します
+最初の段階でも統計がないとは仮定せず、観測した状態を記録します
+
+先頭・末尾・大きいLIMIT・少数件の各条件で1回warmupし、実行順を回した7 roundを計測します
+JSONの観測logにはSQL、人工fixtureの引数、個々のServerRUとlatency、別実行した `EXPLAIN ANALYZE` のexecution詳細を残します
+大きいLIMITと末尾ページではEXPLAINを7回繰り返し、処理key数、JOINのbatch数、最上位operatorが報告するRUの変動を確認します
+このRUは、計測したSELECT直後のsessionから得るRUとは別の値です
+権限がある場合はsession設定とtableの統計状態も記録し、metadata参照が拒否された場合は取得不能として残します
+明示hintと未指定のORM SQLの差がhintだけで引数も同じであることと、全方式の結果が同じfixture期待値になることを確認します
+plan形状やRU閾値はassertしません
+ANALYZEのwarningも記録します。ANALYZEの完了だけでは、その後の各planが完全な統計を読み込んだことまでは証明できません
+時間計測の範囲は上記実験と同じです。EXPLAINは別の実行であり、それ以前の計測時と異なる可能性があります
 
 index指定付き一覧のページサイズとOFFSETを変えた場合や、scalar queryのoffline compileを、DB側の効果と分けて比較できます
 

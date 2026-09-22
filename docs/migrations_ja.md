@@ -6,6 +6,16 @@
 新規DB、既存DBの取り込み、up／down SQL、**操作対象DBの現時点の構造**を表す `schema.sql` を扱います
 アプリケーション起動やORMのqueryからマイグレーションを実行することはありません
 
+生成したsnapshotは `schema.Parse` と `check.Schema` による[offlineのスキーマ互換性検査](schema-checks_ja.md)や、`tidbgo lint --schema` に利用できます
+downでもsnapshotは操作対象DBの現時点の構造に更新されます
+
+`tidbgo lint . --schema schema.sql` はsource modelのtable・mapped列・宣言した主キー／一意制約・未mapped必須列を検査します
+applicationを配布する前に、予定するmigrationまたはrollback先のsnapshotで照合できます
+検査範囲と未解決modelの報告は[sourceのスキーマ検査](checks_ja.md#go-source解析)を参照してください
+
+migration後は更新したsnapshotとapplicationのRelation宣言で[参照Audit](reference-audits_ja.md)を実行し、FKがないDBの孤児参照も確認できます
+接続して実行する前に `tidbgo audit . --schema schema.sql --dry-run` で検査SQLを確認します
+
 ## 接続とファイル
 
 デプロイ環境またはsecret managerで `TIDBGO_DSN` を設定します

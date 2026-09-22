@@ -7,6 +7,21 @@ supports new databases, adoption of existing databases, up/down SQL, and a
 `schema.sql` snapshot of the **current target database**. Application startup
 and ORM queries never run migrations.
 
+Use the generated snapshot for [offline schema compatibility checks](schema-checks.md)
+with `schema.Parse` and `check.Schema`, or pass it to `tidbgo lint --schema`.
+Down also updates the snapshot to reflect the current target database.
+
+`tidbgo lint . --schema schema.sql` checks source model tables, mapped columns,
+declared primary/unique keys, and unmapped required columns. Use a snapshot of
+the intended migration or rollback target before deploying that application
+version; see [source schema checks](checks.md#go-source-analysis) for coverage
+and unresolved-model reporting.
+
+After a migration, [reference audits](reference-audits.md) can check live
+orphan references using the refreshed snapshot and application Relation
+declarations, even when the database has no foreign keys. Preview the probes
+with `tidbgo audit . --schema schema.sql --dry-run` before connected execution.
+
 ## Connection and files
 
 Set `TIDBGO_DSN` through your deployment environment or secret manager. It uses

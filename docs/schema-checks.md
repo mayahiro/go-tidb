@@ -28,6 +28,13 @@ that already has a `reflect.Type` can use `check.SchemaType`. The snapshot for a
 model with relations must also contain its declared relation-target and
 many-to-many junction tables.
 
+For checks directly from Go source, `tidbgo lint . --schema schema.sql` also
+compares tables, mapped columns, declared primary/unique keys, and required
+database-only columns for its resolved models. It reports incomplete source
+coverage and does not execute application code. Type, nullability, generation,
+and complete relation checks remain part of `check.Schema`; see the
+[source analysis guide](checks.md#go-source-analysis) for the exact boundary.
+
 ## Accepted SQL snapshots
 
 `schema.Parse` accepts one or more self-contained TiDB `CREATE TABLE`
@@ -169,6 +176,11 @@ production index.
 Foreign keys are neither required nor inspected. Referential-integrity policy,
 general performance indexes, migration history, and live database drift remain
 outside this offline comparison.
+
+For source-based logical reference checks and explicitly connected orphan
+detection without physical FKs, see [reference audits](reference-audits.md).
+The audit uses the declared Go relations, including junction endpoints, and
+does not enforce referential integrity during application writes.
 
 TiDB documents the current [`CREATE TABLE`
 grammar](https://docs.pingcap.com/tidb/stable/sql-statement-create-table/),

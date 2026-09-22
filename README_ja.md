@@ -741,6 +741,14 @@ projection解析ではreturn、別functionへの引き渡し、alias、preload�
 
 詳細は[解析guide](docs/checks_ja.md#go-source解析)を参照してください
 
+`--schema` は `model.Meta` の明示宣言と認識したqueryのsource modelについて、table・mapped列・宣言した主キー／一意制約・未mapped必須列も検査します
+queryのpaginationとは独立してmodelごとに一度検査し、mappingを解決できない場合は `SRC002` と専用のschema coverage counterで報告します
+型・NULL許容・生成方法・Relation全体の互換性は `check.Schema` で確認します
+
+sourceのschema付きLintではRelation targetも辿り、物理FKを要求せずに参照列・SQL基本型・一意性・検索用indexを確認します
+`tidbgo audit . --schema schema.sql --dry-run` で孤児参照の検査SQLを確認し、`--dry-run` を外してDSNと期限を指定すると読取り専用で検査できます
+範囲、NULL・論理削除、結果の解釈は[論理参照のAudit](docs/reference-audits_ja.md)を参照してください
+
 version情報は次のcommandで出力します
 
 ```sh

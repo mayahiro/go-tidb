@@ -35,7 +35,7 @@ func lintCommand() *cli.Command {
 			cli.ValueOption(lintSchemaID).
 				Long("schema").
 				Parser(cli.StringParser()).
-				Help("Check resolved source query index shapes against a TiDB SQL schema snapshot"),
+				Help("Check model mappings and resolved query index shapes against a TiDB SQL schema snapshot"),
 		).
 		Option(
 			cli.ValueOption(lintSuppressID).

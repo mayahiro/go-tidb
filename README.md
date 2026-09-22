@@ -724,6 +724,20 @@ analysis also leaves returned or passed results, aliases, and preloads
 uncertain. Every report includes general, relation compiler, and index
 coverage statistics. See the [analysis guide](docs/checks.md#go-source-analysis)
 
+`--schema` also checks tables, mapped columns, declared primary/unique keys,
+and unmapped required columns for explicit `model.Meta` declarations and
+recognized query source models. These structural checks run once per model,
+independently of query pagination. Unresolved mappings receive `SRC002` and
+separate schema coverage counts. Use `check.Schema` for type, nullability,
+generation, and complete relation compatibility checks.
+
+Source schema lint also follows Relation targets and checks logical reference
+columns, SQL base types, uniqueness, and lookup indexes without requiring FKs.
+Use `tidbgo audit . --schema schema.sql --dry-run` to preview orphan probes, then
+omit `--dry-run` to execute read-only checks with an explicit DSN and deadline.
+See [logical reference audits](docs/reference-audits.md) for coverage, NULL and
+soft-delete semantics, and result interpretation.
+
 Print version information with:
 
 ```sh

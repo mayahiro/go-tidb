@@ -34,10 +34,12 @@ type sourceUniqueKey struct {
 }
 
 type sourcePhysicalModel struct {
+	relations        []*ast.Field
 	table            string
 	columns          map[string]string
 	softDeleteColumn string
 	ambiguous        bool
+	declared         bool
 }
 
 func indexSourceModels(files []*sourceFile, physical bool) map[sourceTypeKey]*sourceModel {
@@ -58,7 +60,16 @@ func indexSourceModels(files []*sourceFile, physical bool) map[sourceTypeKey]*so
 					continue
 				}
 				key := sourceTypeKey{packagePath: file.packageKey, name: typeSpecification.Name.Name}
-				models[key] = describeSourceModel(file, key, structure, physical)
+				if previous, exists := models[key]; exists && physical {
+					previous.ambiguous = true
+					previous.physical.ambiguous = true
+					continue
+				}
+				model := describeSourceModel(file, key, structure, physical)
+				if physical && typeSpecification.TypeParams != nil {
+					model.physical.ambiguous = true
+				}
+				models[key] = model
 			}
 		}
 	}
@@ -83,10 +94,14 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 	}
 	metaSeen := false
 	for _, field := range structure.Fields.List {
+		if len(field.Names) != 0 && !sourceFieldExported(field) {
+			continue
+		}
 		if meta, exact := sourceModelMetaField(file, field); meta {
 			if !physical {
 				continue
 			}
+			result.physical.declared = true
 			if metaSeen || !exact {
 				result.ambiguous = true
 				result.physical.ambiguous = true
@@ -126,6 +141,9 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 		}
 		first, _, _ := strings.Cut(tag, ",")
 		if sourceRelationKind(first) {
+			if physical {
+				result.physical.relations = append(result.physical.relations, field)
+			}
 			continue
 		}
 		if len(field.Names) == 0 {
@@ -196,7 +214,8 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 				result.physical.ambiguous = true
 				continue
 			}
-			if _, exists := columnSet[column]; exists {
+			foldedColumn := strings.ToLower(column)
+			if _, exists := columnSet[foldedColumn]; exists {
 				result.ambiguous = true
 				result.physical.ambiguous = true
 				continue
@@ -216,7 +235,7 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 				result.softDelete = true
 			}
 			result.physical.columns[name.Name] = column
-			columnSet[column] = struct{}{}
+			columnSet[foldedColumn] = struct{}{}
 			if options.SoftDelete {
 				if result.physical.softDeleteColumn != "" {
 					result.ambiguous = true
@@ -232,6 +251,15 @@ func describeSourceModel(file *sourceFile, key sourceTypeKey, structure *ast.Str
 		result.physical.ambiguous = true
 	}
 	return result
+}
+
+func sourceFieldExported(field *ast.Field) bool {
+	for _, name := range field.Names {
+		if ast.IsExported(name.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (model *sourceModel) appendUniqueKeyFields(groups []string, field string) {
