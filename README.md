@@ -11,7 +11,7 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 [Windows](docs/windows.md) | [Vector search](docs/vector-search.md) |
 [TiFlash preparation](docs/tiflash.md) |
 [Analysis](docs/checks.md) | [Statement observation](docs/observability.md) |
-[Server warnings](docs/warnings.md) |
+[Server warnings](docs/warnings.md) | [Migrations](docs/migrations.md) |
 [Development](docs/development.md)
 
 ## Available features
@@ -19,6 +19,8 @@ The Go module path is `github.com/mayahiro/go-tidb` and the command name is
 - To-one related aggregates, conditional relation metrics, and windows over groups
 - Exact/approximate vector search, vector values, and schema/plan diagnostics
 - Explicit TiFlash replica preparation and capability probes
+- Versioned SQL migrations, existing-database adoption, explicit up/down, and
+  a SQL snapshot of the current database
 
 - Application-owned Go structs without generated models
 - Offline model validation, model-intent diagnostics, and SQL construction
@@ -70,15 +72,22 @@ connection.
 go get github.com/mayahiro/go-tidb
 ```
 
-Install the `tidbgo` command separately when analysis commands are needed:
+The `tidbgo` command is a separate Go module for analysis and migration tooling.
+Install the current CLI from a repository checkout:
 
 ```sh
-go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
+git clone https://github.com/mayahiro/go-tidb.git
+cd go-tidb
+go -C cmd/tidbgo install .
 ```
 
-`go-tidb` does not include or select a database driver. Register the driver
-used by your application and pass an existing `database/sql` executor to the
-ORM.
+The root library module has no third-party dependencies. The ORM does not
+select a database driver. Register the driver used by your
+application and pass an existing `database/sql` executor to the ORM. The
+standalone migration CLI includes `go-sql-driver/mysql` for its explicit
+deployment connections; its driver and CLI framework dependencies stay in the
+CLI module. The checkout uses a local replacement for the root library; see
+[CLI development](docs/development.md#cli-development) for versioned releases.
 
 For example, an application using `go-sql-driver/mysql` can open its own
 connection:
@@ -251,9 +260,9 @@ exists, err := query.Exists(ctx, db)
 count, err := query.Count(ctx, db)
 ```
 
-`*sql.DB`, `*sql.Conn`, and `*sql.Tx` implement `orm.QueryExecutor`. `go-tidb`
-does not currently open or configure connections or include a MySQL protocol
-driver. `Only` distinguishes zero, one, and multiple rows. `Exists` uses
+`*sql.DB`, `*sql.Conn`, and `*sql.Tx` implement `orm.QueryExecutor`. The ORM
+does not open or configure connections. `Only` distinguishes zero, one, and
+multiple rows. `Exists` uses
 `SELECT 1 ... LIMIT 1` without scanning a model. `Count` uses count-specific
 SQL and includes the builder's predicates and pagination. See the [scalar
 query guide](docs/queries.md) for terminal errors, predicates, pagination,
@@ -647,6 +656,23 @@ guide](docs/observability.md#serverru) for the complete boundary.
 
 ## CLI
 
+Manage versioned SQL with the standalone migration command. Set `TIDBGO_DSN`
+in your deployment environment to a selected Starter database with verified
+TLS, then review and execute authored migrations:
+
+```sh
+tidbgo migrate lint
+tidbgo migrate plan
+tidbgo migrate up
+tidbgo migrate down
+```
+
+For an existing database, `tidbgo migrate init` captures the initial SQL and
+`tidbgo migrate baseline` verifies and records it without executing application
+DDL. Successful up and down operations both regenerate `schema.sql` from the
+current database. See the [migration guide](docs/migrations.md) for file
+creation, baseline boundaries, failure recovery, and supported snapshot objects.
+
 Analyze a structured runtime artifact without registering application queries
 or connecting to a database:
 
@@ -745,8 +771,10 @@ See [Mutations and raw SQL](docs/mutations.md) and [Statement observation](docs/
   `QRY006` and `QRY007` for high-confidence root and relation-first
   ordered-limit shapes. Dynamic relations remain explicit in uncertainty
   counters instead of being guessed.
-- No database connection constructor, bundled protocol driver, migration
-  application API, or live-schema introspection API is available yet.
+- The ORM has no connection constructor or automatic migration execution.
+  Standalone migrations use authored SQL; automatic schema diffs and data
+  restoration are not provided. Snapshot object limits are documented in the
+  [migration guide](docs/migrations.md).
 
 ## License
 

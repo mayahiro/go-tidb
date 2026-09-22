@@ -88,8 +88,8 @@ go test ./examples/starter-app
 Scan the example's production Go source without a database connection:
 
 ```sh
-go run ./cmd/tidbgo lint ./examples/starter-app
-go run ./cmd/tidbgo lint ./examples/starter-app --schema ./examples/starter-app/schema.sql
+go -C cmd/tidbgo run . lint ../../examples/starter-app
+go -C cmd/tidbgo run . lint ../../examples/starter-app --schema ../../examples/starter-app/schema.sql
 ```
 
 The second command also compares statically resolved ordered positive-LIMIT
@@ -282,8 +282,9 @@ lookup index prefixes entirely offline. The omitted database-managed
 `created_at` column is accepted because it has a default.
 
 Execution is available only when the caller explicitly passes an existing
-`*sql.DB`, `*sql.Conn`, or `*sql.Tx`. Connection creation, live schema
-introspection, and migration application are not implemented.
+`*sql.DB`, `*sql.Conn`, or `*sql.Tx`. The ORM does not create connections or run
+migrations. Use the [standalone migration tooling](../../docs/migrations.md)
+for deployment and current-database SQL snapshots.
 
 `RankedOrderTotals` demonstrates a to-one related output and ranking over groups.
 `SearchDocuments` demonstrates exact vector search within a tenant using a narrow

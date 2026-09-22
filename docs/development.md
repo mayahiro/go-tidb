@@ -5,6 +5,55 @@
 This guide contains contributor-facing commands, repository structure,
 integration-test setup, and benchmark procedures for `go-tidb`
 
+## Migration verification
+
+The [migration runner](migrations.md) has offline tests for baseline adoption,
+up/down/reapplication, checksum and drift rejection, independent-client
+locking, interrupted DDL and journal writes, explicit repair, and snapshot
+output failure:
+
+```sh
+go test ./migrate
+go -C cmd/tidbgo test ./...
+go test ./migrate -race
+go -C cmd/tidbgo test ./... -race
+go test ./migrate -run '^$' -fuzz '^FuzzSQLBoundaries$' -fuzztime=10s
+go test ./migrate -run '^$' -bench '^(BenchmarkSnapshotHash|BenchmarkLoad)$' -benchmem -benchtime=200ms -count=3
+```
+
+`BenchmarkLoad` measures file reading and section validation for one version,
+100 versions, and a 1 MiB quoted literal. Fixture creation is outside the timer;
+database execution and RU are not measured.
+
+`BenchmarkSnapshotHash` compares joining and streaming the same sorted canonical SQL
+into SHA-256. It covers one table, 100 tables, many columns, and a 1 MiB quoted
+literal. It includes SQL splitting and canonicalization, but excludes file
+I/O, the protocol driver, database latency, and RU. Profile both alternatives:
+
+```sh
+go test ./migrate -run '^$' -bench '^BenchmarkSnapshotHash$/^hundred_tables$/^join$' -benchtime=2s -cpuprofile=migration-join.cpu.out -memprofile=migration-join.mem.out
+go test ./migrate -run '^$' -bench '^BenchmarkSnapshotHash$/^hundred_tables$/^stream$' -benchtime=2s -cpuprofile=migration-stream.cpu.out -memprofile=migration-stream.mem.out
+go -C tools tool pprof -top ../migration-join.cpu.out
+go -C tools tool pprof -top -alloc_space ../migration-stream.mem.out
+```
+
+Connected verification requires `TIDBGO_TEST_DSN` to select an **empty,
+dedicated** database whose name starts with `tidbgo_test_`, using verified TLS.
+Run the read-only target check first, then explicitly enable the migration test:
+
+```sh
+go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterMigrationTarget$' -count=1 -v
+TIDBGO_TEST_MIGRATE=1 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterMigrations$' -count=1 -v
+```
+
+Do not run other suites in the same database concurrently. The migration test
+creates and removes only its own `tidbgo_it_migration_accounts` and
+`_tidbgo_migrations` tables after verifying initial emptiness. It verifies
+retained decimal data, snapshot stability after inserts, refresh after
+down/reapplication, partial DDL failure and repair, adoption without recreating
+application tables, and replay of captured initial SQL into an empty database. These
+tests use the supplied environment; they do not load `.env` automatically.
+
 ## Aggregate and TiFlash verification
 
 The [aggregate API](aggregates.md) has offline contract tests for grouping,
@@ -185,28 +234,31 @@ Run the complete offline verification from the repository root:
 ```sh
 go -C tools tool goimports -w ..
 go test ./...
+go -C cmd/tidbgo test ./...
 go -C integration test ./...
 go vet ./...
+go -C cmd/tidbgo vet ./...
 go -C integration vet ./...
 go build ./...
+go -C cmd/tidbgo build .
 go -C integration build ./...
 ```
 
-The root test command does not enter the nested `integration` module
+The root test command does not enter the nested `cmd/tidbgo` or `integration` modules
 
 ## CLI development
 
 Run the current command directly from the checkout:
 
 ```sh
-go run ./cmd/tidbgo version
-go run ./cmd/tidbgo lint ./examples/starter-app
+go -C cmd/tidbgo run . version
+go -C cmd/tidbgo run . lint ../../examples/starter-app
 ```
 
 Set a release version through the Go linker when building a release artifact:
 
 ```sh
-go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
+go -C cmd/tidbgo build -ldflags "-X main.version=v0.1.0" .
 ```
 
 ## Package boundaries
@@ -217,16 +269,24 @@ go build -ldflags "-X main.version=v0.1.0" ./cmd/tidbgo
 - `schema`: immutable offline catalog parsed from TiDB CREATE TABLE snapshots
 - `check`: shared diagnostic data types and offline model and physical schema
   checks
-- `migrate`: reserved boundary for standalone migration tooling
-- `cmd/tidbgo`: CLI entry point
+- `migrate`: standalone deployment runner, offline SQL file validation, and
+  current-database SQL snapshots using caller-owned connections
+- `cmd/tidbgo`: independent CLI module containing the MySQL driver and CLI framework
 - `internal`: non-public compiler, analysis, logging, and redaction support
 - `examples`: runnable public API examples
 - `integration`: independent module for actual TiDB Cloud Starter verification
 
-The `integration` module owns the
-[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) dependency and
-uses the current root checkout through a local module replacement. The root
-module and its users do not inherit that test dependency
+The `cmd/tidbgo` and `integration` modules use the current root checkout through
+local module replacements. Both depend on
+[`go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql); the CLI framework
+also belongs to the CLI module. The root library module has no third-party
+dependencies, and `orm` and `migrate` do not select a driver for applications.
+
+Build or install the current CLI from a checkout.
+[Versioned Go installation](https://go.dev/ref/mod#go-install) does not permit
+local replacements. Before publishing a versioned CLI module, publish a root
+module with the required APIs, require that version, remove the CLI local
+replacement, and use a `cmd/tidbgo/vX.Y.Z` tag.
 
 ## Source analysis benchmark
 
@@ -859,7 +919,8 @@ filters on application data before choosing approximate search.
 ## Warning verification
 
 ```sh
-go test ./orm ./internal/warningcheck ./internal/runtimecapture ./cmd/tidbgo
+go test ./orm ./internal/warningcheck ./internal/runtimecapture
+go -C cmd/tidbgo test ./...
 go test ./orm -run '^$' -bench '^BenchmarkWarningCollection$' -benchmem -benchtime=100ms -count=3
 go -C integration test ./tidbcloud -run '^TestTiDBCloudStarterWarningState$' -count=1 -v
 ```

@@ -557,7 +557,9 @@ collection preload statementは引き続き対象外です
 
 driver登録とconnection securityはcallerの責任です
 
-現在の `go-tidb` はMySQL protocol driverとTiDB Cloud Starter connection constructorを含みません
+ORMはprotocol driverを選択せず、connection constructorを提供しません
+
+[独立したマイグレーションCLI](migrations_ja.md)はdeployment用の接続を別に管理します
 
 ## Relation preload
 

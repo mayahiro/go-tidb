@@ -10,7 +10,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 [ウィンドウ関数](docs/windows_ja.md) | [ベクトル検索](docs/vector-search_ja.md) |
 [TiFlashの準備](docs/tiflash_ja.md) |
 [解析](docs/checks_ja.md) | [Statement observation](docs/observability_ja.md) |
-[サーバー警告](docs/warnings_ja.md) |
+[サーバー警告](docs/warnings_ja.md) | [マイグレーション](docs/migrations_ja.md) |
 [Development](docs/development_ja.md)
 
 ## 利用できる機能
@@ -18,6 +18,7 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 - to-one関連集計、Relation条件付き指標、集計後のウィンドウ関数
 - 正確／近似ベクトル検索、ベクトル型、schema／plan診断
 - 明示的なTiFlashレプリカ準備と機能確認
+- version付きSQLマイグレーション、既存DBへの導入、明示的なup／down、現時点のDBを投影するSQL snapshot
 
 - generated modelを必要としないapplication-owned Go struct
 - offline model validation、model intent diagnostic、SQL構築
@@ -60,15 +61,22 @@ Go module pathは `github.com/mayahiro/go-tidb`、command名は `tidbgo` です
 go get github.com/mayahiro/go-tidb
 ```
 
-解析commandを使用する場合は `tidbgo` commandを別にinstallします
+解析とマイグレーション向けの `tidbgo` commandは独立したGo moduleです
+現在のCLIはrepositoryのcheckoutからinstallします
 
 ```sh
-go install github.com/mayahiro/go-tidb/cmd/tidbgo@latest
+git clone https://github.com/mayahiro/go-tidb.git
+cd go-tidb
+go -C cmd/tidbgo install .
 ```
 
-`go-tidb` はdatabase driverを同梱または選択しません
+rootのlibrary moduleにthird-party依存はなく、ORMはdatabase driverを選択しません
 
 applicationが使用するdriverを登録し、既存の `database/sql` executorをORMへ渡します
+
+独立したマイグレーションCLIは明示的なdeployment接続のために `go-sql-driver/mysql` を同梱します
+driverとCLI frameworkの依存はCLI module内に置きます
+checkoutではroot libraryへのlocal replacementを使用します。version付き公開については [CLI development](docs/development_ja.md#cli-development) を参照してください
 
 例えば `go-sql-driver/mysql` を使用するapplicationではconnectionを次のように作成します
 
@@ -250,7 +258,7 @@ count, err := query.Count(ctx, db)
 
 `*sql.DB`、`*sql.Conn`、`*sql.Tx` は `orm.QueryExecutor` を実装します
 
-現在の `go-tidb` はconnectionのopenと設定を行わず、MySQL protocol driverも含みません
+ORMはconnectionのopenと設定を行いません
 
 `Only`は0件、1件、複数件を区別します
 
@@ -667,6 +675,23 @@ ServerRUはTiDBが報告するdiagnostic valueであり請求RUではありま�
 
 ## CLI
 
+独立したマイグレーションcommandでversion付きSQLを管理します
+
+deployment環境の `TIDBGO_DSN` に、DBを選択しTLS検証を有効にしたStarter接続を設定してから、作成済みSQLを確認・実行します
+
+```sh
+tidbgo migrate lint
+tidbgo migrate plan
+tidbgo migrate up
+tidbgo migrate down
+```
+
+既存DBでは `tidbgo migrate init` で初期SQLを取得し、`tidbgo migrate baseline` で一致を検証してapplication DDLを実行せずに履歴へ登録します
+
+upとdownの成功後は、いずれも現時点のDBから `schema.sql` を再生成します
+
+ファイルの作成、baseline境界、失敗からの復旧、snapshot対応objectは[マイグレーションガイド](docs/migrations_ja.md)を参照してください
+
 application queryの登録とDB接続なしでstructured runtime artifactを解析できます
 
 ```sh
@@ -748,7 +773,7 @@ command helpは `tidbgo --help` で表示できます
 - typed mutationはbind value代入と同じcolumnへのadditionだけを公開し、任意のSQL expression、無条件UPDATE、無条件DELETEには `RawExec` を明示的なescape hatchとする
 - source lintは関連するbuilder flowとRelation metadataを静的に解決できる場合だけ `QRY002` から `QRY005` を適用し、`--schema` を指定した高確度なrootとrelation-first ordered-limit shapeへ `QRY006` と `QRY007` を適用する
 - dynamicなRelationは推測せずuncertainty counterへ反映する
-- database connection constructor、bundled protocol driver、Migration application API、live schema introspection APIはまだ存在しない
+- ORMにはconnection constructorと自動マイグレーション実行を設けない、独立したマイグレーションは作成済みSQLを使い、自動schema diffとデータ復元は提供しない、snapshot対応objectの制約は[マイグレーションガイド](docs/migrations_ja.md)に記載する
 
 ## License
 

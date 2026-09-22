@@ -1,7 +1,7 @@
 # go-tidb Public Product Specification
 
 - Version: 0.1.0 draft
-- Last updated: 2026-09-15
+- Last updated: 2026-09-21
 - Supported profile: TiDB Cloud Starter
 
 This document defines the public product boundary for `go-tidb`. It describes
@@ -14,7 +14,7 @@ planned is not available until the README marks it as implemented.
 
 - A struct-first application runtime for CRUD, explicit relations, deterministic SQL,
   transactions, historical reads, and opt-in query observations
-- Offline development diagnostics and planned standalone deployment tools for
+- Offline development diagnostics and standalone deployment tools for
   migration planning, migration application, and connected schema verification
 
 The implemented runtime uses application-model metadata directly. Future
@@ -58,9 +58,10 @@ cover:
 Accidental compatibility with an unsupported database or service plan does
 not create a compatibility guarantee.
 
-Scalar execution uses an explicitly supplied `database/sql` executor. A later
-connection constructor will use the established MySQL protocol driver. The
-project will not implement a database wire protocol.
+Scalar execution uses an explicitly supplied `database/sql` executor. The
+standalone migration CLI uses `go-sql-driver/mysql`; the `orm` and `migrate`
+packages do not select a protocol driver or create connections. The project
+does not implement a database wire protocol.
 
 ## 3. Fixed behavior
 
@@ -88,8 +89,8 @@ The following decisions apply throughout v0.1:
    metadata.
 8. Application runtime APIs do not create, alter, or drop schema objects.
 9. Migrations use explicitly authored, versioned SQL files.
-10. Destructive migrations require an in-file acknowledgement and an explicit
-   apply flag.
+10. Migration SQL runs only through an explicit up/down operation. Missing down
+    SQL declares an irreversible version; failed SQL is never reversed automatically.
 11. Statement RU reported by TiDB is named `ServerRU`. It is not represented
     as billed RU.
 12. `EXPLAIN ANALYZE` is allowed only for `SELECT` and remains opt-in. Plan
@@ -222,30 +223,61 @@ plan probing, and object-graph persistence are outside v0.1.
 The `IDs` terminal is deferred until a measured large-ID workload justifies a
 dedicated result API and any resulting minimum-Go-version cost.
 
-## 5. Planned migration surface
+## 5. Migration surface
 
-Migrations use monotonically increasing versioned files such as:
+Migrations use increasing UTC timestamp versions with millisecond precision
+(`YYYYMMDDHHMMSSmmm`), such as:
 
 ```text
-202608280001_create_users.up.sql
+20260921093000123_create_users.sql
+schema.sql
 ```
 
-The CLI is planned to provide `new`, `lint`, `plan`, `status`, `apply`,
-`verify`, and explicitly audited `repair` operations. Application binaries
-will not run migrations.
+Each migration file contains `-- tidbgo:up` and an optional `-- tidbgo:down`
+section. Directives occupy their own lines outside SQL quotes and block comments.
+Omitting down declares an irreversible change. Both sections must contain SQL
+when present. Checksums cover the complete file, including comments and whitespace.
+Generated versions must be later than the latest local version; same-millisecond
+collisions and clock rollback are rejected without overwriting files.
 
-Migration application will:
+`tidbgo migrate` provides offline `new` and `lint`, and explicit connected
+`init`, `baseline`, `plan`, `status`, `up`, `down`, `dump`, and `repair`.
+Application startup and ORM APIs do not run migrations. A caller-owned
+`database/sql` pool can also be passed to the deployment-only `migrate.Runner`.
+The CLI is an independent module under `cmd/tidbgo` containing the MySQL driver
+and CLI framework. The root library module has no third-party dependencies.
+
+`init` reads an existing database into the first migration's up section.
+`baseline` compares that SQL with a fresh snapshot, records adoption without
+application DDL or DML, and creates or refreshes `schema.sql` from the database.
+The adopted version is the lower bound for down. The same initial SQL
+can initialize an empty database through up.
+
+Migration application:
 
 1. Hold one dedicated connection
 2. Acquire a named advisory lock
-3. Verify applied and pending checksums
+3. Validate local SQL, all recorded checksums, and the live structural fingerprint
 4. Record a running state
 5. Execute statements in source order
-6. Record applied or failed state, including the failed statement index
-7. Release the advisory lock
+6. Record success or interruption and the confirmed statement count
+7. Regenerate `schema.sql` from the current database after each completed version
+8. Release the advisory lock
 
-The implementation will not assume that DDL is atomically rolled back and
-will not automatically execute down migrations.
+Down uses authored reverse SQL and also refreshes `schema.sql`; migration
+files and history stay fixed. DDL is not transactionally rolled back. An
+interrupted attempt blocks further up/down until an operator inspects the
+structure, data, and DDL jobs and explicitly repairs the recorded state using
+a matching reviewed snapshot and an audit reason. Database success and
+snapshot-output failure are reported separately; dump can retry file output.
+
+The snapshot retains supported table definitions and TiFlash replica settings,
+excluding history metadata and allocator counters. It rejects unsupported
+objects and cross-database or cyclic foreign keys. Advisory locks serialize
+cooperating migration runners; unrelated schema changes must be coordinated.
+See [versioned SQL migrations](docs/migrations.md) for connection settings,
+limits, file rules, and recovery. Automatic schema diffs and code generation
+are not provided.
 
 ## 6. Diagnostics
 
@@ -337,8 +369,9 @@ Planned catalogs cover:
 - Cross-run connected plan regressions
 - Cross-run query-count and duration regressions
 - SELECT server-RU regressions
-- Migration checksums, destructive changes, unsupported Starter SQL, schema
-  drift, and migration locking
+- Additional migration SQL diagnostics for destructive changes and unsupported
+  Starter syntax; migration execution already enforces checksums, schema drift,
+  and advisory locking independently of the diagnostic catalog
 
 Future diagnostics continue to choose suppressibility as part of each rule
 contract. Safety errors such as unqualified updates and deletes will not be
@@ -349,16 +382,18 @@ generally suppressible.
 No project configuration-file format is currently public. The application
 runtime receives an explicit `database/sql` executor and does not read
 connection settings from files or environment variables. Connected integration
-tests use `TIDBGO_TEST_DSN` only as a test-harness input.
+tests use `TIDBGO_TEST_DSN` only as a test-harness input. The standalone
+migration CLI reads its DSN from `TIDBGO_DSN` or the explicitly selected
+`--dsn-env` name, requires verified TLS, and loads no `.env` file.
 
 Native `time.Time` bind arguments are passed to the executor without ORM-level
 literal formatting or timezone conversion. Their serialization follows the
 database driver and connection settings. The ORM does not change connection
 time zones; see [SQL arguments and time zones](docs/models.md#sql-arguments-and-time-zones).
 
-Configuration for future diagnostics and migration commands will be designed
-with those commands rather than preserving the removed schema-generator
-configuration.
+Migration directory, snapshot output, operation deadline, and lock wait are
+explicit CLI options or runner configuration. They do not change runtime
+connection behavior.
 
 ## 8. Security requirements
 
@@ -390,8 +425,10 @@ configuration.
   compatibility checks, Relation target identity, pure-junction correctness,
   deterministic collection-relation index-prefix checks, and conservative
   same-function Go-source projection analysis
-- Planned next: schema snapshot generation and normalization, versioned
-  migration tooling, historical reads, and release hardening
+- Implemented: current-database SQL snapshot generation and normalization,
+  versioned up/down migrations, existing-database adoption, checksums, drift
+  checks, advisory locking, and explicit interrupted-operation repair
+- Planned next: historical reads and release hardening
 - Deferred until the current work is complete: reconsideration of optional
   code generation or a schema DSL based only on demonstrated product value
 

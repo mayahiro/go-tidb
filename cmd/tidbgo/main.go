@@ -46,6 +46,7 @@ func application(toolVersion string) *cli.Command {
 		Subcommand(lintCommand()).
 		Subcommand(analyzeCommand()).
 		Subcommand(baselineCommand()).
+		Subcommand(migrateCommand()).
 		Subcommand(
 			cli.NewCommand(versionActionCommand).
 				ID("version-command").
