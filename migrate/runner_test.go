@@ -13,24 +13,28 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The fixture models database state independently of the runner. SHOW CREATE
 // reads that state, while ALTER effects are explicit test-owned definitions.
 type memoryDatabase struct {
-	mu           sync.Mutex
-	tables       map[string]string
-	kinds        map[string]string
-	replicas     [][]driver.Value
-	effects      map[string]func()
-	events       []Event
-	managed      bool
-	owner        *memoryConn
-	ddlCount     int
-	failSQL      string
-	failProgress bool
-	failRelease  bool
-	onDDL        func(string)
+	mu            sync.Mutex
+	tables        map[string]string
+	kinds         map[string]string
+	replicas      [][]driver.Value
+	effects       map[string]func()
+	versions      map[string]time.Time
+	recordCount   int64
+	managed       bool
+	owner         *memoryConn
+	ddlCount      int
+	failSQL       string
+	failRecord    bool
+	loseRecordAck bool
+	loseSQLAck    bool
+	failRelease   bool
+	onDDL         func(string)
 }
 type memoryConnector struct{ db *memoryDatabase }
 
@@ -43,11 +47,7 @@ type memoryDriver struct{ db *memoryDatabase }
 
 func (d memoryDriver) Open(string) (driver.Conn, error) { return &memoryConn{db: d.db}, nil }
 
-type memoryConn struct {
-	db          *memoryDatabase
-	pending     []Event
-	transaction bool
-}
+type memoryConn struct{ db *memoryDatabase }
 
 func (c *memoryConn) Prepare(string) (driver.Stmt, error) {
 	return nil, fmt.Errorf("unexpected prepare")
@@ -61,37 +61,15 @@ func (c *memoryConn) Close() error {
 	return nil
 }
 func (c *memoryConn) Begin() (driver.Tx, error) {
-	return c.BeginTx(context.Background(), driver.TxOptions{})
-}
-func (c *memoryConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	c.db.mu.Lock()
-	defer c.db.mu.Unlock()
-	c.pending = append([]Event(nil), c.db.events...)
-	c.transaction = true
-	return memoryTx{c}, nil
-}
-
-type memoryTx struct{ c *memoryConn }
-
-func (tx memoryTx) Commit() error {
-	tx.c.db.mu.Lock()
-	defer tx.c.db.mu.Unlock()
-	tx.c.db.events = tx.c.pending
-	tx.c.transaction = false
-	return nil
-}
-func (tx memoryTx) Rollback() error { tx.c.transaction = false; tx.c.pending = nil; return nil }
-func (c *memoryConn) journal() *[]Event {
-	if c.transaction {
-		return &c.pending
-	}
-	return &c.db.events
+	return nil, fmt.Errorf("unexpected transaction")
 }
 
 type memoryResult int64
 
-func (r memoryResult) LastInsertId() (int64, error) { return int64(r), nil }
-func (r memoryResult) RowsAffected() (int64, error) { return 1, nil }
+func (r memoryResult) LastInsertId() (int64, error) {
+	return 0, fmt.Errorf("migration state has no generated ID")
+}
+func (r memoryResult) RowsAffected() (int64, error) { return int64(r), nil }
 
 type memoryRows struct {
 	columns []string
@@ -122,7 +100,7 @@ func (c *memoryConn) QueryContext(_ context.Context, q string, a []driver.NamedV
 	defer c.db.mu.Unlock()
 	switch {
 	case strings.HasPrefix(q, "SELECT DATABASE()"):
-		return memoryData(4, []driver.Value{"fixture", "8.5-TiDB", "STRICT_TRANS_TABLES", int64(1)}), nil
+		return memoryData(5, []driver.Value{"fixture", "8.5-TiDB", "STRICT_TRANS_TABLES", int64(1), "+00:00"}), nil
 	case strings.HasPrefix(q, "SELECT GET_LOCK"):
 		if c.db.owner != nil && c.db.owner != c {
 			return memoryData(1, []driver.Value{int64(0)}), nil
@@ -166,12 +144,23 @@ func (c *memoryConn) QueryContext(_ context.Context, q string, a []driver.NamedV
 		return memoryData(2, []driver.Value{name, ddl}), nil
 	case strings.HasPrefix(q, "SELECT TABLE_NAME, REPLICA_COUNT"):
 		return memoryData(3, c.db.replicas...), nil
-	case strings.HasPrefix(q, "SELECT id, version"):
-		var rows [][]driver.Value
-		for _, e := range *c.journal() {
-			rows = append(rows, []driver.Value{e.ID, e.Version, e.Name, e.UpChecksum, e.DownChecksum, e.Direction, e.State, int64(e.StatementIndex), int64(e.StatementTotal), e.SchemaBefore, e.SchemaAfter})
+	case strings.HasPrefix(q, "SELECT version, DATE_FORMAT"):
+		var versions []string
+		for version := range c.db.versions {
+			versions = append(versions, version)
 		}
-		return memoryData(11, rows...), nil
+		sort.Slice(versions, func(i, j int) bool {
+			a, b := c.db.versions[versions[i]], c.db.versions[versions[j]]
+			if a.Equal(b) {
+				return versions[i] < versions[j]
+			}
+			return a.Before(b)
+		})
+		var rows [][]driver.Value
+		for _, version := range versions {
+			rows = append(rows, []driver.Value{version, c.db.versions[version].UTC().Format(recordTimeLayout)})
+		}
+		return memoryData(2, rows...), nil
 	default:
 		return nil, fmt.Errorf("unexpected query: %s", q)
 	}
@@ -195,26 +184,36 @@ func (c *memoryConn) ExecContext(_ context.Context, q string, a []driver.NamedVa
 		c.db.managed = true
 		return memoryResult(1), nil
 	}
-	if strings.HasPrefix(q, "INSERT INTO `_tidbgo_migrations`") {
-		e := Event{ID: int64(len(*c.journal()) + 1), Version: a[0].Value.(int64), Name: a[1].Value.(string), UpChecksum: a[2].Value.(string), DownChecksum: a[3].Value.(string), Direction: a[4].Value.(string), State: a[5].Value.(string), StatementTotal: int(a[6].Value.(int64)), SchemaBefore: a[7].Value.(string), SchemaAfter: a[8].Value.(string)}
-		*c.journal() = append(*c.journal(), e)
-		return memoryResult(e.ID), nil
-	}
-	if strings.HasPrefix(q, "UPDATE `_tidbgo_migrations`") {
-		if strings.Contains(q, "SET state = 'resolved'") {
-			id := a[0].Value.(int64)
-			(*c.journal())[id-1].State = "resolved"
-			return memoryResult(1), nil
+	if strings.HasPrefix(q, "INSERT INTO `_tidbgo_migrations`") || strings.HasPrefix(q, "DELETE FROM `_tidbgo_migrations`") {
+		if c.db.failRecord {
+			c.db.failRecord = false
+			return nil, fmt.Errorf("injected version write failure")
 		}
-		if c.db.failProgress && a[0].Value == "running" {
-			c.db.failProgress = false
-			return nil, fmt.Errorf("lost progress acknowledgement")
+		if c.db.versions == nil {
+			c.db.versions = make(map[string]time.Time)
 		}
-		id := a[4].Value.(int64)
-		e := &(*c.journal())[id-1]
-		e.State = a[0].Value.(string)
-		e.StatementIndex = int(a[1].Value.(int64))
-		e.SchemaAfter = a[2].Value.(string)
+		if strings.HasPrefix(q, "INSERT") {
+			for i := 0; i < len(a); i++ {
+				if _, exists := c.db.versions[a[i].Value.(string)]; exists {
+					return nil, fmt.Errorf("duplicate version")
+				}
+			}
+			for i := 0; i < len(a); i++ {
+				c.db.recordCount++
+				c.db.versions[a[i].Value.(string)] = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(c.db.recordCount) * time.Millisecond)
+			}
+		} else {
+			version := a[0].Value.(string)
+			_, exists := c.db.versions[version]
+			if !exists {
+				return memoryResult(0), nil
+			}
+			delete(c.db.versions, version)
+		}
+		if c.db.loseRecordAck {
+			c.db.loseRecordAck = false
+			return nil, fmt.Errorf("lost version write acknowledgement")
+		}
 		return memoryResult(1), nil
 	}
 	c.db.ddlCount++
@@ -223,13 +222,17 @@ func (c *memoryConn) ExecContext(_ context.Context, q string, a []driver.NamedVa
 	}
 	if effect, ok := c.db.effects[q]; ok {
 		effect()
+		if c.db.loseSQLAck {
+			c.db.loseSQLAck = false
+			return nil, fmt.Errorf("lost SQL acknowledgement")
+		}
 		return memoryResult(1), nil
 	}
 	return nil, fmt.Errorf("unexpected DDL: %s", q)
 }
 
-const firstVersion int64 = 20260921000000001
-const secondVersion int64 = 20260921000000002
+const firstVersion = "20260921000000001_create_users"
+const secondVersion = "20260921000000002_add_name"
 
 const createUsers = "CREATE TABLE `users` (`id` INT NOT NULL PRIMARY KEY)"
 const withName = "CREATE TABLE `users` (`id` INT NOT NULL PRIMARY KEY, `name` VARCHAR(50))"
@@ -285,7 +288,7 @@ func TestRunnerUpDownAndReapply(t *testing.T) {
 		t.Fatalf("plan=%#v,%v", p, err)
 	}
 	result, err := r.Apply(ctx, Up, 0)
-	if err != nil || result.Version != secondVersion || !result.SnapshotUpdated || result.Dirty {
+	if err != nil || result.Version != secondVersion || !result.SnapshotUpdated {
 		t.Fatalf("up=%#v,%v", result, err)
 	}
 	latest := readSnapshot(t, r)
@@ -301,13 +304,13 @@ func TestRunnerUpDownAndReapply(t *testing.T) {
 		t.Fatalf("re-up=%#v,%v", result, err)
 	}
 	status, err := r.Status(ctx)
-	if err != nil || status.Dirty || status.Drift || len(status.Events) != 4 {
+	if err != nil || len(f.versions) != 2 {
 		t.Fatalf("status=%#v,%v", status, err)
 	}
 	writeSQL(t, dir, "20260921000000002_add_name.sql", migrationSQL(addName, dropName)+"-- changed\n")
 	count := f.ddlCount
-	if _, err := r.Apply(ctx, Down, 1); !errors.Is(err, ErrChecksum) || f.ddlCount != count {
-		t.Fatalf("checksum=%v", err)
+	if _, err := r.Apply(ctx, Down, 1); err != nil || f.ddlCount != count+1 {
+		t.Fatalf("edited applied file could not be reversed: %v", err)
 	}
 }
 
@@ -338,7 +341,7 @@ func TestRunnerAdoptsExistingDatabaseWithoutDDL(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tables["users"] = withName
-	if _, err := r.Baseline(ctx); !errors.Is(err, ErrDrift) {
+	if _, err := r.Baseline(ctx); err == nil {
 		t.Fatal(err)
 	}
 	if f.managed {
@@ -364,6 +367,63 @@ func TestRunnerAdoptsExistingDatabaseWithoutDDL(t *testing.T) {
 	}
 }
 
+func TestRunnerEditsAndReappliesRevertedVersion(t *testing.T) {
+	r, f, dir := fixtureRunner(t)
+	installMigrations(t, dir)
+	ctx := context.Background()
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, Down, 1); err != nil {
+		t.Fatal(err)
+	}
+	const revised = "ALTER TABLE `users` ADD COLUMN `name` VARCHAR(100)"
+	const revisedTable = "CREATE TABLE `users` (`id` INT NOT NULL PRIMARY KEY, `name` VARCHAR(100))"
+	f.effects[revised] = func() { f.tables["users"] = revisedTable }
+	writeSQL(t, dir, "20260921000000002_add_name.sql", migrationSQL(revised, dropName))
+	for i := 0; i < 2; i++ {
+		if _, err := r.Apply(ctx, Up, 0); err != nil {
+			t.Fatalf("reapply revised SQL: %v", err)
+		}
+		if !strings.Contains(readSnapshot(t, r), "VARCHAR(100)") {
+			t.Fatal("revised SQL was not executed")
+		}
+		if _, err := r.Status(ctx); err != nil {
+			t.Fatalf("status after revised SQL: %v", err)
+		}
+		if _, err := r.Apply(ctx, Down, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, "20260921000000002_add_name.sql")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Status(ctx); err != nil {
+		t.Fatalf("removed reverted file blocked status: %v", err)
+	}
+	// A previously reverted high timestamp must not prevent a lower pending
+	// timestamp after the current version from being applied.
+	writeSQL(t, dir, "20260921000000003_add_name.sql", migrationSQL(addName, dropName))
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, Down, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "20260921000000003_add_name.sql")); err != nil {
+		t.Fatal(err)
+	}
+	writeSQL(t, dir, "20260921000000002_add_name.sql", migrationSQL(revised, dropName))
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatalf("old highest timestamp constrained pending files: %v", err)
+	}
+	// A newly added earlier filename remains pending even after later files run.
+	writeSQL(t, dir, "20260921000000000_earlier.sql", migrationSQL(createUsers, "DROP TABLE users"))
+	if plan, err := r.Plan(ctx, Up, 0); err != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != "20260921000000000_earlier" {
+		t.Fatalf("earlier pending file omitted: %#v, %v", plan, err)
+	}
+}
+
 func TestRunnerRejectsOutputDirectoryAlias(t *testing.T) {
 	r, _, dir := fixtureRunner(t)
 	alias := filepath.Join(filepath.Dir(dir), "alias")
@@ -380,120 +440,80 @@ func TestRunnerRejectsOutputDirectoryAlias(t *testing.T) {
 	}
 }
 
-func TestRunnerRepairsInterruptedDown(t *testing.T) {
-	for _, restored := range []bool{false, true} {
-		t.Run(fmt.Sprintf("restored_applied_%t", restored), func(t *testing.T) {
-			r, f, dir := fixtureRunner(t)
-			installMigrations(t, dir)
-			ctx := context.Background()
-			if _, err := r.Apply(ctx, Up, 0); err != nil {
-				t.Fatal(err)
-			}
-			f.failProgress = true
-			result, err := r.Apply(ctx, Down, 1)
-			if err == nil || !result.Dirty || result.Version != secondVersion || f.tables["users"] != createUsers {
-				t.Fatalf("interrupted down=%#v,%v", result, err)
-			}
-			if _, err := r.Apply(ctx, Down, 1); !errors.Is(err, ErrDirty) {
-				t.Fatalf("repeated down=%v", err)
-			}
-			if restored {
-				f.tables["users"] = withName
-			}
-			if _, err := r.Dump(ctx); err != nil {
-				t.Fatal(err)
-			}
-			count := f.ddlCount
-			result, err = r.Repair(ctx, RepairOptions{Version: secondVersion, Applied: restored, ExpectedSchema: r.config.SchemaFile, Reason: "Independently verified the down result"})
-			want := firstVersion
-			if restored {
-				want = secondVersion
-			}
-			if err != nil || result.Dirty || result.Version != want || f.ddlCount != count {
-				t.Fatalf("repair=%#v,%v", result, err)
-			}
-			status, err := r.Status(ctx)
-			if err != nil || status.Version != want || status.Dirty || status.Drift {
-				t.Fatalf("status=%#v,%v", status, err)
-			}
-			if restored {
-				_, err = r.Apply(ctx, Down, 1)
-			} else {
-				_, err = r.Apply(ctx, Up, 0)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-		})
+func TestRunnerAllowsManualRecoveryOfUncertainOutcomes(t *testing.T) {
+	for _, direction := range []Direction{Up, Down} {
+		for _, failure := range []string{"SQL acknowledgement", "version write", "version acknowledgement"} {
+			t.Run(string(direction)+"/"+failure, func(t *testing.T) {
+				r, f, dir := fixtureRunner(t)
+				installMigrations(t, dir)
+				ctx := context.Background()
+				steps := 1
+				if direction == Down {
+					steps = 2
+				}
+				if _, err := r.Apply(ctx, Up, steps); err != nil {
+					t.Fatal(err)
+				}
+				switch failure {
+				case "SQL acknowledgement":
+					f.loseSQLAck = true
+				case "version write":
+					f.failRecord = true
+				case "version acknowledgement":
+					f.loseRecordAck = true
+				}
+				result, err := r.Apply(ctx, direction, 1)
+				if err == nil || result.SnapshotUpdated {
+					t.Fatalf("uncertain result=%#v,%v", result, err)
+				}
+				wantSQL, wantVersion := withName, secondVersion
+				if direction == Down {
+					wantSQL, wantVersion = createUsers, firstVersion
+				}
+				if f.tables["users"] != wantSQL {
+					t.Fatal("SQL outcome was not independently observable")
+				}
+				// The operator checks the SQL outcome and directly corrects the version row.
+				if direction == Up {
+					f.versions[secondVersion] = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+				} else {
+					delete(f.versions, secondVersion)
+				}
+				status, err := r.Status(ctx)
+				if err != nil || status.Version != wantVersion {
+					t.Fatalf("status=%#v,%v", status, err)
+				}
+				opposite := Down
+				if direction == Down {
+					opposite = Up
+				}
+				if _, err := r.Apply(ctx, opposite, 1); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
-func TestRunnerStopsOnPartialFailureAndRequiresRepair(t *testing.T) {
+func TestRunnerKeepsOnlySuccessfulVersionsAfterSQLFailure(t *testing.T) {
 	r, f, dir := fixtureRunner(t)
 	installMigrations(t, dir)
 	ctx := context.Background()
-	if _, err := r.Apply(ctx, Up, 1); err != nil {
-		t.Fatal(err)
-	}
-	failing := "ALTER TABLE `users` ADD COLUMN broken unsupported_type"
-	f.failSQL = failing
-	writeSQL(t, dir, "20260921000000002_add_name.sql", migrationSQL(addName+";\n"+failing, dropName))
+	f.failSQL = addName
 	result, err := r.Apply(ctx, Up, 0)
-	if err == nil || !result.Dirty || result.Version != firstVersion {
-		t.Fatalf("partial=%#v,%v", result, err)
+	if err == nil || result.Version != firstVersion || len(result.Completed) != 1 || result.SnapshotUpdated {
+		t.Fatalf("failure=%#v,%v", result, err)
 	}
-	if strings.Contains(err.Error(), "confidential") {
-		t.Fatal("server error leaked")
+	if strings.Contains(err.Error(), "confidential") || len(f.versions) != 1 || f.tables["users"] != createUsers {
+		t.Fatal("failed SQL changed recorded versions or disclosed its raw cause")
 	}
-	if f.events[1].State != "failed" || f.events[1].StatementIndex != 1 {
-		t.Fatalf("event=%#v", f.events[1])
-	}
-	count := f.ddlCount
-	if _, err := r.Apply(ctx, Up, 0); !errors.Is(err, ErrDirty) || f.ddlCount != count {
-		t.Fatalf("retry=%v", err)
-	}
-	if _, err := r.Dump(ctx); err != nil {
-		t.Fatal(err)
-	}
-	options := RepairOptions{Version: secondVersion, ExpectedSchema: r.config.SchemaFile, Reason: "Verified and manually reversed the partial operation"}
-	if _, err := r.Repair(ctx, options); !errors.Is(err, ErrDrift) {
-		t.Fatalf("accepted partial structure as reverted: %v", err)
-	}
-	f.tables["users"] = createUsers
-	if _, err := r.Dump(ctx); err != nil {
-		t.Fatal(err)
-	}
-	result, err = r.Repair(ctx, options)
-	if err != nil || result.Dirty || result.Version != firstVersion || f.ddlCount != count {
-		t.Fatalf("repair=%#v,%v", result, err)
-	}
-	status, err := r.Status(ctx)
-	if err != nil || status.Dirty || status.Drift || status.Events[1].State != "resolved" || status.Events[2].Direction != "repair" {
-		t.Fatalf("status=%#v,%v", status, err)
-	}
-}
-
-func TestRunnerRepairsLostProgressAcknowledgement(t *testing.T) {
-	r, f, dir := fixtureRunner(t)
-	installMigrations(t, dir)
-	ctx := context.Background()
-	if _, err := r.Apply(ctx, Up, 1); err != nil {
-		t.Fatal(err)
-	}
-	f.failProgress = true
-	result, err := r.Apply(ctx, Up, 0)
-	if err == nil || !result.Dirty || f.tables["users"] != withName {
-		t.Fatalf("result=%#v,%v", result, err)
-	}
-	if _, err := r.Dump(ctx); err != nil {
-		t.Fatal(err)
-	}
-	result, err = r.Repair(ctx, RepairOptions{Version: secondVersion, Applied: true, ExpectedSchema: r.config.SchemaFile, Reason: "Checked schema, data, and DDL completion"})
-	if err != nil || result.Version != secondVersion || result.Dirty {
-		t.Fatalf("repair=%#v,%v", result, err)
-	}
-	if _, err := r.Apply(ctx, Down, 1); err != nil {
-		t.Fatal(err)
+	// The operator verifies the database, corrects the file, and retries.
+	const fixed = "ALTER TABLE `users` ADD COLUMN `name` VARCHAR(100)"
+	f.effects[fixed] = func() { f.tables["users"] = withName }
+	writeSQL(t, dir, "20260921000000002_add_name.sql", migrationSQL(fixed, dropName))
+	result, err = r.Apply(ctx, Up, 0)
+	if err != nil || result.Version != secondVersion || len(f.versions) != 2 {
+		t.Fatalf("retry corrected SQL=%#v,%v", result, err)
 	}
 }
 
@@ -508,7 +528,7 @@ func TestRunnerDistinguishesSnapshotFailure(t *testing.T) {
 		}
 	}
 	result, err := r.Apply(context.Background(), Up, 1)
-	if !errors.Is(err, ErrSnapshot) || result.Version != firstVersion || result.Dirty || result.SnapshotUpdated {
+	if !errors.Is(err, ErrSnapshot) || result.Version != firstVersion || result.SnapshotUpdated {
 		t.Fatalf("result=%#v,%v", result, err)
 	}
 	count := f.ddlCount
@@ -551,19 +571,21 @@ func TestRunnerSerializesIndependentClients(t *testing.T) {
 	}
 }
 
-func TestRunnerRejectsLiveDriftBeforeDDL(t *testing.T) {
+func TestRunnerDoesNotLockFilesOrCheckLiveDrift(t *testing.T) {
 	r, f, dir := fixtureRunner(t)
 	installMigrations(t, dir)
-	if _, err := r.Apply(context.Background(), Up, 1); err != nil {
+	ctx := context.Background()
+	if _, err := r.Apply(ctx, Up, 1); err != nil {
 		t.Fatal(err)
 	}
 	f.tables["users"] = withName
-	count := f.ddlCount
-	if _, err := r.Apply(context.Background(), Up, 0); !errors.Is(err, ErrDrift) || f.ddlCount != count {
-		t.Fatalf("drift=%v", err)
+	writeSQL(t, dir, "20260921000000001_create_users.sql", migrationSQL(createUsers, "DROP TABLE users")+"-- edited\n")
+	plan, err := r.Plan(ctx, Up, 0)
+	if err != nil || plan.CurrentVersion != firstVersion || len(plan.Steps) != 1 {
+		t.Fatalf("plan=%#v,%v", plan, err)
 	}
-	status, err := r.Status(context.Background())
-	if err != nil || !status.Drift {
+	status, err := r.Status(ctx)
+	if err != nil || status.Version != firstVersion {
 		t.Fatalf("status=%#v,%v", status, err)
 	}
 }
@@ -586,7 +608,7 @@ func TestDumpRejectsUnsupportedObjectsWithoutReplacingSnapshot(t *testing.T) {
 	}
 }
 
-func TestDumpCapturesTiFlashAndDetectsReplicaDrift(t *testing.T) {
+func TestDumpCapturesTiFlash(t *testing.T) {
 	r, f, dir := fixtureRunner(t)
 	installMigrations(t, dir)
 	ctx := context.Background()
@@ -595,8 +617,8 @@ func TestDumpCapturesTiFlashAndDetectsReplicaDrift(t *testing.T) {
 	}
 	f.replicas = [][]driver.Value{{"users", int64(2), ""}}
 	status, err := r.Status(ctx)
-	if err != nil || !status.Drift {
-		t.Fatalf("replica drift=%#v,%v", status, err)
+	if err != nil || status.Version != firstVersion {
+		t.Fatalf("status with updated replicas=%#v,%v", status, err)
 	}
 	if _, err := r.Dump(ctx); err != nil {
 		t.Fatal(err)
@@ -625,5 +647,155 @@ func TestRunnerDiscardsConnectionAfterFailedLockRelease(t *testing.T) {
 	f.failRelease = false
 	if _, err := r.Dump(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunnerLogsPartialSQLAndStops(t *testing.T) {
+	r, f, dir := fixtureRunner(t)
+	writeSQL(t, dir, "001_setup.sql", migrationSQL(createUsers+"; "+addName+"; INSERT INTO users VALUES (2)", ""))
+	writeSQL(t, dir, "002_later.sql", migrationSQL("INSERT INTO users VALUES (3)", ""))
+	f.failSQL = addName
+	var events []Event
+	r.config.OnEvent = func(e Event) error {
+		if e.State == "started" && e.Phase == "SQL" && e.Statement == 1 && f.ddlCount != 0 {
+			t.Fatal("SQL ran before its start was reported")
+		}
+		events = append(events, e)
+		return nil
+	}
+	result, err := r.Apply(context.Background(), Up, 0)
+	if err == nil || result.Version != "" || len(result.Completed) != 0 || len(f.versions) != 0 || f.ddlCount != 2 {
+		t.Fatalf("partial result: %#v %v", result, err)
+	}
+	var states []string
+	for _, e := range events {
+		if e.Phase == "SQL" {
+			states = append(states, fmt.Sprintf("%s:%d:%s", e.Version, e.Statement, e.State))
+			if e.SQL == "" || e.Time.IsZero() {
+				t.Fatal("missing SQL or timestamp")
+			}
+		}
+	}
+	want := "001_setup:1:started,001_setup:1:succeeded,001_setup:2:started,001_setup:2:error,001_setup:3:unexecuted,002_later:1:unexecuted"
+	if strings.Join(states, ",") != want {
+		t.Fatalf("events: %v", states)
+	}
+	// Human recovery restores the schema and fixes the failing SQL file.
+	delete(f.tables, "users")
+	writeSQL(t, dir, "001_setup.sql", migrationSQL(createUsers+"; "+addName, dropName+"; DROP TABLE `users`"))
+	if err := os.Remove(filepath.Join(dir, "002_later.sql")); err != nil {
+		t.Fatal(err)
+	}
+	f.failSQL = ""
+	r.config.OnEvent = nil
+	if _, err := r.Apply(context.Background(), Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	f.failSQL = "DROP TABLE `users`"
+	result, err = r.Apply(context.Background(), Down, 1)
+	if err == nil || result.Version != "001_setup" || len(f.versions) != 1 || f.tables["users"] != createUsers {
+		t.Fatalf("partial down: %#v %v", result, err)
+	}
+}
+
+func TestRunnerUsesApplicationTimeForDown(t *testing.T) {
+	r, f, dir := fixtureRunner(t)
+	installMigrations(t, dir)
+	ctx := context.Background()
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	const older = "000_add_age"
+	const add = "ALTER TABLE users ADD COLUMN age INT"
+	f.effects[add] = func() {
+		f.tables["users"] = "CREATE TABLE users (id INT NOT NULL PRIMARY KEY, name VARCHAR(50), age INT)"
+	}
+	f.effects["ALTER TABLE users DROP COLUMN age"] = func() { f.tables["users"] = withName }
+	writeSQL(t, dir, older+".sql", migrationSQL(add, "ALTER TABLE users DROP COLUMN age"))
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := r.Plan(ctx, Down, 1)
+	if err != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != older {
+		t.Fatalf("application order: %#v %v", plan, err)
+	}
+	if result, err := r.Apply(ctx, Down, 1); err != nil || result.Version != secondVersion {
+		t.Fatalf("down older: %#v %v", result, err)
+	}
+	if _, exists := f.versions[older]; exists {
+		t.Fatal("down record retained")
+	}
+	if err := os.Remove(filepath.Join(dir, older+".sql")); err != nil {
+		t.Fatal(err)
+	}
+	firstApplied := f.versions[secondVersion]
+	if _, err := r.Apply(ctx, Down, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, Up, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !f.versions[secondVersion].After(firstApplied) {
+		t.Fatal("re-up did not get a new registration time")
+	}
+	f.versions[firstVersion] = f.versions[secondVersion]
+	plan, err = r.Plan(ctx, Down, 1)
+	if err != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != secondVersion {
+		t.Fatalf("filename tie breaker: %#v %v", plan, err)
+	}
+}
+
+func TestRunnerProgressErrorsPreserveConfirmedRecordOutcome(t *testing.T) {
+	for _, phase := range []string{"SQL start", "record success"} {
+		t.Run(phase, func(t *testing.T) {
+			r, f, dir := fixtureRunner(t)
+			installMigrations(t, dir)
+			r.config.OnEvent = func(e Event) error {
+				if phase == "SQL start" && e.Phase == "SQL" && e.State == "started" || phase == "record success" && e.Phase == "record applied version" && e.State == "succeeded" {
+					return errors.New("log unavailable")
+				}
+				return nil
+			}
+			result, err := r.Apply(context.Background(), Up, 1)
+			if err == nil {
+				t.Fatal("progress error ignored")
+			}
+			if phase == "SQL start" {
+				if f.ddlCount != 0 || len(f.versions) != 0 {
+					t.Fatal("SQL ran after logging failed")
+				}
+			} else if result.Version != firstVersion || len(result.Completed) != 1 || len(f.versions) != 1 {
+				t.Fatalf("confirmed record lost: %#v", result)
+			}
+		})
+	}
+}
+
+func TestInitProducesOneIrreversibleFileForMultipleTables(t *testing.T) {
+	r, f, dir := fixtureRunner(t)
+	f.tables["users"] = createUsers
+	f.tables["items"] = "CREATE TABLE items (id INT)"
+	if _, err := r.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	files, err := Load(dir)
+	if err != nil || len(files) != 1 || files[0].Down != "" {
+		t.Fatalf("initial: %#v %v", files, err)
+	}
+	statements, err := migrationStatements(files[0], Up)
+	if err != nil || len(statements) != 2 {
+		t.Fatalf("initial SQL: %#v %v", statements, err)
+	}
+	if _, err := r.Baseline(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.versions) != 1 || f.ddlCount != 0 {
+		t.Fatal("baseline executed application SQL")
+	}
+	if _, err := r.Apply(context.Background(), Down, 1); err == nil || len(f.versions) != 1 {
+		t.Fatal("initial record was removed")
+	}
+	if _, err := r.Apply(context.Background(), Up, 0); err != nil || f.ddlCount != 0 {
+		t.Fatalf("initial re-executed: %v", err)
 	}
 }

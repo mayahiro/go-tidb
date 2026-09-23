@@ -18,17 +18,11 @@ type Direction string
 const (
 	// Up applies pending versions in ascending order.
 	Up Direction = "up"
-	// Down reverses applied versions in descending order.
+	// Down reverses recorded versions by descending application time.
 	Down Direction = "down"
 )
 
 var (
-	// ErrDirty means an interrupted operation needs inspection and explicit repair.
-	ErrDirty = errors.New("migrate: interrupted migration requires explicit repair")
-	// ErrDrift means the live structure differs from the last recorded structure.
-	ErrDrift = errors.New("migrate: live schema differs from migration history")
-	// ErrChecksum means recorded migration SQL differs from local files.
-	ErrChecksum = errors.New("migrate: migration history and SQL files disagree")
 	// ErrUnmanaged means an existing database needs init and baseline adoption.
 	ErrUnmanaged = errors.New("migrate: nonempty database has no history; use init and baseline")
 	// ErrSnapshot means database work completed but the snapshot file was not updated.
@@ -44,6 +38,10 @@ type Config struct {
 	Directory   string
 	SchemaFile  string
 	LockTimeout time.Duration
+	// OnEvent receives synchronous SQL and record-update progress, including
+	// trusted SQL text and raw errors. A callback error stops further execution.
+	// The CLI uses this hook to write its recovery log before sending SQL.
+	OnEvent func(Event) error
 }
 
 // Runner performs explicit deployment operations on a caller-owned pool. It
@@ -89,32 +87,31 @@ func New(db *sql.DB, config Config) (*Runner, error) {
 	if config.LockTimeout < time.Second || config.LockTimeout > time.Hour || config.LockTimeout%time.Second != 0 {
 		return nil, fmt.Errorf("migrate: lock timeout must be an integer number of seconds from 1 to 3600")
 	}
-	return &Runner{db, config}, nil
+	return &Runner{db: db, config: config}, nil
 }
 
 // Result describes confirmed progress even when an operation returns an error.
-// SnapshotUpdated is independent of database success. Dirty signals that SQL
-// execution may have partially completed and must not be blindly retried.
+// SnapshotUpdated is independent of database success. Version reflects recorded
+// state only: after any error, inspect the database before retrying.
 type Result struct {
-	Database        string  `json:"database"`
-	Version         int64   `json:"version"`
-	Completed       []int64 `json:"completed"`
-	SnapshotUpdated bool    `json:"snapshot_updated"`
-	Dirty           bool    `json:"dirty"`
+	Database        string   `json:"database"`
+	Version         string   `json:"version"`
+	Completed       []string `json:"completed"`
+	SnapshotUpdated bool     `json:"snapshot_updated"`
 }
 
 // OperationError locates a failed operation without including SQL or server
 // error text. Unwrap provides the original cause for controlled diagnostics.
 type OperationError struct {
 	Phase     string
-	Version   int64
+	Version   string
 	Statement int
 	Cause     error
 }
 
 // Error describes the phase and position without disclosing the underlying error.
 func (e *OperationError) Error() string {
-	return fmt.Sprintf("migrate: %s failed (version=%d, statement=%d); inspect the operation state", e.Phase, e.Version, e.Statement)
+	return fmt.Sprintf("migrate: %s failed (version=%s, statement=%d); inspect the database before retrying", e.Phase, e.Version, e.Statement)
 }
 
 // Unwrap returns the underlying error; it may contain server-supplied data.
@@ -135,9 +132,9 @@ func (r *Runner) session(ctx context.Context, run func(session) error) (err erro
 	}
 	defer conn.Close()
 	var database sql.NullString
-	var version, mode string
+	var version, mode, zone string
 	var autocommit int
-	if err := conn.QueryRowContext(ctx, "SELECT DATABASE(), VERSION(), @@SESSION.sql_mode, @@SESSION.autocommit").Scan(&database, &version, &mode, &autocommit); err != nil {
+	if err := conn.QueryRowContext(ctx, "SELECT DATABASE(), VERSION(), @@SESSION.sql_mode, @@SESSION.autocommit, @@SESSION.time_zone").Scan(&database, &version, &mode, &autocommit, &zone); err != nil {
 		return &OperationError{Phase: "inspect connection", Cause: err}
 	}
 	if !database.Valid || database.String == "" || !strings.Contains(strings.ToLower(version), "tidb") {
@@ -150,6 +147,20 @@ func (r *Runner) session(ctx context.Context, run func(session) error) (err erro
 	}
 	if autocommit != 1 {
 		return fmt.Errorf("migrate: migration connections require autocommit=1")
+	}
+	if zone != "+00:00" {
+		if _, err := conn.ExecContext(ctx, "SET SESSION time_zone = '+00:00'"); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			return &OperationError{Phase: "set UTC time zone", Cause: err}
+		}
+		defer func() {
+			restoreCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, restoreErr := conn.ExecContext(restoreCtx, "SET SESSION time_zone = ?", zone); restoreErr != nil {
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+				err = errors.Join(err, &OperationError{Phase: "restore time zone", Cause: restoreErr})
+			}
+		}()
 	}
 	lock := "tidbgo:" + checksum(strings.ToLower(database.String))[:48]
 	var acquired sql.NullInt64
@@ -192,8 +203,8 @@ func (r *Runner) output(s snapshot, result *Result) error {
 	return nil
 }
 
-// Dump writes the actual database structure, including when history is dirty.
-// It never repairs history or treats the snapshot as proof of migration success.
+// Dump writes the actual database structure. It never changes applied versions
+// or treats the snapshot as proof of migration success.
 func (r *Runner) Dump(ctx context.Context) (result Result, err error) {
 	err = r.session(ctx, func(s session) error {
 		result.Database = s.database
@@ -202,25 +213,20 @@ func (r *Runner) Dump(ctx context.Context) (result Result, err error) {
 			return &OperationError{Phase: "read snapshot", Cause: err}
 		}
 		if snap.managed {
-			events, err := readEvents(ctx, s.conn)
+			state, err := readState(ctx, s.conn)
 			if err != nil {
 				return err
 			}
-			state, err := replay(events)
-			if err != nil {
-				return err
-			}
-			result.Version, result.Dirty = state.version(), state.dirty != nil
+			result.Version = state.version()
 		}
 		return r.output(snap, &result)
 	})
 	return result, err
 }
 
-// Init captures an unmanaged existing database into a UTC millisecond timestamped
-// initial migration and schema.sql. It does not modify database objects or
-// register history. Review the SQL before Baseline. The initial version has
-// an up section only and cannot be reversed.
+// Init captures an unmanaged database into one initial SQL file and schema.sql.
+// It does not modify database objects or register a version. Review the file
+// before Baseline. The generated file has no Down section.
 func (r *Runner) Init(ctx context.Context) (result Result, err error) {
 	err = r.session(ctx, func(s session) error {
 		result.Database = s.database
@@ -241,7 +247,10 @@ func (r *Runner) Init(ctx context.Context) (result Result, err error) {
 		if snap.tables == 0 {
 			return fmt.Errorf("migrate: empty database; create a migration with new")
 		}
-		if _, err := createMigration(r.config.Directory, "initial", "-- tidbgo:up\n"+snap.SQL, time.Now(), true); err != nil {
+		if err := checkOutput(r.config.SchemaFile); err != nil {
+			return err
+		}
+		if err := createInitialMigration(r.config.Directory, snap.SQL, time.Now()); err != nil {
 			return err
 		}
 		return r.output(snap, &result)

@@ -5,20 +5,20 @@ import (
 	"fmt"
 )
 
-// Step contains the exact trusted SQL that a migration will execute.
+// Step contains the SQL for one migration file, in execution order.
 type Step struct {
-	Version    int64    `json:"version"`
-	Name       string   `json:"name"`
+	Version    string   `json:"version"`
 	Statements []string `json:"statements"`
 }
 
-// Plan is a read-only preview. Apply always reloads files and validates the
-// current database under the lock; a previously printed plan is not a lease.
+// Plan is a read-only preview. Apply reloads files and records under the lock.
+// CurrentVersion and TargetVersion identify the latest registration, not a
+// high-water mark. Earlier filenames can still be pending.
 type Plan struct {
 	Database       string    `json:"database"`
 	Direction      Direction `json:"direction"`
-	CurrentVersion int64     `json:"current_version"`
-	TargetVersion  int64     `json:"target_version"`
+	CurrentVersion string    `json:"current_version"`
+	TargetVersion  string    `json:"target_version"`
 	CreatesHistory bool      `json:"creates_history"`
 	Steps          []Step    `json:"steps"`
 }
@@ -29,81 +29,74 @@ func buildPlan(migrations []Migration, state historyState, snap snapshot, direct
 		return p, fmt.Errorf("migrate: direction must be up or down")
 	}
 	if steps < 0 || direction == Down && steps == 0 {
-		return p, fmt.Errorf("migrate: down requires a positive step count; up accepts zero for all pending versions")
+		return p, fmt.Errorf("migrate: down requires a positive file count; up accepts zero for all pending versions")
 	}
-	if state.dirty != nil {
-		return p, ErrDirty
-	}
-	if state.hash != "" && state.hash != snap.Hash {
-		return p, ErrDrift
-	}
-	if state.hash == "" && snap.tables > 0 {
+	if snap.tables > 0 && !snap.managed {
 		return p, ErrUnmanaged
 	}
-	var candidates []Migration
+	byVersion := make(map[string]Migration, len(migrations))
+	for _, m := range migrations {
+		byVersion[m.Version] = m
+	}
+	var versions []string
 	if direction == Up {
+		applied := make(map[string]bool, len(state.applied))
+		for _, v := range state.applied {
+			applied[v.version] = true
+		}
 		for _, m := range migrations {
-			if m.Version > state.version() {
-				candidates = append(candidates, m)
+			if !applied[m.Version] {
+				versions = append(versions, m.Version)
 			}
 		}
 	} else {
-		byVersion := map[int64]Migration{}
-		for _, m := range migrations {
-			byVersion[m.Version] = m
-		}
-		for i := len(state.stack) - 1; i >= 0; i-- {
-			v := state.stack[i]
-			if v <= state.baseline {
-				break
-			}
-			candidates = append(candidates, byVersion[v])
+		for i := len(state.applied) - 1; i >= 0; i-- {
+			versions = append(versions, state.applied[i].version)
 		}
 	}
-	if steps > len(candidates) {
-		return p, fmt.Errorf("migrate: requested steps exceed available migrations or cross the adoption baseline")
+	if steps > len(versions) {
+		return p, fmt.Errorf("migrate: requested file count exceeds available migrations")
 	}
 	if steps > 0 {
-		candidates = candidates[:steps]
+		versions = versions[:steps]
 	}
-	for _, m := range candidates {
-		source := m.Up
-		if direction == Down {
-			source = m.Down
-			if source == "" {
-				return p, fmt.Errorf("migrate: version %d is irreversible (no down section)", m.Version)
-			}
+	for _, v := range versions {
+		m, ok := byVersion[v]
+		if !ok {
+			return p, fmt.Errorf("migrate: missing SQL file for applied version %s", v)
 		}
-		statements, err := splitSQL(source)
+		if direction == Down && m.Down == "" {
+			return p, fmt.Errorf("migrate: version %s is irreversible (no down section)", v)
+		}
+		statements, err := migrationStatements(m, direction)
 		if err != nil {
 			return p, err
 		}
-		p.Steps = append(p.Steps, Step{m.Version, m.Name, statements})
+		p.Steps = append(p.Steps, Step{v, statements})
 	}
 	if len(p.Steps) > 0 {
 		p.CreatesHistory = !snap.managed
 		if direction == Up {
 			p.TargetVersion = p.Steps[len(p.Steps)-1].Version
 		} else {
-			remaining := len(state.stack) - len(p.Steps)
-			p.TargetVersion = 0
-			if remaining > 0 {
-				p.TargetVersion = state.stack[remaining-1]
+			p.TargetVersion = ""
+			if remaining := len(state.applied) - len(p.Steps); remaining > 0 {
+				p.TargetVersion = state.applied[remaining-1].version
 			}
 		}
 	}
 	return p, nil
 }
 
-// Plan previews up (steps=0 means all pending) or down (steps must be positive).
-// All selected down sections are checked before any operation can start.
+// Plan previews Up (zero files means all pending) or Down (positive file count).
+// Selected Down sections are all checked before any migration can execute.
 func (r *Runner) Plan(ctx context.Context, direction Direction, steps int) (result Plan, err error) {
 	migrations, err := r.load()
 	if err != nil {
 		return result, err
 	}
 	err = r.session(ctx, func(s session) error {
-		snap, _, state, err := inspect(ctx, s, migrations)
+		snap, state, err := inspect(ctx, s)
 		if err != nil {
 			return err
 		}

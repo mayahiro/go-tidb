@@ -8,9 +8,9 @@ integration-test setup, and benchmark procedures for `go-tidb`
 ## Migration verification
 
 The [migration runner](migrations.md) has offline tests for baseline adoption,
-up/down/reapplication, checksum and drift rejection, independent-client
-locking, interrupted DDL and journal writes, explicit repair, and snapshot
-output failure:
+up/down/reapplication, filename selection and application order, independent-client
+locking, partial SQL and record-write failures, durable CLI logs, limited offline
+lint, and snapshot output failure:
 
 ```sh
 go test ./migrate
@@ -22,7 +22,7 @@ go test ./migrate -run '^$' -bench '^(BenchmarkSnapshotHash|BenchmarkLoad)$' -be
 ```
 
 `BenchmarkLoad` measures file reading and section validation for one version,
-100 versions, and a 1 MiB quoted literal. Fixture creation is outside the timer;
+100 versions, 100 statements in one file, and a 1 MiB quoted literal. Fixture creation is outside the timer;
 database execution and RU are not measured.
 
 `BenchmarkSnapshotHash` compares joining and streaming the same sorted canonical SQL
@@ -50,8 +50,9 @@ Do not run other suites in the same database concurrently. The migration test
 creates and removes only its own `tidbgo_it_migration_accounts` and
 `_tidbgo_migrations` tables after verifying initial emptiness. It verifies
 retained decimal data, snapshot stability after inserts, refresh after
-down/reapplication, partial DDL failure and repair, adoption without recreating
-application tables, and replay of captured initial SQL into an empty database. These
+down/reapplication, edited SQL after down, partial up/down failure with manual
+correction, two-column applied records, adoption without recreating application
+tables, and replay of captured initial SQL into an empty database. These
 tests use the supplied environment; they do not load `.env` automatically.
 
 ## Aggregate and TiFlash verification

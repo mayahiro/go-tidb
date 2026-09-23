@@ -10,36 +10,31 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const maxSQLSize = 16 << 20
 
-var filePattern = regexp.MustCompile(`^([0-9]{17})_([a-z][a-z0-9_]*)\.sql$`)
+var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 const timestampLayout = "20060102150405.000"
 
-// Migration is one immutable-by-convention version loaded from a trusted SQL file.
-// Version is a UTC timestamp encoded as YYYYMMDDHHMMSSmmm (milliseconds).
-// Up and Down partition the original file bytes, including directives and
-// comments, so their checksums cover the entire file without normalization.
-// An absent Down explicitly makes the version irreversible.
+// Migration is one trusted SQL file. Version is its complete filename without
+// the .sql extension. Each direction may contain multiple statements. An absent
+// Down makes the migration irreversible. SQL is preserved, including comments.
 type Migration struct {
-	Version int64
-	Name    string
+	Version string
 	Up      string
 	Down    string
 }
 
-// Load reads YYYYMMDDHHMMSSmmm_name.sql files with a -- tidbgo:up section
-// followed by an optional -- tidbgo:down section. Directives occupy their own
-// lines, outside SQL quotes and block comments. Up SQL must end with a semicolon
-// before down. It rejects invalid dates, duplicate versions, symlinks, empty
-// sections, and session/transaction control statements. It performs
-// no database I/O and does not claim full SQL grammar validation.
+// Load reads .sql files in filename order. Versions contain ASCII letters,
+// digits, underscores, dots, and hyphens, starting with a letter or digit.
+// Files use -- tidbgo:up and an optional -- tidbgo:down section. Load validates
+// file structure and statement boundaries, not SQL grammar or executability.
+// Symlinks, empty sections, and session/transaction control are rejected.
 func Load(directory string) ([]Migration, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
@@ -48,29 +43,18 @@ func Load(directory string) ([]Migration, error) {
 	if len(entries) > 20000 {
 		return nil, fmt.Errorf("migrate: too many migration files")
 	}
-	versions := make(map[int64]bool)
 	var result []Migration
 	total := 0
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		match := filePattern.FindStringSubmatch(entry.Name())
-		if match == nil {
+		version := strings.TrimSuffix(entry.Name(), ".sql")
+		if !validVersion(version) {
 			return nil, fmt.Errorf("migrate: invalid migration filename %q", entry.Name())
-		}
-		if len(match[2]) > 128 {
-			return nil, fmt.Errorf("migrate: migration names cannot exceed 128 bytes")
-		}
-		version, err := parseVersion(match[1])
-		if err != nil {
-			return nil, fmt.Errorf("migrate: invalid version in %q", entry.Name())
 		}
 		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
 			return nil, fmt.Errorf("migrate: migration files must be regular files")
-		}
-		if versions[version] {
-			return nil, fmt.Errorf("migrate: duplicate version %d", version)
 		}
 		data, err := readSQL(filepath.Join(directory, entry.Name()))
 		if err != nil {
@@ -84,9 +68,9 @@ func Load(directory string) ([]Migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("migrate: %s: %w", entry.Name(), err)
 		}
-		versions[version] = true
-		result = append(result, Migration{Version: version, Name: match[2], Up: up, Down: down})
+		result = append(result, Migration{Version: version, Up: up, Down: down})
 	}
+	// Removing .sql can change the order of prefix names such as a.sql/a-b.sql.
 	sort.Slice(result, func(i, j int) bool { return result[i].Version < result[j].Version })
 	return result, nil
 }
@@ -155,13 +139,16 @@ func checksum(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Create creates one SQL template with up/down sections, using the current UTC
-// timestamp to millisecond precision. Fill both sections before running Load,
-// or remove the down section to declare an irreversible change. It rejects a
-// timestamp at or before the latest local version, including same-millisecond
-// collisions. Existing files are never overwritten.
+// Create creates an offline up/down SQL template named with a UTC millisecond
+// timestamp and the supplied name. Existing files are never overwritten. Fill
+// both sections before loading, or remove Down for an irreversible migration.
 func Create(directory, name string) (Migration, error) {
 	return createMigration(directory, name, "-- tidbgo:up\n-- Write the forward migration SQL here.\n\n-- tidbgo:down\n-- Write the reverse SQL here, or remove this section if irreversible.\n", time.Now(), false)
+}
+
+func createInitialMigration(directory, source string, now time.Time) error {
+	_, err := createMigration(directory, "initial", "-- tidbgo:up\n"+source, now, true)
+	return err
 }
 
 func createMigration(directory, name, source string, now time.Time, empty bool) (Migration, error) {
@@ -171,48 +158,31 @@ func createMigration(directory, name, source string, now time.Time, empty bool) 
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return Migration{}, err
 	}
-	// Serialize local writers even when they choose different names for the same
-	// millisecond. A leftover lock after a crash must be inspected and removed.
-	lock := filepath.Join(directory, ".tidbgo-create.lock")
-	if err := os.Mkdir(lock, 0700); err != nil {
-		return Migration{}, fmt.Errorf("migrate: acquire local creation lock: %w", err)
+	if empty {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return Migration{}, err
+		}
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".sql") {
+				return Migration{}, fmt.Errorf("migrate: init requires an empty migration directory")
+			}
+		}
 	}
-	defer os.Remove(lock)
-	migrations, err := Load(directory)
-	if err != nil {
-		return Migration{}, err
-	}
-	if empty && len(migrations) > 0 {
-		return Migration{}, fmt.Errorf("migrate: init requires an empty migration directory")
-	}
-	version, err := parseVersion(strings.ReplaceAll(now.UTC().Format(timestampLayout), ".", ""))
-	if err != nil {
-		return Migration{}, err
-	}
-	if len(migrations) > 0 && version <= migrations[len(migrations)-1].Version {
-		return Migration{}, fmt.Errorf("migrate: UTC timestamp %017d must be later than the latest local version; check the clock or retry after the current millisecond", version)
-	}
-	m := Migration{Version: version, Name: name}
+	version := strings.ReplaceAll(now.UTC().Format(timestampLayout), ".", "") + "_" + name
+	m := Migration{Version: version}
 	if err := createFile(filepath.Join(directory, filename(m)), source); err != nil {
 		return Migration{}, err
 	}
 	return m, nil
 }
 
-func parseVersion(value string) (int64, error) {
-	if len(value) != 17 {
-		return 0, fmt.Errorf("migrate: version must be YYYYMMDDHHMMSSmmm in UTC")
-	}
-	timestamp, err := time.Parse(timestampLayout, value[:14]+"."+value[14:])
-	if err != nil || timestamp.Year() < 1 {
-		return 0, fmt.Errorf("migrate: invalid UTC timestamp version %q", value)
-	}
-	return strconv.ParseInt(value, 10, 64)
+func validVersion(version string) bool {
+	return len(version) <= 251 && versionPattern.MatchString(version)
 }
 
-func filename(m Migration) string {
-	return fmt.Sprintf("%017d_%s.sql", m.Version, m.Name)
-}
+func filename(m Migration) string { return m.Version + ".sql" }
+
 func createFile(path, source string) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {

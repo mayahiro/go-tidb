@@ -1,58 +1,86 @@
-# バージョン付きSQLマイグレーション
+# SQLマイグレーション
 
 [English](migrations.md)
 
-`tidbgo migrate` はTiDB Cloud Starter向けの明示的なデプロイツールです
-新規DB、既存DBの取り込み、up／down SQL、**操作対象DBの現時点の構造**を表す `schema.sql` を扱います
-アプリケーション起動やORMのqueryからマイグレーションを実行することはありません
-
-生成したsnapshotは `schema.Parse` と `check.Schema` による[offlineのスキーマ互換性検査](schema-checks_ja.md)や、`tidbgo lint --schema` に利用できます
-downでもsnapshotは操作対象DBの現時点の構造に更新されます
-
-`tidbgo lint . --schema schema.sql` はsource modelのtable・mapped列・宣言した主キー／一意制約・未mapped必須列を検査します
-applicationを配布する前に、予定するmigrationまたはrollback先のsnapshotで照合できます
-検査範囲と未解決modelの報告は[sourceのスキーマ検査](checks_ja.md#go-source解析)を参照してください
-
-migration後は更新したsnapshotとapplicationのRelation宣言で[参照Audit](reference-audits_ja.md)を実行し、FKがないDBの孤児参照も確認できます
-接続して実行する前に `tidbgo audit . --schema schema.sql --dry-run` で検査SQLを確認します
+`tidbgo migrate` はTiDB Cloud Starter向けの明示的なdeployment toolです
+新規DB、既存DBへの導入、作成済みup／down SQL、現時点の対象DBを投影する `schema.sql` に対応します
+application起動やORM queryではマイグレーションを実行しません
 
 ## 接続とファイル
 
-デプロイ環境またはsecret managerで `TIDBGO_DSN` を設定します
-[go-sql-driver/mysqlのDSN形式](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#dsn-data-source-name)を使用し、DBの選択、TCP、検証付きTLSである `tls=true` が必要です
-`.env` は自動読込しません。`--dsn-env NAME` で別の環境変数を選べますが、DSN値をコマンド引数では受け付けません
+`TIDBGO_DSN` をdeployment環境またはsecret managerで設定します
+[go-sql-driver/mysqlのDSN形式](https://github.com/go-sql-driver/mysql/blob/v1.10.0/README.md#dsn-data-source-name)で、DB選択、TCP、TLS検証（`tls=true`）が必要です
+`.env` は自動読込しません。`--dsn-env NAME` で別の環境変数を選べます
+DSN値をcommand-line引数では受け付けません
 
-CLIは独立したGo moduleで、MySQL driverとCLI frameworkを含みます
-rootのlibrary moduleにthird-party依存はありません。`migrate` と `orm` packageはcaller所有の `database/sql` pool／executorを受け取り、driverを選びません
-CLIのcheckoutからのbuildは [Installation](../README_ja.md#installation) を参照してください
-autocommitと既定のquote解釈が必要です
-DSNの任意session変数、複数statement実行、安全性を検証しないTLS、無制限のlocal file参照は拒否します
-migration自体には `parseTime=true` は必須ではありません
-TiDBのversion確認だけではCloud planを判定できないため、Starterの接続先は利用者が指定します
+CLIはMySQL driverとCLI frameworkを含む独立Go moduleです
+root libraryは外部依存を持たず、caller所有の `database/sql` poolを受け取ります
+[インストール](../README_ja.md#installation)も参照してください
+接続にはautocommitと標準の引用符の扱いが必要です
+DSNの任意session変数、複数statement一括実行、安全でないTLS、無制限のlocal file accessは拒否します
+`parseTime=true` は任意です。TiDBの識別だけではCloud planを検証できないため、Starter endpointを指定してください
 
-既定のpathはcurrent directoryからの相対pathです
+default pathはcurrent directoryを基準にします
 
 ```text
 migrations/20260921093000123_create_accounts.sql
-migrations/20260921104500456_add_label.sql
+migrations/20260921104500456_add_flags.sql
 schema.sql
+log/tidbgo/run-<UTC-time>-<unique-suffix>.log
 ```
 
-`--dir PATH` と `--schema FILE` で入力と出力を変更できます。snapshotはmigration directoryの外に置きます
-filenameはUTCの年月日時分秒とミリ秒を含む17桁の `YYYYMMDDHHMMSSmmm` versionと、小文字英字で始まり小文字英字・数字・underscoreを含む128 byte以内のnameを使用し、versionの数値順に適用します
-不正な日時、version重複、symlink、空のSQL sectionは拒否します
-SQLファイルとsnapshotは各16 MiB、migration入力全体は128 MiBまでです
+`--dir PATH` でマイグレーションdirectoryを選択します
+接続commandの `--schema FILE` はsnapshotの出力先で、マイグレーションdirectoryの外に置きます
+`lint` の `--schema` は入力snapshotを指定します
 
-ファイルは任意のheader commentの後に `-- tidbgo:up` で開始し、必要に応じて `-- tidbgo:down` sectionを続けます
-区切りは引用文字列とblock commentの外にある独立した行に記述し、downの前のup SQLはsemicolonで終えます
-down section全体を省略すると不可逆変更を意味し、sectionがある場合はSQLの記入が必要です
-down済みのversionも含め、記録されたmigrationは変更せず保持します。checksumは区切り、comment、空白を含むファイル全体を対象にします
+**versionは `.sql` を除くファイル名全体**です
+例えば `20260921104500456_add_flags` は数値でなく、大文字小文字を区別する文字列です
+ASCIIの英数字、dot、underscore、hyphenを使え、先頭は英数字、最大251 byteです
+ファイルは辞書順に並べます。同じtimestamp prefixでも名前が異なれば別versionです
+適用済みファイルをrenameすると別versionになるため、適用後のファイル名は維持してください
 
-`new` と `init` はUTC時計のミリ秒未満を切り捨ててversionを生成します
-同じミリ秒の衝突を含め、最新のlocal version以下になる作成は拒否します。時計を確認するか、後のミリ秒に再実行します
-localの同時作成にはmigration directory内の `.tidbgo-create.lock` を使用します
-作成が中断した場合は部分的なファイルを確認し、作成処理が動いていないことを確認してからlockを削除します
-既存SQLを上書きすることはありません
+`new NAME` は `<UTC-milliseconds>_<name>.sql` というtemplateを作成します
+nameは小文字の英字で始まり、小文字英字、数字、underscoreを使え、最大128 byteです
+完全に同じファイル名が存在する場合は上書きせず失敗します
+SQLファイルとsnapshotは各16 MiB、マイグレーション全体は128 MiBかつ20,000ファイルまでです
+symlinkは拒否します
+
+各ファイルは `-- tidbgo:up` から始まり、その前にheader commentを置けます
+任意で `-- tidbgo:down` を続けます。directiveは引用符やblock commentの外で独立行に置きます
+down directiveの直前も含め、statementをsemicolonで区切ってください
+存在するsectionにはSQLが必要です。Down section全体を省略すると不可逆になります
+各sectionに複数SQLを記載でき、source順に個別送信します
+
+## 適用記録と実行順
+
+`_tidbgo_migrations` は次の2カラムだけを保持します
+
+```sql
+version VARCHAR(251) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+```
+
+ファイル登録時にTiDBが `created_at` を決定します
+runnerは占有したsessionを一時的にUTCへ設定し、終了時に元のtime zoneへ戻します
+tableには所有を示すcommentを付け、同じ予約名を持つ別用途のtableは拒否します
+
+| 操作 | 対象 | 記録の更新 |
+| --- | --- | --- |
+| `up` | 未登録ファイル名の昇順 | Upの全SQL成功後に登録 |
+| `down` | 登録済みversionを `created_at DESC, version DESC` で選択 | Downの全SQL成功後に削除 |
+| `baseline` | Downのない確認済み初期ファイル1個 | SQLを実行せずに登録 |
+
+後から追加された古いファイル名も未適用として適用できます
+Downは適用日時を遡り、同じ日時の場合だけファイル名降順で決定します。管理されたDBの時計を前提にします
+Down済みファイルを再適用すると、新しい登録日時になります
+checksum、失敗履歴、SQL単位のDB記録は保持しません
+
+`up` のdefaultは未適用の全ファイルで、`--steps N` は正の個数を指定します
+`down` のdefaultは1ファイルで、`--steps N` で変更できます
+選択したdownの経路にファイル欠落やDown未定義がある場合、SQL実行や記録削除の前に停止します
+選択した経路以外のファイル欠落は実行を妨げません
+`status` は未適用ファイル、適用済みversionと日時、ファイルが欠けた適用済みversionを表示します
+top-levelの `version` は最後の登録であり、それより小さい名前がすべて適用済みという意味ではありません
 
 ## 新規DB
 
@@ -60,20 +88,22 @@ localの同時作成にはmigration directory内の `.tidbgo-create.lock` を使
 tidbgo migrate new create_accounts
 ```
 
-生成された1ファイルの両sectionを、例えば次のように記入します
+例えば次のようにtemplateを編集します
 
 ```sql
 -- tidbgo:up
-CREATE TABLE accounts (
+CREATE TABLE IF NOT EXISTS accounts (
     id BIGINT NOT NULL AUTO_RANDOM PRIMARY KEY,
     name VARCHAR(100) NOT NULL
 );
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active BOOL NOT NULL DEFAULT TRUE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS reviewed BOOL NOT NULL DEFAULT FALSE;
 
 -- tidbgo:down
-DROP TABLE accounts;
+DROP TABLE IF EXISTS accounts;
 ```
 
-検証、確認、実行を行います
+検査、確認、実行を行います
 
 ```sh
 tidbgo migrate lint
@@ -85,123 +115,170 @@ tidbgo migrate down
 ```
 
 `new` と `lint` はofflineです
-`plan` は実DBと履歴を読み取り、applicationや履歴tableを変更しません。実行するSQLと履歴tableの作成要否を返します
-`up` は未適用の全versionを適用し、`--steps N` で正の件数を明示できます
-`down` の既定は1 versionで、`--steps N` も使えます。選択した逆方向の全経路を実行前に検証します
-既に記録されたversionより小さい番号のmigrationを後から挿入することはできません
+`plan` はlive DBと適用記録を読み取り、tableを変更せずに実行SQLと管理tableの作成要否を示します
+SQLファイルは信頼されたdeployment codeとして扱います
+control／session command、管理tableとadvisory-lock関数への直接参照は拒否しますが、軽量なvalidatorは完全なSQL parserやsandboxではありません
 
 ## 既存DBへの導入
 
-空のmigration directoryから開始します
+空のマイグレーションdirectoryから開始します
 
 ```sh
 tidbgo migrate init
-# migrations/<UTC-timestamp>_initial.sqlとschema.sqlを確認する
+# Review migrations/<UTC-milliseconds>_initial.sql and schema.sql
 tidbgo migrate baseline
+# Add subsequent migration files after baseline succeeds
 ```
 
-`init` はDB metadataの読み取りとファイル出力だけを行い、up sectionだけの移植可能な初期migrationを生成します
-`baseline` は実DBを再取得し、初期SQLと一致することを確認してから履歴tableを作成し、最初のversionを導入地点として登録します
-初期SQLは実行せず、既存applicationのtable、index、データを作り直しません
-未適用の後続ファイルがあっても構いませんが、導入地点にできるのは最初のversionだけです
-成功時の `baseline` は実DBから `schema.sql` も生成または更新します。`init` で書いたファイルがなくても再生成します
+`init` はmetadataを読み、取得した全SQLをDownなしの初期ファイル1個へ書きます
+管理tableの作成やversion登録は行いません
+`baseline` はこの1ファイルだけが存在し、適用記録がないことを要求します
+Up SQLが現時点のDB snapshotと一致した場合、必要に応じて管理tableを作り、初期ファイル名を登録して `schema.sql` を更新します
+application SQLの実行や既存dataの変更は行いません
 
-同じ初期up SQLで空DBを初期化でき、以後は共通のmigration列を使えます
-既存DBではdownで取り込んだbaselineの日時versionを越えられません
-`schema.sql` が更新されても初期SQLは固定です
-通常のupは履歴のない空でないDBを自動取り込みせず、処理を停止します
+同じ初期ファイルを空DBへ `up` できます
+新規DBでも導入済みDBでも、Downがないため、その記録を変更する前にdownが停止します
+記録が残るので後続のupは初期SQLをskipします。生成した初期SQLを既存tableへ繰り返し実行できる必要はありません
+結果を別途検討せずにDownを追加したり、記録を削除してこの境界を回避したりしないでください
 
-導入・実行中に他のツールが行うschema変更は調整してください
-通常のapplication DMLを止めることはツールの導入条件ではありませんが、metadata取得、履歴table作成、DDLはDB resourceを使います
-latencyへの影響がないことは保証しません
+通常のupは、このtoolの管理tableがない既存DBを拒否します
+導入やマイグレーション中は、他toolによるschema変更を調整してください
+このtoolのためにapplication DMLを停止する必要はありませんが、metadata queryとDDLはresourceを消費し、latencyへ影響しえます
+
+## Offlineのマイグレーションlint
+
+```sh
+tidbgo migrate lint
+```
+
+基本検査では全ファイルと存在する両方向を読みます
+ファイル形式と、対応する `CREATE TABLE`、`ADD/DROP COLUMN`、単純な `CREATE/ADD/DROP INDEX`、`DROP TABLE` の存在guardを検査します
+`IF NOT EXISTS` または `IF EXISTS` の欠落はwarningです
+DMLや複雑なALTERなど未対応statementは、未確認として明示します
+
+構造を確認するには、選択したマイグレーションの**適用前**snapshotと、実行順のファイルを明示します
+
+```sh
+tidbgo migrate lint --schema before.sql --direction up \
+  --file 20260921104500456_add_flags.sql \
+  --file 20260921113000789_index_flags.sql
+```
+
+Downを確認する場合は `--direction down`、down実行順のファイル、down開始前のsnapshotを指定します
+現時点の `schema.sql` から未適用ファイルを推定しません
+空のsnapshotは空DBを表します。`dump` が生成したsnapshot、または同等のDB修飾なしCREATE TABLEを使います
+
+schema検査はtable／columnの存在、nullable／unsigned／generated属性、単純なindexの列と一意性を追跡します
+明確な不整合はerrorです
+型の正規化、長さ、精度、default、式、foreign key、table／index option全体は比較しません
+guardによるskip時に定義全体を比較できない場合は未確認とします
+未対応変更があれば、その後のschema推定も無効にし、依存するstatementを未確認とします
+
+reportにはschema検査の有無、未確認statement数、DB実行が未検証であることを常に表示します
+TiDB固有の制限を個別列挙した検査は行いません
+存在guardだけではファイル全体の冪等性や実行成功を保証できないため、新規構築と想定するdown／upを専用TiDBで確認してください
+lintの診断は、up／downによる手動復旧を妨げません
+
+## 失敗出力と手動復旧
+
+TiDBのDDLは[通常のtransaction rollbackとは独立してcommitします](https://docs.pingcap.com/tidb/stable/transaction-overview/)
+statementと記録更新は別の操作です。Up失敗時にDownを自動実行しません
+Downは作成済みSQLを実行し、SQLで削除したdataを復元できません
+
+CLIはup、down、baselineの実行ごとに `log/tidbgo` へ一意のファイルをmode `0600` で作り、成功時も失敗時も保持します
+SQL進捗はstderrへ出力し、stdoutは `--json` のために保ちます。結果に `log_file` を含めます
+log作成や進捗保存に失敗した場合は実行を停止します
+対応SQLの送信前に、開始entryを書き込んでsyncします
+
+entryには日時、ファイル名／version、方向、statement番号、実行時のSQL本文を記録します
+開始、成功、serverが返した失敗（`failed`）、切断など結果不明（`unknown`）、未送信（`unexecuted`）を区別します
+適用記録の登録／削除は別phaseです
+process停止により開始entryだけが残った場合は、結果不明として扱います
+DBエラー番号、SQLSTATE、原因はCLI出力とlogの両方へ標準で表示します
+接続DSNとpasswordは伏せますが、作成済みSQLとserver messageにはapplicationの値が含まれえます
+logはdeployment sourceと同様に保護し、保存期間はtoolの外で管理してください
+
+失敗後は停止してlogとDBを確認し、結果不明ならserverのDDL jobも確認してください
+SQLの成功entryは、そのSQLの応答を確認したことを示し、ファイル全体の成功を示しません
+
+| 失敗箇所 | 適用記録 | 復旧 |
+| --- | --- | --- |
+| Up SQLの途中 | 未登録 | 部分変更を手動で戻すか完了させる、またはguard付きSQLを修正してupを再実行 |
+| Down SQLの途中 | 保持 | 部分変更を手動で戻すか完了させる、またはguard付きDown SQLを修正してdownを再実行 |
+| 記録更新 | 完了したSQLと異なる可能性 | 構造、data、記録を確認し、手動で一致させる |
+| 記録成功後のsnapshot出力 | 更新済み | `dump` でファイルを更新 |
+
+失敗したupは記録がないため、通常のdownの対象になりません
+失敗したdownは記録が残るため、通常のupはskipします
+自動retry、補償処理、repair commandはありません
+手動完了のために記録変更が必要なら、すべてのSQLの影響を確認してから行います
+構造だけではdata変更の成功を証明できません
+後続ファイルが失敗しても、完了を確認したファイルは完了したままです
+Down後はSQLを修正し、再適用できます
+
+接続操作はconnectionを占有し、DB単位の[TiDB advisory lock](https://docs.pingcap.com/tidbcloud/locking-functions/)を使用します
+lockは協調するrunner間だけを調整するため、手動SQLや他toolは別途調整してください
+CLIのdefault deadlineは30分、lock waitは30秒です
+`--timeout` と `--lock-timeout` で変更でき、lock waitは1から3600の整数秒です
+SQLは1 statementずつ送信します
 
 ## 現時点のschema snapshot
 
-downを含め、各migrationの正常完了後に実DBを取得して `schema.sql` を置換します
-再適用に必要なmigrationファイルと実行履歴は保持します
-snapshotだけを更新する場合は次を実行します
+Downも含めて各ファイルの完了後に実DBを読み、`schema.sql` を置き換えます
+途中失敗時は最後に完成したsnapshotが残るため、DBの状態と一致しない場合があります
+明示的に更新できます
 
 ```sh
 tidbgo migrate dump
 ```
 
-`SHOW CREATE TABLE` が返す列精度、default式、index、generated column、table option、TiDBの実行可能commentを保持します
-TiFlash replica設定は別のSQLとして出力し、非同期のavailabilityやprogressは構造に含めません
-`AUTO_INCREMENT=n` と `AUTO_RANDOM_BASE=n` などの採番現在値は除外し、通常のINSERTで構造fingerprintが変わらないようにします
-このsnapshotはデータbackupではなく、次に割り当てるIDの復元を保証しません
+Dumpは適用記録を変更しません
+snapshotを `schema.Parse`、`check.Schema`、`tidbgo lint . --schema schema.sql` で利用し、[modelとRelationの互換性](schema-checks_ja.md)を検査できます
+このsource model検査は `tidbgo migrate lint` とは別です
+適用後の孤児参照には[reference audit](reference-audits_ja.md)を使い、`tidbgo audit . --schema schema.sql --dry-run` で事前確認できます
 
-tableは外部keyの依存順に並べ、独立したtableの順序も決定的にします
-同じDB内の外部keyからDB名の修飾を除去し、再適用先として選択したDBを参照するようにします
-自己参照は扱えますが、DBをまたぐ外部keyと循環参照は拒否します
-view、sequence、非対応のobjectは黙って省略せずエラーにします
-TiFlashは0または2 replica、location labelなしに対応します
-vector index定義はTiDBの出力を保持します
+snapshotは精度、default、index、generated column、table option、実行可能なTiDB commentを含む `SHOW CREATE TABLE` の定義を保持します
+TiFlash replica設定は別SQLで出力し、非同期のavailabilityは構造へ含めません
+`AUTO_INCREMENT=n` と `AUTO_RANDOM_BASE=n` などallocator counterは除外します
+snapshotはdata backupではなく、次に採番するIDの復元も保証しません
 
-出力は完全な書き込みとfile sync後に置換し、既存のregular fileのpermissionを維持します
-取得・出力失敗時は前の完全なファイルを残します
-DB変更成功後に出力が失敗した場合は `snapshot_updated=false` と非ゼロ終了状態を返し、dumpでSQLを再実行せずに同期できます
-dirty状態でのdumpは部分適用の構造を表す場合があり、履歴を修復しません
-driftのあるDBをdumpしても、期待するmigration結果として承認した扱いにはしません
+tableはforeign keyの依存順にし、独立table間も決定的に並べます
+同じDBへの修飾を除き、選択したDBへ再実行できるようにします
+自己参照には対応し、別DB参照、循環foreign key、view、sequence、未対応object typeは明示的に失敗します
+TiFlashはlocation labelなしの0または2 replicaに対応します
+vector index SQLはTiDBが返した形で保持します
 
-接続先DBに対応した出力先を使用します
-schema.sqlはGit管理できますが、ツールはGit操作を行いません
-CIの照合ではsnapshotと同じ適用versionを再現します
-snapshotには機微なdefault値やcommentが含まれる可能性があり、planはSQLファイルの内容を表示するため、application sourceと同様に管理します
+出力は全体の書込とsync後に置き換え、既存regular fileのpermissionを維持します
+書込失敗時は以前の完成したファイルを残します
+DB成功とsnapshot成功は別に報告します
+完了済みversionがあり `snapshot_updated=false` の場合は出力の確認が必要であり、SQLを再実行する意味ではありません
+対象DBに適した保存先を使ってください。Git管理は任意で、toolはGit操作を行いません
+snapshotとplan出力には機密のdefault値やcommentが含まれえます
 
-## 途中失敗と復旧
-
-TiDBのDDLは[通常のtransaction rollbackとは独立してcommitされます](https://docs.pingcap.com/tidb/stable/transaction-overview/)
-downは明示的な逆方向SQLの実行であり、削除した値を復元するものではありません
-up失敗時にdownを自動実行することはありません
-
-SQL実行前に各attemptを `_tidbgo_migrations` へ記録します
-進捗は完了応答を確認したstatement数です
-失敗や応答喪失時はfailedまたはrunningを残し、後続のup／downを停止します
-確認済み件数の次のstatementも実行済みかもしれません
-status、server DDL job、データを確認し、手動で完了または取り消してから結果を記録します
-
-```sh
-tidbgo migrate status --json
-tidbgo migrate dump --schema reviewed.sql
-# 構造、データ、server DDL jobの完了を独立して確認する
-tidbgo migrate repair 20260921113000789 --state applied --expected-schema reviewed.sql --reason 'Verified the completed operation'
-```
-
-指定したversionが適用されていないことを確認した場合は `--state reverted` を使います
-確認したsnapshotは実DBの構造と一致する必要があり、失敗前の状態へ戻す場合は元の構造fingerprintとの一致も必要です
-構造一致だけではbackfillやDMLの成功を証明できないため、利用者が別に確認します
-repairはmigration SQLを実行せず、失敗attemptをresolvedにする操作と、理由付きの独立した監査event追加をatomicに行います
-
-次の変更操作では直近に記録した構造fingerprintと実DBを比較し、driftを拒否します
-履歴とファイルの不一致、記録済みファイルの削除・改変でも停止します
-repairは途中失敗を対象とし、任意のdriftやchecksumの書換えを黙って受け入れません
-SQLファイルは信頼するデプロイコードとして扱い、軽量validatorは完全なSQL文法や別DB参照のsandboxを提供しません
-
-接続する全操作は同じconnectionをpinし、DB単位の[TiDB advisory lock](https://docs.pingcap.com/tidbcloud/locking-functions/)を使います
-同じ規約に従うrunner同士を排他し、別のツールや手動SQLを排他するものではありません
-CLIの操作期限は既定30分、lock待ちは30秒で、`--timeout` と `--lock-timeout` で変更できます
-lock待ちは1から3600秒の整数です
-SQLは1 statementずつ送信し、自動retryしません
-session／transaction制御、履歴tableやadvisory lock関数への直接参照は拒否します
-
-全subcommandで `--json` を使えます
-migrationの実行・検証失敗とdirty／driftのあるstatusは終了状態1、CLIの使用方法エラーは2を返します
-JSONのversionは整数です。17桁を浮動小数点へ変換せず、64-bit整数または数値文字列を保持するdecoderを使用します
-libraryのOperationErrorメッセージにはserverの生のerrorを含めず、制御された診断にはerrors.Unwrapで元のerrorを取得できます
-
-## Goのデプロイツールから使う
+## Goからの利用と出力
 
 ```go
 runner, err := migrate.New(db, migrate.Config{
     Directory:  "migrations",
     SchemaFile: "schema.sql",
+    OnEvent:    persistProgress,
 })
 if err != nil {
     return err
 }
 result, err := runner.Apply(ctx, migrate.Up, 0)
-// Inspect result even when err != nil, especially Dirty and SnapshotUpdated
+// Inspect result.Completed, result.Version, and result.SnapshotUpdated even on error.
 ```
 
-pool、TLS、cancel、実行時期はcallerが管理します
-`migrate.Load` と `migrate.Create` はDB不要で、ORMのAPIからrunnerを呼び出すことはありません
+`persistProgress` はcallerが定義する `func(migrate.Event) error` です
+SQLと記録操作の前後に、信頼されたSQLと元のerrorを同期的に受け取ります
+開始entryを永続化してからreturnしてください。callback errorで後続実行を停止します
+libraryの `error` eventは呼出失敗を示すため、driverのerror型でserver拒否と結果不明を区別します
+`OnEvent` は任意で、`log/tidbgo` を自動作成するのはCLIだけです
+pool、TLS、cancellation、deployment timingはcallerが所有します
+`OperationError.Error()` は元のserver textを含めず、`Unwrap()` で原因を取得できます
+
+全subcommandが `--json` に対応し、versionは文字列です
+実行／検証失敗は終了status 1、CLIの不正な使い方はstatus 2です
+lintのwarningと未確認だけならstatus 0で、検査範囲を明示します
+lintの成功はDB実行の保証ではありません
